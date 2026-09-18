@@ -10,8 +10,11 @@ import {
   type LineSelection,
 } from '../../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
-import { deriveThreadReviewState, pendingFixupFor } from '../../utils/reviewDecisions';
-import { useFixupOverlay } from '../contexts/FixupOverlayContext';
+import {
+  overlaidFixup,
+  threadReviewControls,
+  useFixupOverlay,
+} from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -510,35 +513,25 @@ export const DiffChunk = memo(function DiffChunk({
                   }}
                 />
 
-                {overlay.enabled &&
-                  lineThreads.map((thread) => {
-                    const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
-                    const state = deriveThreadReviewState(thread.id, fixups, overlay.decisions);
-                    const fixup = pendingFixupFor(thread.id, fixups, overlay.decisions);
-                    const showsOverlay = state === 'awaiting-approval' || state === 'approved';
-                    if (!showsOverlay || !fixup || !filename || thread.isOutdated) return null;
-                    return (
-                      <tr key={`fixup-${thread.id}`}>
-                        <td colSpan={3} className="p-0">
-                          <FixupOverlayCard
-                            fixup={fixup}
-                            filePath={filename}
-                            syntaxTheme={syntaxTheme}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
+                {lineThreads.map((thread) => {
+                  const fixup = overlaidFixup(overlay, thread);
+                  if (!fixup || !filename) return null;
+                  return (
+                    <tr key={`fixup-${thread.id}`}>
+                      <td colSpan={3} className="p-0">
+                        <FixupOverlayCard
+                          fixup={fixup}
+                          filePath={filename}
+                          syntaxTheme={syntaxTheme}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {lineThreads.map((thread) => {
                   const layout = getCommentLayout(line);
-                  const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
-                  const review = {
-                    state: deriveThreadReviewState(thread.id, fixups, overlay.decisions),
-                    fixupSha: pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
-                    onDecide: overlay.recordDecision,
-                    onUndoApproval: overlay.undoApproval,
-                  };
+                  const review = threadReviewControls(overlay, thread.id);
                   return (
                     <tr key={thread.id} className="bg-github-bg-secondary">
                       <td colSpan={3} className="p-0 border-t border-github-border">

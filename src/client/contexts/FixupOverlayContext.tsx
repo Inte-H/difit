@@ -1,21 +1,33 @@
 import { createContext, useContext, type ReactNode } from 'react';
 
-import type { ReviewDecision, ReviewDecisionKind, ThreadFixup } from '../../types/diff';
+import type {
+  CommentThread,
+  ReviewDecision,
+  ReviewDecisionKind,
+  ThreadFixup,
+  ThreadReviewState,
+} from '../../types/diff';
+import { deriveThreadReviewState, pendingFixupFor } from '../../utils/reviewDecisions';
 
 export interface FixupOverlayState {
   enabled: boolean;
   fixupsByThread: Map<string, ThreadFixup[]>;
   decisions: ReviewDecision[];
+  // The commit being reviewed; null when the target is a working tree, the index or stdin.
+  targetCommit: string | null;
   recordDecision: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
   undoApproval: (threadId: string) => void;
+  openReviewAt: (commit: string) => void;
 }
 
 export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
   enabled: false,
   fixupsByThread: new Map(),
   decisions: [],
+  targetCommit: null,
   recordDecision: () => {},
   undoApproval: () => {},
+  openReviewAt: () => {},
 };
 
 const FixupOverlayContext = createContext<FixupOverlayState>(EMPTY_FIXUP_OVERLAY);
@@ -32,4 +44,40 @@ export function FixupOverlayProvider({
 
 export function useFixupOverlay(): FixupOverlayState {
   return useContext(FixupOverlayContext);
+}
+
+export interface ThreadReviewControls {
+  state: ThreadReviewState;
+  fixupSha: string | null;
+  targetCommit: string | null;
+  onDecide: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
+  onUndoApproval: (threadId: string) => void;
+  onOpenReviewAt: (commit: string) => void;
+}
+
+export function threadReviewControls(
+  overlay: FixupOverlayState,
+  threadId: string,
+): ThreadReviewControls {
+  const fixups = overlay.fixupsByThread.get(threadId) ?? [];
+  return {
+    state: deriveThreadReviewState(threadId, fixups, overlay.decisions),
+    fixupSha: pendingFixupFor(threadId, fixups, overlay.decisions)?.sha ?? null,
+    targetCommit: overlay.targetCommit,
+    onDecide: overlay.recordDecision,
+    onUndoApproval: overlay.undoApproval,
+    onOpenReviewAt: overlay.openReviewAt,
+  };
+}
+
+// An outdated thread has no trustworthy line to draw under, so it gets no overlay.
+export function overlaidFixup(
+  overlay: FixupOverlayState,
+  thread: CommentThread,
+): ThreadFixup | null {
+  if (!overlay.enabled || thread.isOutdated) return null;
+  const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
+  const state = deriveThreadReviewState(thread.id, fixups, overlay.decisions);
+  if (state !== 'awaiting-approval' && state !== 'approved') return null;
+  return pendingFixupFor(thread.id, fixups, overlay.decisions) ?? null;
 }

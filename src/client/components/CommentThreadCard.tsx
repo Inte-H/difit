@@ -5,10 +5,10 @@ import {
   type AnchorStaleReason,
   type CommentThread,
   type DiffCommentMessage,
-  type ReviewDecisionKind,
-  type ThreadReviewState,
 } from '../../types/diff';
+import { isSameCommit } from '../../utils/diffSelection';
 import { reviewStateLabel } from '../../utils/reviewDecisions';
+import type { ThreadReviewControls } from '../contexts/FixupOverlayContext';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -194,13 +194,6 @@ function ThreadMessageItem({
   );
 }
 
-interface ThreadReviewControls {
-  state: ThreadReviewState;
-  fixupSha: string | null;
-  onDecide: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
-  onUndoApproval: (threadId: string) => void;
-}
-
 const OUTDATED_REASON_TITLE: Record<AnchorStaleReason, string> = {
   missing: '지적한 줄이 지금 파일에 없어 수정을 겹쳐 그리지 않습니다',
   ambiguous: '같은 내용의 줄이 여러 곳이라 자리를 정할 수 없어 수정을 겹쳐 그리지 않습니다',
@@ -256,6 +249,14 @@ export function CommentThreadCard({
       console.error('Failed to copy thread prompt:', error);
     }
   };
+
+  const anchorCommit =
+    review &&
+    thread.isOutdated &&
+    thread.anchorCommit &&
+    !(review.targetCommit && isSameCommit(thread.anchorCommit, review.targetCommit))
+      ? thread.anchorCommit
+      : null;
 
   const rootMessage = thread.messages[0];
   if (!rootMessage) return null;
@@ -421,6 +422,20 @@ export function CommentThreadCard({
                 </button>
               )}
             </div>
+          )}
+
+          {review && anchorCommit && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                review.onOpenReviewAt(anchorCommit);
+              }}
+              className="min-h-10 w-full rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-primary"
+              title={`${anchorCommit} 커밋을 대상으로 리뷰를 다시 엽니다`}
+            >
+              이 지적을 달던 시점으로
+            </button>
           )}
 
           <div

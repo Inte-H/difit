@@ -36,6 +36,8 @@ export interface DiffCommentPosition {
 export interface DiffCommentCodeSnapshot {
   content: string;
   language?: string;
+  // The target commit the content was read from; absent when the target was not a commit.
+  commit?: string;
 }
 
 export type BaseMode = 'direct' | 'merge-base';
@@ -248,6 +250,7 @@ export interface CommentThread {
   createdAt: string;
   updatedAt: string;
   codeContent?: string;
+  anchorCommit?: string;
   isOutdated?: boolean;
   outdatedReason?: AnchorStaleReason;
   messages: DiffCommentMessage[];

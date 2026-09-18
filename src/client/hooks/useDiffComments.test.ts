@@ -247,6 +247,22 @@ const next = true;
       expect(comment!.position.line).toBe(15);
       expect(comment!.codeSnapshot?.content).toBe('const x = 42;');
       expect(comment!.codeSnapshot?.language).toBe('typescript');
+      expect(comment!.codeSnapshot?.commit).toBe('feature-branch');
+    });
+
+    it('records no commit on a thread made against the working tree', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'working', 'abc123'));
+
+      act(() => {
+        result.current.addThread({
+          filePath: 'src/utils/test.ts',
+          body: 'Test comment',
+          side: 'new',
+          line: 15,
+        });
+      });
+
+      expect(result.current.threads[0]?.codeSnapshot?.commit).toBeUndefined();
     });
 
     it('should remove comment by id', () => {

@@ -18,6 +18,7 @@ import {
 } from '../../utils/commentFormatting';
 import { createId } from '../../utils/createId';
 import { mergeCommentImports } from '../../utils/commentImports';
+import { isCommitTarget } from '../../utils/diffSelection';
 import { mergeReviewDecisions } from '../../utils/reviewDecisions';
 import { storageService } from '../services/StorageService';
 import { getLanguageFromPath } from '../utils/diffUtils';
@@ -269,6 +270,8 @@ export function useDiffComments(
     (params: AddThreadParams): DiffCommentThread => {
       const now = new Date().toISOString();
       const threadId = createId();
+      const commit =
+        targetCommitish && isCommitTarget(targetCommitish) ? targetCommitish : undefined;
       const newThread: DiffCommentThread = {
         id: threadId,
         filePath: params.filePath,
@@ -278,9 +281,12 @@ export function useDiffComments(
           side: params.side,
           line: params.line,
         },
-        codeSnapshot: params.codeSnapshot || {
-          content: '',
-          language: getLanguageFromPath(params.filePath),
+        codeSnapshot: {
+          ...(params.codeSnapshot ?? {
+            content: '',
+            language: getLanguageFromPath(params.filePath),
+          }),
+          commit,
         },
         messages: [
           {
@@ -297,7 +303,7 @@ export function useDiffComments(
       saveThreads(newThreads);
       return newThread;
     },
-    [saveThreads, threads],
+    [saveThreads, threads, targetCommitish],
   );
 
   const addComment = useCallback(

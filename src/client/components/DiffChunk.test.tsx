@@ -275,13 +275,13 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     ],
   });
 
-  const renderSplit = (overlay: Partial<FixupOverlayState>) =>
+  const renderSplit = (overlay: Partial<FixupOverlayState>, threads = [thread]) =>
     renderWithProviders(
       <FixupOverlayProvider value={{ ...EMPTY_FIXUP_OVERLAY, ...overlay }}>
         <SideBySideDiffChunk
           chunk={testChunk}
           chunkIndex={0}
-          threads={[thread]}
+          threads={threads}
           onAddComment={asyncNoop}
           onGenerateThreadPrompt={() => ''}
           onRemoveThread={noop}
@@ -327,6 +327,19 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     });
 
     expect(screen.queryByTestId('fixup-overlay-card')).toBeNull();
+  });
+
+  it('draws no overlay card under an outdated thread but still shows its review controls', () => {
+    renderSplit(
+      {
+        enabled: true,
+        fixupsByThread: new Map([['t1', [fixup('a'.repeat(40))]]]),
+      },
+      [{ ...thread, isOutdated: true }],
+    );
+
+    expect(screen.queryByTestId('fixup-overlay-card')).toBeNull();
+    expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
   });
 });
 

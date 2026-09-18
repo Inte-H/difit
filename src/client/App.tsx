@@ -18,6 +18,7 @@ import {
   createDiffSelection,
   diffSelectionsEqual,
   getDiffSelectionKey,
+  isCommitTarget,
   normalizeBaseMode,
 } from '../utils/diffSelection';
 import { selectOpenThreads } from '../utils/reviewDecisions';
@@ -248,16 +249,6 @@ function App() {
   const fixupsByThread = useThreadFixups(
     diffData ? getCommentApiUrl('/api/fixups') : null,
     diffDataVersion,
-  );
-  const fixupOverlay = useMemo<FixupOverlayState>(
-    () => ({
-      enabled: showFixupOverlay,
-      fixupsByThread,
-      decisions,
-      recordDecision,
-      undoApproval,
-    }),
-    [showFixupOverlay, fixupsByThread, decisions, recordDecision, undoApproval],
   );
   const openThreads = useMemo(
     () => selectOpenThreads(threads, fixupsByThread, decisions),
@@ -557,6 +548,7 @@ function App() {
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
         codeContent: thread.codeSnapshot?.content,
+        anchorCommit: thread.codeSnapshot?.commit,
         messages: thread.messages,
       })),
     [threads, fileLineIndexByPath],
@@ -917,6 +909,39 @@ function App() {
       await fetchDiffData(nextSelection);
     },
     [fetchDiffData, selectedRevision],
+  );
+
+  const targetCommit = useMemo(() => {
+    const target = resolvedSelection?.targetCommitish;
+    return target && isCommitTarget(target) ? target : null;
+  }, [resolvedSelection]);
+  const openReviewAt = useCallback(
+    (commit: string) => {
+      void handleRevisionChange(
+        createDiffSelection(selectedRevision.baseCommitish, commit, selectedRevision.baseMode),
+      );
+    },
+    [handleRevisionChange, selectedRevision],
+  );
+  const fixupOverlay = useMemo<FixupOverlayState>(
+    () => ({
+      enabled: showFixupOverlay,
+      fixupsByThread,
+      decisions,
+      targetCommit,
+      recordDecision,
+      undoApproval,
+      openReviewAt,
+    }),
+    [
+      showFixupOverlay,
+      fixupsByThread,
+      decisions,
+      targetCommit,
+      recordDecision,
+      undoApproval,
+      openReviewAt,
+    ],
   );
 
   // Clear comments and viewed files on initial load if requested via CLI flag

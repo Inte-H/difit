@@ -320,16 +320,20 @@ describe('CommentThreadCard', () => {
     expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
   });
 
+  const awaitingReview = {
+    state: 'awaiting-approval' as const,
+    fixupSha: 'abc1234',
+    targetCommit: 'b7c2e10',
+    onDecide: vi.fn(),
+    onUndoApproval: vi.fn(),
+    onOpenReviewAt: vi.fn(),
+  };
+
   it('marks a stale review thread visibly while keeping its state chip and decision buttons', () => {
     render(
       <CommentThreadCard
         thread={{ ...mockThread, isOutdated: true, outdatedReason: 'ambiguous' }}
-        review={{
-          state: 'awaiting-approval',
-          fixupSha: 'abc1234',
-          onDecide: vi.fn(),
-          onUndoApproval: vi.fn(),
-        }}
+        review={awaitingReview}
         onGeneratePrompt={() => 'thread prompt'}
         onRemoveThread={vi.fn()}
         onReplyToThread={vi.fn().mockResolvedValue(undefined)}
@@ -344,6 +348,40 @@ describe('CommentThreadCard', () => {
     expect(screen.getByTestId('review-state-chip')).toHaveTextContent('승인 대기');
     expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '거절' })).toBeInTheDocument();
+  });
+
+  it('offers to reopen the review at the anchor commit only on a stale thread made elsewhere', async () => {
+    const user = userEvent.setup();
+    const onOpenReviewAt = vi.fn();
+    const staleThread = { ...mockThread, isOutdated: true, outdatedReason: 'missing' as const };
+    const renderCard = (thread: CommentThread) => (
+      <CommentThreadCard
+        thread={thread}
+        review={{ ...awaitingReview, onOpenReviewAt }}
+        onGeneratePrompt={() => 'thread prompt'}
+        onRemoveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />
+    );
+    const reopenButton = () => screen.queryByRole('button', { name: '이 지적을 달던 시점으로' });
+
+    const { rerender } = render(renderCard({ ...staleThread, anchorCommit: '6e4f6d5' }));
+    await user.click(screen.getByRole('button', { name: '이 지적을 달던 시점으로' }));
+    expect(onOpenReviewAt).toHaveBeenCalledWith('6e4f6d5');
+
+    rerender(renderCard({ ...mockThread, anchorCommit: '6e4f6d5' }));
+    expect(reopenButton()).not.toBeInTheDocument();
+
+    rerender(renderCard({ ...staleThread, anchorCommit: 'b7c2e10' }));
+    expect(reopenButton()).not.toBeInTheDocument();
+
+    rerender(renderCard({ ...staleThread, anchorCommit: 'b7c2e10' + '0'.repeat(33) }));
+    expect(reopenButton()).not.toBeInTheDocument();
+
+    rerender(renderCard(staleThread));
+    expect(reopenButton()).not.toBeInTheDocument();
   });
 
   it('always shows an inline reply trigger below the last message', () => {

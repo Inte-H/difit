@@ -8,8 +8,11 @@ import {
   type LineNumber,
   type LineSelection,
 } from '../../types/diff';
-import { deriveThreadReviewState, pendingFixupFor } from '../../utils/reviewDecisions';
-import { useFixupOverlay } from '../contexts/FixupOverlayContext';
+import {
+  overlaidFixup,
+  threadReviewControls,
+  useFixupOverlay,
+} from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -781,25 +784,21 @@ export function SideBySideDiffChunk({
                   </td>
                 </tr>
 
-                {overlay.enabled &&
-                  allThreads.map((thread) => {
-                    const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
-                    const state = deriveThreadReviewState(thread.id, fixups, overlay.decisions);
-                    const fixup = pendingFixupFor(thread.id, fixups, overlay.decisions);
-                    const showsOverlay = state === 'awaiting-approval' || state === 'approved';
-                    if (!showsOverlay || !fixup || !filename) return null;
-                    return (
-                      <tr key={`fixup-${thread.id}`}>
-                        <td colSpan={4} className="p-0">
-                          <FixupOverlayCard
-                            fixup={fixup}
-                            filePath={filename}
-                            syntaxTheme={syntaxTheme}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
+                {allThreads.map((thread) => {
+                  const fixup = overlaidFixup(overlay, thread);
+                  if (!fixup || !filename) return null;
+                  return (
+                    <tr key={`fixup-${thread.id}`}>
+                      <td colSpan={4} className="p-0">
+                        <FixupOverlayCard
+                          fixup={fixup}
+                          filePath={filename}
+                          syntaxTheme={syntaxTheme}
+                        />
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {/* Comment threads row */}
                 {allThreads.length > 0 && (
@@ -807,14 +806,7 @@ export function SideBySideDiffChunk({
                     <td colSpan={4} className="p-0 border-t border-github-border">
                       {allThreads.map((thread) => {
                         const threadSide = thread.side || 'new';
-                        const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
-                        const review = {
-                          state: deriveThreadReviewState(thread.id, fixups, overlay.decisions),
-                          fixupSha:
-                            pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
-                          onDecide: overlay.recordDecision,
-                          onUndoApproval: overlay.undoApproval,
-                        };
+                        const review = threadReviewControls(overlay, thread.id);
                         let layout: 'left' | 'right' | 'full';
 
                         if (threadSide === 'old' && sideLine.oldLineNumber) {
