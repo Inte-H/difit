@@ -57,7 +57,7 @@ import {
   buildMergedChunksState,
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
-import { buildFileLineIndex, isThreadOutdated } from './utils/outdatedComments';
+import { buildFileLineIndex, locateThread } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
 const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
@@ -552,15 +552,11 @@ function App() {
       threads.map((thread) => ({
         id: thread.id,
         file: thread.filePath,
-        line:
-          typeof thread.position.line === 'number'
-            ? thread.position.line
-            : ([thread.position.line.start, thread.position.line.end] as [number, number]),
+        ...locateThread(thread, fileLineIndexByPath.get(thread.filePath)),
         side: thread.position.side,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
         codeContent: thread.codeSnapshot?.content,
-        isOutdated: isThreadOutdated(thread, fileLineIndexByPath.get(thread.filePath)),
         messages: thread.messages,
       })),
     [threads, fileLineIndexByPath],

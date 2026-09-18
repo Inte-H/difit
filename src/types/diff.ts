@@ -236,15 +236,20 @@ export interface FixupsResponse {
   fixups: ThreadFixup[];
 }
 
+// The saved snapshot is gone from the file, or occurs in more than one place.
+export type AnchorStaleReason = 'missing' | 'ambiguous';
+
 export interface CommentThread {
   id: string;
   file: string;
+  // Where the thread is drawn now, relocated by snapshot content; may differ from the stored position.
   line: LineNumber;
   side?: DiffSide;
   createdAt: string;
   updatedAt: string;
   codeContent?: string;
   isOutdated?: boolean;
+  outdatedReason?: AnchorStaleReason;
   messages: DiffCommentMessage[];
 }
 

@@ -329,3 +329,90 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     expect(screen.queryByTestId('fixup-overlay-card')).toBeNull();
   });
 });
+
+describe('DiffChunk fixup overlay', () => {
+  const thread: CommentThread = {
+    id: 't1',
+    file: 'src/example.ts',
+    line: 12,
+    side: 'new',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    codeContent: 'const third = 3;',
+    messages: [
+      {
+        id: 'm1',
+        body: 'Rename this',
+        author: 'User',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ],
+  };
+  const fixup: ThreadFixup = {
+    sha: 'abc1234abc1234',
+    shortSha: 'abc1234',
+    subject: 'fixup! x',
+    threadIds: ['t1'],
+    files: [
+      {
+        path: 'src/example.ts',
+        status: 'modified',
+        chunks: [
+          {
+            header: '@@ -12,1 +12,1 @@',
+            oldStart: 12,
+            oldLines: 1,
+            newStart: 12,
+            newLines: 1,
+            lines: [
+              { type: 'delete', content: 'const third = 3;', oldLineNumber: 12 },
+              { type: 'add', content: 'const three = 3;', newLineNumber: 12 },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const renderWithOverlay = (threads: CommentThread[]) =>
+    renderWithProviders(
+      <FixupOverlayProvider
+        value={{
+          ...EMPTY_FIXUP_OVERLAY,
+          enabled: true,
+          fixupsByThread: new Map([['t1', [fixup]]]),
+        }}
+      >
+        <DiffChunk
+          chunk={testChunk}
+          chunkIndex={0}
+          threads={threads}
+          mode="unified"
+          onAddComment={asyncNoop}
+          onGenerateThreadPrompt={() => ''}
+          onRemoveThread={noop}
+          onReplyToThread={asyncNoop}
+          onRemoveMessage={noop}
+          onUpdateMessage={noop}
+          filename="src/example.ts"
+        />
+      </FixupOverlayProvider>,
+    );
+
+  it('draws the overlay card under a located thread', () => {
+    renderWithOverlay([thread]);
+
+    expect(screen.getByTestId('fixup-overlay-card')).toBeInTheDocument();
+    expect(screen.getByText('Rename this')).toBeInTheDocument();
+  });
+
+  it('keeps a stale thread card, with its decision buttons, but draws no overlay card', () => {
+    renderWithOverlay([{ ...thread, isOutdated: true, outdatedReason: 'missing' }]);
+
+    expect(screen.queryByTestId('fixup-overlay-card')).not.toBeInTheDocument();
+    expect(screen.getByText('Rename this')).toBeInTheDocument();
+    expect(screen.getByLabelText('Outdated comment')).toHaveTextContent('낡음');
+    expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
+  });
+});

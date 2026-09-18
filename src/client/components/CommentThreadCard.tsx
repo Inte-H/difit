@@ -2,6 +2,7 @@ import { Check, ChevronDown, ChevronRight, Copy, Edit2, MessageSquare, Trash2 } 
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
+  type AnchorStaleReason,
   type CommentThread,
   type DiffCommentMessage,
   type ReviewDecisionKind,
@@ -200,6 +201,11 @@ interface ThreadReviewControls {
   onUndoApproval: (threadId: string) => void;
 }
 
+const OUTDATED_REASON_TITLE: Record<AnchorStaleReason, string> = {
+  missing: '지적한 줄이 지금 파일에 없어 수정을 겹쳐 그리지 않습니다',
+  ambiguous: '같은 내용의 줄이 여러 곳이라 자리를 정할 수 없어 수정을 겹쳐 그리지 않습니다',
+};
+
 interface CommentThreadCardProps {
   thread: CommentThread;
   review?: ThreadReviewControls;
@@ -259,7 +265,9 @@ export function CommentThreadCard({
       id={`comment-thread-${thread.id}`}
       className={`rounded-md border border-l-4 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
         review
-          ? 'border-github-border border-l-github-text-muted'
+          ? thread.isOutdated
+            ? 'border-github-border border-l-github-danger'
+            : 'border-github-border border-l-github-text-muted'
           : 'border-yellow-600/50 border-l-yellow-400'
       } ${onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
       onClick={onClick}
@@ -295,11 +303,19 @@ export function CommentThreadCard({
           )}
           {thread.isOutdated && (
             <span
-              className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-text-muted px-2 text-[10px] font-medium text-github-text-muted"
-              title="Code has changed since this comment was made"
+              className={`inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[10px] font-medium ${
+                review
+                  ? 'border-github-danger text-github-danger'
+                  : 'border-github-text-muted text-github-text-muted'
+              }`}
+              title={
+                review && thread.outdatedReason
+                  ? OUTDATED_REASON_TITLE[thread.outdatedReason]
+                  : 'Code has changed since this comment was made'
+              }
               aria-label="Outdated comment"
             >
-              Outdated
+              {review ? '낡음' : 'Outdated'}
             </span>
           )}
           {isCollapsed && (

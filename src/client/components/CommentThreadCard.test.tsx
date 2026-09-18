@@ -320,6 +320,32 @@ describe('CommentThreadCard', () => {
     expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
   });
 
+  it('marks a stale review thread visibly while keeping its state chip and decision buttons', () => {
+    render(
+      <CommentThreadCard
+        thread={{ ...mockThread, isOutdated: true, outdatedReason: 'ambiguous' }}
+        review={{
+          state: 'awaiting-approval',
+          fixupSha: 'abc1234',
+          onDecide: vi.fn(),
+          onUndoApproval: vi.fn(),
+        }}
+        onGeneratePrompt={() => 'thread prompt'}
+        onRemoveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
+
+    const badge = screen.getByLabelText('Outdated comment');
+    expect(badge).toHaveTextContent('낡음');
+    expect(badge.getAttribute('title')).toContain('여러 곳');
+    expect(screen.getByTestId('review-state-chip')).toHaveTextContent('승인 대기');
+    expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '거절' })).toBeInTheDocument();
+  });
+
   it('always shows an inline reply trigger below the last message', () => {
     render(
       <CommentThreadCard
