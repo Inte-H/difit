@@ -7,6 +7,7 @@ import {
   mergeReviewDecisions,
   normalizeReviewDecisions,
   pendingFixupFor,
+  reviewStateLabel,
 } from './reviewDecisions';
 
 const fixup = (sha: string, threadIds = ['t1']): ThreadFixup => ({
@@ -63,6 +64,22 @@ describe('deriveThreadReviewState', () => {
         [decision('rejected', 'aaaa', undefined, 't2')],
       ),
     ).toBe('awaiting-approval');
+  });
+});
+
+describe('reviewStateLabel', () => {
+  it('names each state the way the screen chip does', () => {
+    expect(reviewStateLabel('awaiting-fix')).toBe('수정 중');
+    expect(reviewStateLabel('awaiting-approval')).toBe('승인 대기');
+    expect(reviewStateLabel('approved')).toBe('승인됨');
+    expect(reviewStateLabel('folded')).toBe('접힘');
+    expect(reviewStateLabel('rejected')).toBe('다시 수정 중');
+  });
+
+  it('tells a rejected thread apart from one still waiting for its first fixup', () => {
+    const rejected = [decision('rejected', 'aaaa')];
+    expect(reviewStateLabel(deriveThreadReviewState('t1', [], rejected))).toBe('다시 수정 중');
+    expect(reviewStateLabel(deriveThreadReviewState('t1', [], []))).toBe('수정 중');
   });
 });
 

@@ -1,5 +1,6 @@
-import type { BaseMode, Comment, CommentThread, DiffSide } from '../types/diff';
+import type { BaseMode, Comment, CommentThread, DiffSide, ThreadReviewState } from '../types/diff';
 
+import { reviewStateLabel } from './reviewDecisions.js';
 import { hasSuggestionBlock, parseSuggestionBlocks } from './suggestionUtils.js';
 
 function getLineInfo(line: number | number[]): string {
@@ -14,9 +15,15 @@ export interface CommentPromptDiffContext {
   resolvedTargetCommitish?: string;
 }
 
-function formatCommentLocation(file: string, line: number | number[], side?: DiffSide): string {
+function formatCommentLocation(
+  file: string,
+  line: number | number[],
+  side?: DiffSide,
+  reviewState?: ThreadReviewState,
+): string {
   const filePath = file || '<unknown file>';
-  return `${filePath}:${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}`;
+  const stateSuffix = reviewState ? ` [${reviewStateLabel(reviewState)}]` : '';
+  return `${filePath}:${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
 }
 
 function isNonRangeCommitish(commitish: string): boolean {
@@ -129,8 +136,13 @@ export function formatAllCommentsPrompt(comments: Comment[]): string {
   return prompts.join('\n=====\n');
 }
 
-export function formatCommentThreadPrompt(thread: CommentThread): string {
-  const sections: string[] = [formatCommentLocation(thread.file, thread.line, thread.side)];
+export function formatCommentThreadPrompt(
+  thread: CommentThread,
+  reviewState?: ThreadReviewState,
+): string {
+  const sections: string[] = [
+    formatCommentLocation(thread.file, thread.line, thread.side, reviewState),
+  ];
 
   thread.messages.forEach((message, index) => {
     if (index === 0) {
@@ -150,10 +162,13 @@ export function formatCommentThreadPrompt(thread: CommentThread): string {
 export function formatAllCommentThreadsPrompt(
   threads: CommentThread[],
   context?: CommentPromptDiffContext,
+  reviewStates?: ReadonlyMap<string, ThreadReviewState>,
 ): string {
   if (threads.length === 0) return '';
 
-  const sections = threads.map((thread) => formatCommentThreadPrompt(thread));
+  const sections = threads.map((thread) =>
+    formatCommentThreadPrompt(thread, reviewStates?.get(thread.id)),
+  );
   if (context) {
     const header = formatDiffContextHeader(context);
     if (header) {
@@ -164,9 +179,12 @@ export function formatAllCommentThreadsPrompt(
   return sections.join('\n=====\n');
 }
 
-export function formatCommentsOutput(input: Comment[] | CommentThread[]): string {
+export function formatCommentsOutput(
+  input: Comment[] | CommentThread[],
+  reviewStates?: ReadonlyMap<string, ThreadReviewState>,
+): string {
   const threads = input.map((item) => ('messages' in item ? item : normalizeLegacyComment(item)));
-  const allPrompts = formatAllCommentThreadsPrompt(threads);
+  const allPrompts = formatAllCommentThreadsPrompt(threads, undefined, reviewStates);
 
   return [
     '\n📝 Comments from review session:',

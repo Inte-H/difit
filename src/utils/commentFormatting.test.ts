@@ -210,6 +210,36 @@ Explain why this was removed.`);
       const result = formatCommentThreadPrompt(threads[0]!);
       expect(result).toBe('docs/SUMMARY.md:L85 (old)\nExplain why this was removed.');
     });
+
+    it('should append the review state to the location of each thread that has one', () => {
+      const result = formatAllCommentThreadsPrompt(
+        threads,
+        undefined,
+        new Map([
+          ['old-thread', 'rejected'],
+          ['new-thread', 'awaiting-approval'],
+        ]),
+      );
+
+      expect(result).toBe(`docs/SUMMARY.md:L85 (old) [다시 수정 중]
+Explain why this was removed.
+=====
+docs/SUMMARY.md:L242-L244 [승인 대기]
+Should this remain grouped?
+Reply 1 (Reviewer)
+Related entries are below.`);
+    });
+
+    it('should leave the location bare when no review state is known for the thread', () => {
+      const result = formatAllCommentThreadsPrompt(
+        threads,
+        undefined,
+        new Map([['new-thread', 'folded']]),
+      );
+
+      expect(result).toContain('docs/SUMMARY.md:L85 (old)\nExplain');
+      expect(result).toContain('docs/SUMMARY.md:L242-L244 [접힘]\n');
+    });
   });
 
   describe('formatAllCommentsPrompt', () => {
@@ -347,6 +377,23 @@ Explain why this was removed.`);
       expect(result).toContain('src/utils/helper.ts:L20-L30\nSecond issue');
       expect(result).toContain('src/components/Button.tsx:L42\nThird issue');
       expect(result).toContain('Total comments: 3');
+    });
+
+    it('should show each thread with its review state', () => {
+      const comments: Comment[] = [
+        { id: '1', file: 'src/App.tsx', line: 10, body: 'Open', timestamp: '2024-01-01T00:00:00Z' },
+        { id: '2', file: 'src/App.tsx', line: 20, body: 'Done', timestamp: '2024-01-01T00:01:00Z' },
+      ];
+      const result = formatCommentsOutput(
+        comments,
+        new Map([
+          ['1', 'awaiting-fix'],
+          ['2', 'approved'],
+        ]),
+      );
+
+      expect(result).toContain('src/App.tsx:L10 [수정 중]\nOpen');
+      expect(result).toContain('src/App.tsx:L20 [승인됨]\nDone');
     });
 
     it('should handle comments with multi-line bodies', () => {

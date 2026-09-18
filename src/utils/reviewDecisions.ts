@@ -2,6 +2,18 @@ import type { ReviewDecision, ThreadFixup, ThreadReviewState } from '../types/di
 
 const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = ['rejected', 'approved', 'folded'];
 
+const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
+  'awaiting-fix': '수정 중',
+  'awaiting-approval': '승인 대기',
+  approved: '승인됨',
+  folded: '접힘',
+  rejected: '다시 수정 중',
+};
+
+export function reviewStateLabel(state: ThreadReviewState): string {
+  return REVIEW_STATE_LABEL[state];
+}
+
 const decisionKey = (decision: ReviewDecision) =>
   `${decision.threadId}|${decision.kind}|${decision.fixupSha}`;
 

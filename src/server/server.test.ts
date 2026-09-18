@@ -86,6 +86,7 @@ vi.mock('./git-diff.js', () => {
       source: 'content',
     });
     clearResolvedCommitCache = vi.fn();
+    listThreadFixups = vi.fn().mockResolvedValue([]);
     getRevisionOptions = vi.fn().mockResolvedValue({
       branches: [{ name: 'main', current: true }],
       commits: [{ hash: 'abc1234', shortHash: 'abc1234', message: 'Test commit' }],
@@ -814,9 +815,59 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('Comments from review session');
       expect(output).toContain('test.js:L10 (old)');
       expect(output).toContain('First comment');
-      expect(output).toContain('test.js:L20\nSecond comment');
+      expect(output).toContain('test.js:L20 [수정 중]\nSecond comment');
       expect(output).toContain('Second comment');
       expect(output).toContain('Total comments: 2');
+    });
+
+    it('GET /api/comments-output marks each thread with its review state', async () => {
+      const comments = [
+        { file: 'test.js', line: 10, body: 'No answer yet' },
+        { file: 'test.js', line: 20, body: 'Answered' },
+        { file: 'test.js', line: 30, body: 'Rejected' },
+        { file: 'test.js', line: 40, body: 'Approved' },
+        { file: 'test.js', line: 50, body: 'Folded' },
+      ];
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments }),
+      });
+      const { threads } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json`)
+      ).json()) as { threads: Array<{ id: string; position: { line: number } }> };
+      const idAt = (line: number) => threads.find((t) => t.position.line === line)!.id;
+
+      const fixup = (sha: string, threadId: string) => ({
+        sha,
+        shortSha: sha.slice(0, 7),
+        subject: 'fixup! x',
+        threadIds: [threadId],
+        files: [],
+      });
+      parserInstances
+        .at(-1)
+        ?.listThreadFixups.mockResolvedValue([
+          fixup('a'.repeat(40), idAt(20)),
+          fixup('b'.repeat(40), idAt(40)),
+        ]);
+      await fetch(`http://localhost:${port}/api/decisions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          { threadId: idAt(30), kind: 'rejected', fixupSha: 'c'.repeat(40), at: '2026-01-01' },
+          { threadId: idAt(40), kind: 'approved', fixupSha: 'b'.repeat(40), at: '2026-01-01' },
+          { threadId: idAt(50), kind: 'folded', fixupSha: 'd'.repeat(40), at: '2026-01-01' },
+        ]),
+      });
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+
+      expect(output).toContain('test.js:L10 [수정 중]\nNo answer yet');
+      expect(output).toContain('test.js:L20 [승인 대기]\nAnswered');
+      expect(output).toContain('test.js:L30 [다시 수정 중]\nRejected');
+      expect(output).toContain('test.js:L40 [승인됨]\nApproved');
+      expect(output).toContain('test.js:L50 [접힘]\nFolded');
     });
 
     it('GET /api/comments-output formats multi-line comments correctly', async () => {

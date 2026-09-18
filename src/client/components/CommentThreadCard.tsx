@@ -7,6 +7,7 @@ import {
   type ReviewDecisionKind,
   type ThreadReviewState,
 } from '../../types/diff';
+import { reviewStateLabel } from '../../utils/reviewDecisions';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -199,14 +200,6 @@ interface ThreadReviewControls {
   onUndoApproval: (threadId: string) => void;
 }
 
-const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
-  'awaiting-fix': '수정 중',
-  'awaiting-approval': '승인 대기',
-  approved: '승인됨',
-  folded: '접힘',
-  rejected: '다시 수정 중',
-};
-
 interface CommentThreadCardProps {
   thread: CommentThread;
   review?: ThreadReviewControls;
@@ -297,7 +290,7 @@ export function CommentThreadCard({
               data-testid="review-state-chip"
               className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-border px-2 text-[10px] font-medium text-github-text-secondary"
             >
-              {REVIEW_STATE_LABEL[review.state]}
+              {reviewStateLabel(review.state)}
             </span>
           )}
           {thread.isOutdated && (

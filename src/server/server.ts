@@ -24,7 +24,11 @@ import {
   resolveEditorOption,
 } from '../utils/editorOptions.js';
 import { getFileExtension } from '../utils/fileUtils.js';
-import { mergeReviewDecisions, normalizeReviewDecisions } from '../utils/reviewDecisions.js';
+import {
+  deriveThreadReviewState,
+  mergeReviewDecisions,
+  normalizeReviewDecisions,
+} from '../utils/reviewDecisions.js';
 
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
@@ -42,6 +46,7 @@ import {
   type GeneratedStatusResponse,
   type ReviewDecision,
   type RevisionsResponse,
+  type ThreadReviewState,
 } from '@/types/diff.js';
 import {
   createDiffSelection,
@@ -874,17 +879,40 @@ export async function startServer(
     }
   });
 
-  app.get('/api/comments-output', (req, res) => {
-    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+  async function threadReviewStatesFor(
+    selection: DiffSelection,
+  ): Promise<Map<string, ThreadReviewState> | undefined> {
+    if (options.stdinDiff) return undefined;
     const session = getOrCreateCommentSession(selection);
-    res.type('text/plain');
-
-    if (session.threads.length > 0) {
-      const output = formatCommentsOutput(session.threads.map(toCommentThread));
-      res.send(output);
-    } else {
-      res.send('');
+    try {
+      const fixups = await parser.listThreadFixups(selection);
+      return new Map(
+        session.threads.map((thread) => [
+          thread.id,
+          deriveThreadReviewState(
+            thread.id,
+            fixups.filter((fixup) => fixup.threadIds.includes(thread.id)),
+            session.decisions,
+          ),
+        ]),
+      );
+    } catch (error) {
+      console.error('Error listing fixups:', error);
+      return undefined;
     }
+  }
+
+  async function renderCommentsOutput(selection: DiffSelection): Promise<string> {
+    const session = getOrCreateCommentSession(selection);
+    if (session.threads.length === 0) return '';
+    const reviewStates = await threadReviewStatesFor(selection);
+    return formatCommentsOutput(session.threads.map(toCommentThread), reviewStates);
+  }
+
+  app.get('/api/comments-output', async (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    res.type('text/plain');
+    res.send(await renderCommentsOutput(selection));
   });
 
   app.get('/api/user-settings', async (_req, res) => {
@@ -1018,10 +1046,10 @@ export async function startServer(
   });
 
   // Function to output comments when server shuts down
-  function outputFinalComments() {
-    const session = getOrCreateCommentSession(currentCommentSelection);
-    if (session.threads.length > 0) {
-      console.log(formatCommentsOutput(session.threads.map(toCommentThread)));
+  async function outputFinalComments() {
+    const output = await renderCommentsOutput(currentCommentSelection);
+    if (output) {
+      console.log(output);
     }
   }
 
@@ -1072,7 +1100,7 @@ export async function startServer(
           // Stop file watcher
           await fileWatcher.stop();
 
-          outputFinalComments();
+          await outputFinalComments();
           process.exit(0);
         }, 100);
       }
