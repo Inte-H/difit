@@ -64,6 +64,22 @@ export function deriveThreadReviewState(
   return rejectedShas.size > 0 ? 'rejected' : 'awaiting-fix';
 }
 
+// Threads the agent still owes an answer: nothing to judge yet, or the last answer was rejected.
+export function selectOpenThreads<T extends { id: string }>(
+  threads: T[],
+  fixupsByThread: ReadonlyMap<string, ThreadFixup[]>,
+  decisions: ReviewDecision[],
+): T[] {
+  return threads.filter((thread) => {
+    const state = deriveThreadReviewState(
+      thread.id,
+      fixupsByThread.get(thread.id) ?? [],
+      decisions,
+    );
+    return state === 'awaiting-fix' || state === 'rejected';
+  });
+}
+
 // The fixup under judgment: the one not yet rejected, when there is exactly one.
 export function pendingFixupFor(
   threadId: string,

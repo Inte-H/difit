@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 
 import { mockFetch } from '../../vitest.setup';
-import type { DiffCommentThread, DiffResponse } from '../types/diff';
+import type { DiffCommentThread, DiffResponse, ReviewDecision } from '../types/diff';
 import type { ClientWatchState } from '../types/watch';
 import { DiffMode } from '../types/watch';
 
@@ -24,6 +24,7 @@ vi.mock('./hooks/useDiffComments', () => ({
     hasLoadedComments: true,
     comments: [],
     threads: mockComments,
+    decisions: mockDecisions,
     replaceThreads: mockReplaceThreads,
     addComment: vi.fn(),
     addThread: vi.fn(),
@@ -121,6 +122,7 @@ Object.defineProperty(window, 'EventSource', {
 });
 
 let mockComments: DiffCommentThread[] = [];
+let mockDecisions: ReviewDecision[] = [];
 const mockReplaceThreads = vi.fn();
 const mockClearAllComments = vi.fn();
 const mockApplyCommentImports = vi.fn(() => []);
@@ -200,6 +202,7 @@ describe('App Component - Clear Comments Functionality', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockComments = [];
+    mockDecisions = [];
     mockApplyCommentImports.mockReset();
     mockApplyCommentImports.mockReturnValue([]);
     mockConfirm.mockReturnValue(false);
@@ -225,14 +228,59 @@ describe('App Component - Clear Comments Functionality', () => {
       fireEvent.click(await screen.findByText(/Copy All Prompt/));
 
       await waitFor(() => {
-        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith({
-          requestedBaseCommitish: 'main',
-          requestedTargetCommitish: 'feature/docs-update',
-          baseMode: 'merge-base',
-          resolvedBaseCommitish: 'abcdef1',
-          resolvedTargetCommitish: '1234567',
-        });
+        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith(
+          {
+            requestedBaseCommitish: 'main',
+            requestedTargetCommitish: 'feature/docs-update',
+            baseMode: 'merge-base',
+            resolvedBaseCommitish: 'abcdef1',
+            resolvedTargetCommitish: '1234567',
+          },
+          mockComments,
+        );
       });
+    });
+
+    it('should leave settled threads out and copy only the open ones', async () => {
+      mockComments = [
+        createMockThread({ id: 'open', filePath: 'test.ts', line: 10, body: 'Still open' }),
+        createMockThread({ id: 'approved', filePath: 'test.ts', line: 20, body: 'Approved' }),
+      ];
+      mockDecisions = [
+        { threadId: 'approved', kind: 'approved', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ];
+
+      renderApp();
+
+      fireEvent.click(await screen.findByText('Copy All Prompt (1)'));
+
+      await waitFor(() => {
+        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith(expect.anything(), [
+          mockComments[0],
+        ]);
+      });
+    });
+
+    it('should say there is nothing open and write nothing when every thread is settled', async () => {
+      mockComments = [
+        createMockThread({ id: 'approved', filePath: 'test.ts', line: 20, body: 'Approved' }),
+      ];
+      mockDecisions = [
+        { threadId: 'approved', kind: 'approved', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ];
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      });
+
+      renderApp();
+
+      fireEvent.click(await screen.findByText(/Copy All Prompt/));
+
+      expect(await screen.findByText('No open comments')).toBeInTheDocument();
+      expect(mockGenerateAllCommentsPrompt).not.toHaveBeenCalled();
+      expect(writeText).not.toHaveBeenCalled();
     });
   });
 
@@ -608,7 +656,7 @@ describe('App Component - Comment sync', () => {
       const [url, request] = commentCalls[1] as [string, RequestInit];
       expect(url).toBe('/api/comments?base=HEAD%5E&target=HEAD');
       expect(request.method).toBe('POST');
-      expect(JSON.parse(String(request.body))).toEqual({ threads: [] });
+      expect(JSON.parse(String(request.body))).toEqual({ threads: [], decisions: [] });
     });
   });
 
@@ -630,7 +678,7 @@ describe('App Component - Comment sync', () => {
 
     expect(navigator.sendBeacon).toHaveBeenCalledWith(
       '/api/comments?base=HEAD%5E&target=HEAD',
-      JSON.stringify({ threads: [] }),
+      JSON.stringify({ threads: [], decisions: [] }),
     );
     addEventListenerSpy.mockRestore();
   });

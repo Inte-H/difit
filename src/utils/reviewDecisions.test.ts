@@ -8,6 +8,7 @@ import {
   normalizeReviewDecisions,
   pendingFixupFor,
   reviewStateLabel,
+  selectOpenThreads,
 } from './reviewDecisions';
 
 const fixup = (sha: string, threadIds = ['t1']): ThreadFixup => ({
@@ -80,6 +81,36 @@ describe('reviewStateLabel', () => {
     const rejected = [decision('rejected', 'aaaa')];
     expect(reviewStateLabel(deriveThreadReviewState('t1', [], rejected))).toBe('다시 수정 중');
     expect(reviewStateLabel(deriveThreadReviewState('t1', [], []))).toBe('수정 중');
+  });
+});
+
+describe('selectOpenThreads', () => {
+  const threads = ['open', 'answered', 'rejected', 'retried', 'approved', 'folded'].map((id) => ({
+    id,
+  }));
+  const fixupsByThread = new Map([
+    ['answered', [fixup('aaaa', ['answered'])]],
+    ['retried', [fixup('bbbb', ['retried']), fixup('cccc', ['retried'])]],
+    ['approved', [fixup('dddd', ['approved'])]],
+  ]);
+  const decisions = [
+    decision('rejected', 'zzzz', undefined, 'rejected'),
+    decision('rejected', 'bbbb', undefined, 'retried'),
+    decision('approved', 'dddd', undefined, 'approved'),
+    decision('folded', 'eeee', undefined, 'folded'),
+  ];
+
+  it('keeps only threads still waiting for a fix or rejected without a new one', () => {
+    expect(selectOpenThreads(threads, fixupsByThread, decisions).map((t) => t.id)).toEqual([
+      'open',
+      'rejected',
+    ]);
+  });
+
+  it('returns nothing when every thread has been answered or settled', () => {
+    const settled = threads.filter((t) => t.id !== 'open' && t.id !== 'rejected');
+    expect(selectOpenThreads(settled, fixupsByThread, decisions)).toEqual([]);
+    expect(selectOpenThreads([], fixupsByThread, decisions)).toEqual([]);
   });
 });
 

@@ -20,9 +20,10 @@ import {
   getDiffSelectionKey,
   normalizeBaseMode,
 } from '../utils/diffSelection';
+import { selectOpenThreads } from '../utils/reviewDecisions';
 
 import { Checkbox } from './components/Checkbox';
-import { CommentsDropdown } from './components/CommentsDropdown';
+import { CommentsDropdown, type CopyAllNotice } from './components/CommentsDropdown';
 import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
@@ -136,7 +137,7 @@ function App() {
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isCopiedAll, setIsCopiedAll] = useState(false);
+  const [copyAllNotice, setCopyAllNotice] = useState<CopyAllNotice | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
@@ -257,6 +258,10 @@ function App() {
       undoApproval,
     }),
     [showFixupOverlay, fixupsByThread, decisions, recordDecision, undoApproval],
+  );
+  const openThreads = useMemo(
+    () => selectOpenThreads(threads, fixupsByThread, decisions),
+    [threads, fixupsByThread, decisions],
   );
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
@@ -1103,18 +1108,29 @@ function App() {
     [addThread],
   );
 
+  const showCopyAllNotice = (notice: CopyAllNotice) => {
+    setCopyAllNotice(notice);
+    setTimeout(() => setCopyAllNotice(null), 2000);
+  };
+
   const handleCopyAllComments = async () => {
+    if (openThreads.length === 0) {
+      showCopyAllNotice('empty');
+      return;
+    }
     try {
-      const prompt = generateAllCommentsPrompt({
-        requestedBaseCommitish: diffData?.requestedBaseCommitish,
-        requestedTargetCommitish: diffData?.requestedTargetCommitish,
-        baseMode: normalizeBaseMode(diffData?.requestedBaseMode),
-        resolvedBaseCommitish: diffData?.baseCommitish,
-        resolvedTargetCommitish: diffData?.targetCommitish,
-      });
+      const prompt = generateAllCommentsPrompt(
+        {
+          requestedBaseCommitish: diffData?.requestedBaseCommitish,
+          requestedTargetCommitish: diffData?.requestedTargetCommitish,
+          baseMode: normalizeBaseMode(diffData?.requestedBaseMode),
+          resolvedBaseCommitish: diffData?.baseCommitish,
+          resolvedTargetCommitish: diffData?.targetCommitish,
+        },
+        openThreads,
+      );
       await copyTextToClipboard(prompt);
-      setIsCopiedAll(true);
-      setTimeout(() => setIsCopiedAll(false), 2000);
+      showCopyAllNotice('copied');
     } catch (error) {
       console.error('Failed to copy all comments prompt:', error);
     }
@@ -1353,7 +1369,8 @@ function App() {
               {!isMobile && threads.length > 0 && (
                 <CommentsDropdown
                   commentsCount={threads.length}
-                  isCopiedAll={isCopiedAll}
+                  openCount={openThreads.length}
+                  copyAllNotice={copyAllNotice}
                   onCopyAll={handleCopyAllComments}
                   onDeleteAll={clearAllComments}
                   onViewAll={() => setIsCommentsListOpen(true)}
@@ -1611,7 +1628,8 @@ function App() {
           <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
             <CommentsDropdown
               commentsCount={threads.length}
-              isCopiedAll={isCopiedAll}
+              openCount={openThreads.length}
+              copyAllNotice={copyAllNotice}
               onCopyAll={handleCopyAllComments}
               onDeleteAll={clearAllComments}
               onViewAll={() => setIsCommentsListOpen(true)}
