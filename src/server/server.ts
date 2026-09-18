@@ -37,6 +37,7 @@ import {
   type DiffCommentThread,
   type DiffResponse,
   type DiffSelection,
+  type FixupsResponse,
   type GeneratedStatusResponse,
   type RevisionsResponse,
 } from '@/types/diff.js';
@@ -812,6 +813,23 @@ export async function startServer(
       version: session.version,
       threads: session.threads,
     });
+  });
+
+  app.get('/api/fixups', async (req, res) => {
+    if (options.stdinDiff) {
+      res.json({ fixups: [] } satisfies FixupsResponse);
+      return;
+    }
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    try {
+      const fixups = await parser.listThreadFixups(selection);
+      res.json({ fixups } satisfies FixupsResponse);
+    } catch (error) {
+      console.error('Error listing fixups:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to list fixups',
+      });
+    }
   });
 
   app.get('/api/comments-output', (req, res) => {

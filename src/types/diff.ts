@@ -187,6 +187,22 @@ export interface DiffContextStorage {
   appliedCommentImportIds: string[];
 }
 
+// A commit carrying a `Review-Thread: <threadId>` trailer is the agent's answer to that thread.
+export const REVIEW_THREAD_TRAILER = 'Review-Thread';
+
+export interface ThreadFixup {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  threadIds: string[];
+  files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks'>>;
+}
+
+export interface FixupsResponse {
+  // Commits between the reviewed target and HEAD that carry the trailer, oldest first.
+  fixups: ThreadFixup[];
+}
+
 export interface CommentThread {
   id: string;
   file: string;

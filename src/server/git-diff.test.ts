@@ -1598,4 +1598,80 @@ index abc123..def456 100644
       });
     });
   });
+
+  describe('listThreadFixups', () => {
+    it('returns nothing for working-tree targets or when the target is already HEAD', async () => {
+      const gitRevparse = (parser as any).git.revparse;
+      const gitRaw = (parser as any).git.raw;
+
+      expect(
+        await parser.listThreadFixups({ targetCommitish: '.', baseCommitish: 'HEAD' }),
+      ).toEqual([]);
+
+      gitRevparse.mockResolvedValue('aaaa\n');
+      expect(
+        await parser.listThreadFixups({ targetCommitish: 'HEAD', baseCommitish: 'HEAD~1' }),
+      ).toEqual([]);
+      expect(gitRaw).not.toHaveBeenCalled();
+    });
+
+    it('maps trailer-carrying commits between target and HEAD to their thread ids and diffs', async () => {
+      const gitRevparse = (parser as any).git.revparse;
+      const gitRaw = (parser as any).git.raw;
+      const gitDiff = (parser as any).git.diff;
+      const fixupSha = 'abcdef1234567890abcdef1234567890abcdef12';
+      const targetSha = '1234567890abcdef1234567890abcdef12345678';
+
+      gitRevparse.mockResolvedValueOnce(`${targetSha}\n`).mockResolvedValueOnce('ffff\n');
+      gitRaw.mockResolvedValue(
+        `${fixupSha}\u001ffixup! change b\u001ft1,t2\u001e\n` +
+          `deadbeef\u001fno trailer\u001f\u001e\n`,
+      );
+      gitDiff.mockResolvedValue(
+        [
+          'diff --git a/f.txt b/f.txt',
+          'index abc123..def456 100644',
+          '--- a/f.txt',
+          '+++ b/f.txt',
+          '@@ -1,2 +1,3 @@',
+          ' a',
+          '+// why',
+          ' b',
+        ].join('\n'),
+      );
+
+      const fixups = await parser.listThreadFixups({
+        targetCommitish: 'feature',
+        baseCommitish: 'main',
+      });
+
+      expect(gitRaw).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          'log',
+          '--reverse',
+          '--grep=^Review-Thread: ',
+          `${targetSha}..HEAD`,
+        ]),
+      );
+      expect(gitDiff).toHaveBeenCalledWith([
+        `${fixupSha}^`,
+        fixupSha,
+        '--no-ext-diff',
+        '--color=never',
+      ]);
+      expect(fixups).toHaveLength(1);
+      expect(fixups[0]).toMatchObject({
+        sha: fixupSha,
+        shortSha: 'abcdef1',
+        subject: 'fixup! change b',
+        threadIds: ['t1', 't2'],
+      });
+      expect(fixups[0].files[0].path).toBe('f.txt');
+      expect(fixups[0].files[0].chunks[0].lines.map((line) => line.type)).toEqual([
+        'normal',
+        'add',
+        'normal',
+      ]);
+    });
+  });
 });

@@ -8,6 +8,7 @@ import {
   type LineNumber,
 } from '../../types/diff';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
+import { FixupOverlayProvider, type FixupOverlayState } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import { type MergedChunk } from '../hooks/useExpandedLines';
 import { useFileLevelTokens } from '../hooks/useFileLevelTokens';
@@ -17,6 +18,8 @@ import type { DiffViewerBodyProps } from '../viewers/types';
 
 import { DiffViewerHeader } from './DiffViewerHeader';
 import type { AppearanceSettings } from './SettingsModal';
+
+const EMPTY_FIXUP_OVERLAY: FixupOverlayState = { enabled: false, fixupsByThread: new Map() };
 
 interface DiffViewerProps {
   file: DiffFile;
@@ -48,6 +51,7 @@ interface DiffViewerProps {
   cursor?: CursorPosition | null;
   isFocused?: boolean;
   fileIndex?: number;
+  fixupOverlay?: FixupOverlayState;
   mergedChunks: MergedChunk[];
   expandLines: (
     file: DiffFile,
@@ -208,6 +212,7 @@ export const DiffViewer = memo(function DiffViewer({
   prefetchFileContent,
   isExpandLoading,
   diffVersion,
+  fixupOverlay,
 }: DiffViewerProps) {
   const isCollapsed = collapsedFiles.has(file.path);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -379,9 +384,11 @@ export const DiffViewer = memo(function DiffViewer({
 
       {!isCollapsed && (
         <FileLevelTokensProvider value={fileLevelTokens}>
-          <div className="overflow-y-auto">
-            <ViewerComponent {...viewerProps} />
-          </div>
+          <FixupOverlayProvider value={fixupOverlay ?? EMPTY_FIXUP_OVERLAY}>
+            <div className="overflow-y-auto">
+              <ViewerComponent {...viewerProps} />
+            </div>
+          </FixupOverlayProvider>
         </FileLevelTokensProvider>
       )}
     </div>

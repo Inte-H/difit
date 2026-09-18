@@ -10,6 +10,7 @@ import {
   type LineSelection,
 } from '../../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
+import { useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -20,6 +21,7 @@ import {
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
+import { FixupOverlayCard } from './FixupOverlayCard';
 import type { AppearanceSettings } from './SettingsModal';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
 
@@ -93,6 +95,7 @@ export const DiffChunk = memo(function DiffChunk({
     lineNumber: number;
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const overlay = useFixupOverlay();
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -505,6 +508,24 @@ export const DiffChunk = memo(function DiffChunk({
                     });
                   }}
                 />
+
+                {overlay.enabled &&
+                  lineThreads.map((thread) => {
+                    const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
+                    const [fixup] = fixups;
+                    if (!fixup || fixups.length !== 1 || !filename) return null;
+                    return (
+                      <tr key={`fixup-${thread.id}`}>
+                        <td colSpan={3} className="p-0">
+                          <FixupOverlayCard
+                            fixup={fixup}
+                            filePath={filename}
+                            syntaxTheme={syntaxTheme}
+                          />
+                        </td>
+                      </tr>
+                    );
+                  })}
 
                 {lineThreads.map((thread) => {
                   const layout = getCommentLayout(line);

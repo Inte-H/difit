@@ -8,6 +8,8 @@ import {
   type DiffLine,
   type DiffResponse,
   type DiffSelection,
+  type ThreadFixup,
+  REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
 import { getMergeBaseTargetRef, normalizeBaseMode } from '../utils/diffSelection.js';
 
@@ -603,6 +605,50 @@ export class GitDiffParser {
     } catch {
       return false;
     }
+  }
+
+  async listThreadFixups(selection: DiffSelection): Promise<ThreadFixup[]> {
+    const { targetCommitish } = selection;
+    if (targetCommitish === 'working' || targetCommitish === 'staged' || targetCommitish === '.') {
+      return [];
+    }
+
+    const targetHash = (await this.git.revparse([targetCommitish])).trim();
+    const headHash = (await this.git.revparse(['HEAD'])).trim();
+    if (targetHash === headHash) {
+      return [];
+    }
+
+    const RECORD = '';
+    const FIELD = '';
+    const raw = await this.git.raw([
+      'log',
+      '--reverse',
+      `--grep=^${REVIEW_THREAD_TRAILER}: `,
+      `--format=%H${FIELD}%s${FIELD}%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)${RECORD}`,
+      `${targetHash}..HEAD`,
+    ]);
+
+    const fixups: ThreadFixup[] = [];
+    for (const record of raw.split(RECORD)) {
+      const [sha, subject, trailerValues] = record.trim().split(FIELD);
+      if (!sha || !trailerValues) continue;
+      const threadIds = trailerValues
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+      if (threadIds.length === 0) continue;
+
+      const diffRaw = await this.git.diff([`${sha}^`, sha, '--no-ext-diff', '--color=never']);
+      const files = this.parseUnifiedDiff(diffRaw).map(({ path, oldPath, status, chunks }) => ({
+        path,
+        oldPath,
+        status,
+        chunks,
+      }));
+      fixups.push({ sha, shortSha: shortHash(sha), subject: subject ?? '', threadIds, files });
+    }
+    return fixups;
   }
 
   parseStdinDiff(diffContent: string): DiffResponse {

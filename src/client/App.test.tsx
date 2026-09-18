@@ -719,7 +719,10 @@ describe('App Component - Diff Mode Persistence', () => {
 
     await waitFor(() => {
       // 4 calls: initial /api/diff, /api/revisions, initial /api/comments sync, and refresh /api/diff
-      expect(mockGlobalFetch).toHaveBeenCalledTimes(4);
+      const callsExceptFixups = mockGlobalFetch.mock.calls.filter(
+        ([input]) => !String(input).includes('/api/fixups'),
+      );
+      expect(callsExceptFixups).toHaveLength(4);
     });
 
     await waitFor(() => {

@@ -33,6 +33,7 @@ import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
+import type { FixupOverlayState } from './contexts/FixupOverlayContext';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
@@ -41,6 +42,7 @@ import { useFileWatch } from './hooks/useFileWatch';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLazyDiffRendering } from './hooks/useLazyDiffRendering';
 import { useViewedFiles } from './hooks/useViewedFiles';
+import { useThreadFixups } from './hooks/useThreadFixups';
 import { useViewport } from './hooks/useViewport';
 import { fetchClientSettings, saveClientSettings } from './services/userSettings';
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
@@ -235,6 +237,15 @@ function App() {
       return `${path}?${commentSessionQueryString}`;
     },
     [commentSessionQueryString],
+  );
+  const [showFixupOverlay, setShowFixupOverlay] = useState(true);
+  const fixupsByThread = useThreadFixups(
+    diffData ? getCommentApiUrl('/api/fixups') : null,
+    diffDataVersion,
+  );
+  const fixupOverlay = useMemo<FixupOverlayState>(
+    () => ({ enabled: showFixupOverlay, fixupsByThread }),
+    [showFixupOverlay, fixupsByThread],
   );
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
@@ -1292,6 +1303,18 @@ function App() {
                 label="Ignore Whitespace"
                 title={ignoreWhitespace ? 'Show whitespace changes' : 'Ignore whitespace changes'}
               />
+              {fixupsByThread.size > 0 && (
+                <Checkbox
+                  checked={showFixupOverlay}
+                  onChange={setShowFixupOverlay}
+                  label="수정을 겹쳐 보기"
+                  title={
+                    showFixupOverlay
+                      ? '원래 diff만 보기'
+                      : '지적에 대한 수정을 코드 줄 아래에 겹쳐 보기'
+                  }
+                />
+              )}
               {/* File Watch Reload Button */}
               <ReloadButton
                 shouldReload={shouldReload}
@@ -1534,6 +1557,7 @@ function App() {
                       prefetchFileContent={prefetchFileContent}
                       isExpandLoading={isExpandLoading}
                       diffVersion={diffDataVersion}
+                      fixupOverlay={fixupOverlay}
                     />
                   ) : (
                     <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
