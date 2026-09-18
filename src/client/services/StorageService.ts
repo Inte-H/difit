@@ -3,6 +3,7 @@ import {
   type DiffCommentThread,
   type ViewedFileRecord,
   type DiffContextStorage,
+  type DiffContextStorageV2,
   type LegacyDiffContextStorage,
   type LegacyDiffComment,
   type ViewedHashIndex,
@@ -186,14 +187,21 @@ export class StorageService {
 
       if (!data) return null;
 
-      const parsed = JSON.parse(data) as DiffContextStorage | LegacyDiffContextStorage;
-      if (parsed.version === 2 && 'threads' in parsed) {
+      const parsed = JSON.parse(data) as
+        | DiffContextStorage
+        | DiffContextStorageV2
+        | LegacyDiffContextStorage;
+      if (parsed.version === 3 && 'decisions' in parsed) {
         return parsed;
+      }
+
+      if (parsed.version === 2 && 'threads' in parsed) {
+        return { ...parsed, version: 3, decisions: [] };
       }
 
       if (parsed.version === 1 && 'comments' in parsed) {
         return {
-          version: 2,
+          version: 3,
           baseCommitish: parsed.baseCommitish,
           targetCommitish: parsed.targetCommitish,
           createdAt: parsed.createdAt,
@@ -201,6 +209,7 @@ export class StorageService {
           threads: parsed.comments.map(migrateLegacyComment),
           viewedFiles: parsed.viewedFiles,
           appliedCommentImportIds: [],
+          decisions: [],
         };
       }
 
@@ -266,12 +275,13 @@ export class StorageService {
       // Ensure data includes original commitish values
       const dataToSave: DiffContextStorage = {
         ...data,
-        version: 2,
+        version: 3,
         baseCommitish,
         targetCommitish,
         baseMode,
         lastModifiedAt: new Date().toISOString(),
         appliedCommentImportIds: data.appliedCommentImportIds || [],
+        decisions: data.decisions || [],
       };
       localStorage.setItem(key, JSON.stringify(dataToSave));
     } catch (error) {
@@ -350,7 +360,7 @@ export class StorageService {
       baseMode,
     );
     const data: DiffContextStorage = existingData || {
-      version: 2,
+      version: 3,
       baseCommitish,
       targetCommitish,
       baseMode,
@@ -359,6 +369,7 @@ export class StorageService {
       threads: [],
       viewedFiles: [],
       appliedCommentImportIds: [],
+      decisions: [],
     };
 
     data.threads = threads;
@@ -439,7 +450,7 @@ export class StorageService {
       baseMode,
     );
     const data: DiffContextStorage = existingData || {
-      version: 2,
+      version: 3,
       baseCommitish,
       targetCommitish,
       baseMode,
@@ -448,6 +459,7 @@ export class StorageService {
       threads: [],
       viewedFiles: [],
       appliedCommentImportIds: [],
+      decisions: [],
     };
 
     data.viewedFiles = files;

@@ -174,7 +174,7 @@ export interface LegacyDiffContextStorage {
   viewedFiles: ViewedFileRecord[];
 }
 
-export interface DiffContextStorage {
+export interface DiffContextStorageV2 {
   version: 2; // Schema version
   baseCommitish: string;
   targetCommitish: string;
@@ -186,6 +186,39 @@ export interface DiffContextStorage {
   viewedFiles: ViewedFileRecord[];
   appliedCommentImportIds: string[];
 }
+
+export interface DiffContextStorage {
+  version: 3; // Schema version
+  baseCommitish: string;
+  targetCommitish: string;
+  baseMode?: BaseMode;
+  createdAt: string; // ISO 8601 format
+  lastModifiedAt: string; // ISO 8601 format
+
+  threads: DiffCommentThread[];
+  viewedFiles: ViewedFileRecord[];
+  appliedCommentImportIds: string[];
+  decisions: ReviewDecision[];
+}
+
+export type ReviewDecisionKind = 'rejected' | 'approved' | 'folded';
+
+// Threads carry no resolved state; a thread's screen state is derived from these
+// records plus the fixup commits found by trailer.
+export interface ReviewDecision {
+  threadId: string;
+  kind: ReviewDecisionKind;
+  fixupSha: string;
+  targetSha?: string;
+  at: string; // ISO 8601 format
+}
+
+export type ThreadReviewState =
+  | 'awaiting-fix'
+  | 'awaiting-approval'
+  | 'approved'
+  | 'folded'
+  | 'rejected';
 
 // A commit carrying a `Review-Thread: <threadId>` trailer is the agent's answer to that thread.
 export const REVIEW_THREAD_TRAILER = 'Review-Thread';

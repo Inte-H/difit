@@ -8,7 +8,11 @@ import {
   type LineNumber,
 } from '../../types/diff';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
-import { FixupOverlayProvider, type FixupOverlayState } from '../contexts/FixupOverlayContext';
+import {
+  EMPTY_FIXUP_OVERLAY,
+  FixupOverlayProvider,
+  type FixupOverlayState,
+} from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import { type MergedChunk } from '../hooks/useExpandedLines';
 import { useFileLevelTokens } from '../hooks/useFileLevelTokens';
@@ -18,8 +22,6 @@ import type { DiffViewerBodyProps } from '../viewers/types';
 
 import { DiffViewerHeader } from './DiffViewerHeader';
 import type { AppearanceSettings } from './SettingsModal';
-
-const EMPTY_FIXUP_OVERLAY: FixupOverlayState = { enabled: false, fixupsByThread: new Map() };
 
 interface DiffViewerProps {
   file: DiffFile;

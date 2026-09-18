@@ -1,7 +1,12 @@
 import { Check, ChevronDown, ChevronRight, Copy, Edit2, MessageSquare, Trash2 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 
-import { type CommentThread, type DiffCommentMessage } from '../../types/diff';
+import {
+  type CommentThread,
+  type DiffCommentMessage,
+  type ReviewDecisionKind,
+  type ThreadReviewState,
+} from '../../types/diff';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -187,8 +192,24 @@ function ThreadMessageItem({
   );
 }
 
+interface ThreadReviewControls {
+  state: ThreadReviewState;
+  fixupSha: string | null;
+  onDecide: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
+  onUndoApproval: (threadId: string) => void;
+}
+
+const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
+  'awaiting-fix': '수정 중',
+  'awaiting-approval': '승인 대기',
+  approved: '승인됨',
+  folded: '접힘',
+  rejected: '다시 수정 중',
+};
+
 interface CommentThreadCardProps {
   thread: CommentThread;
+  review?: ThreadReviewControls;
   showAuthorBadges?: boolean;
   confirmRootAction?: boolean;
   onGeneratePrompt: (thread: CommentThread) => string;
@@ -202,6 +223,7 @@ interface CommentThreadCardProps {
 
 export function CommentThreadCard({
   thread,
+  review,
   showAuthorBadges = false,
   confirmRootAction = true,
   onGeneratePrompt,
@@ -242,9 +264,11 @@ export function CommentThreadCard({
   return (
     <div
       id={`comment-thread-${thread.id}`}
-      className={`rounded-md border border-yellow-600/50 border-l-4 border-l-yellow-400 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
-        onClick ? 'cursor-pointer hover:shadow-md' : ''
-      }`}
+      className={`rounded-md border border-l-4 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
+        review
+          ? 'border-github-border border-l-github-text-muted'
+          : 'border-yellow-600/50 border-l-yellow-400'
+      } ${onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
       onClick={onClick}
     >
       <div className={`flex items-center justify-between gap-3 ${isCollapsed ? '' : 'mb-3'}`}>
@@ -268,6 +292,14 @@ export function CommentThreadCard({
           >
             {thread.file}:{lineLabel}
           </span>
+          {review && (
+            <span
+              data-testid="review-state-chip"
+              className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-border px-2 text-[10px] font-medium text-github-text-secondary"
+            >
+              {REVIEW_STATE_LABEL[review.state]}
+            </span>
+          )}
           {thread.isOutdated && (
             <span
               className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-text-muted px-2 text-[10px] font-medium text-github-text-muted"
@@ -349,6 +381,38 @@ export function CommentThreadCard({
               />
             </div>
           ))}
+
+          {review && (review.state === 'awaiting-approval' || review.state === 'approved') && (
+            <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+              {review.state === 'awaiting-approval' && review.fixupSha && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => review.onDecide(thread.id, 'approved', review.fixupSha ?? '')}
+                    className="min-h-10 flex-1 rounded border border-github-accent bg-github-accent/20 px-3 text-sm font-medium text-github-text-primary"
+                  >
+                    승인
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
+                    className="min-h-10 flex-1 rounded border border-github-danger bg-github-danger/20 px-3 text-sm font-medium text-github-text-primary"
+                  >
+                    거절
+                  </button>
+                </>
+              )}
+              {review.state === 'approved' && (
+                <button
+                  type="button"
+                  onClick={() => review.onUndoApproval(thread.id)}
+                  className="min-h-10 flex-1 rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-secondary"
+                >
+                  승인 취소
+                </button>
+              )}
+            </div>
+          )}
 
           <div
             className="ml-4 border-l border-github-border pl-3"

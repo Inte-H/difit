@@ -6,6 +6,7 @@ import {
   type DiffResponse,
   type DiffSelection,
   type DiffViewMode,
+  type ReviewDecision,
   type DiffSide,
   type LineNumber,
   type CommentThread,
@@ -188,7 +189,11 @@ function App() {
   const {
     hasLoadedComments,
     threads,
+    decisions,
     replaceThreads,
+    mergeDecisions,
+    recordDecision,
+    undoApproval,
     addThread,
     replyToThread,
     removeThread,
@@ -244,8 +249,14 @@ function App() {
     diffDataVersion,
   );
   const fixupOverlay = useMemo<FixupOverlayState>(
-    () => ({ enabled: showFixupOverlay, fixupsByThread }),
-    [showFixupOverlay, fixupsByThread],
+    () => ({
+      enabled: showFixupOverlay,
+      fixupsByThread,
+      decisions,
+      recordDecision,
+      undoApproval,
+    }),
+    [showFixupOverlay, fixupsByThread, decisions, recordDecision, undoApproval],
   );
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
@@ -271,20 +282,25 @@ function App() {
     const payload = (await response.json()) as {
       version?: number;
       threads?: DiffCommentThread[];
+      decisions?: ReviewDecision[];
     };
     if (typeof payload.version === 'number') {
       serverCommentVersionRef.current = payload.version;
     }
+    if (Array.isArray(payload.decisions) && payload.decisions.length > 0) {
+      mergeDecisions(payload.decisions);
+    }
     return Array.isArray(payload.threads) ? payload.threads : [];
-  }, [getCommentApiUrl]);
+  }, [getCommentApiUrl, mergeDecisions]);
 
   const syncThreadsToServer = useCallback(
-    async (nextThreads: DiffCommentThread[]) => {
+    async (nextThreads: DiffCommentThread[], nextDecisions?: ReviewDecision[]) => {
       const response = await fetch(getCommentApiUrl('/api/comments'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           threads: nextThreads,
+          decisions: nextDecisions,
           baseVersion: serverCommentVersionRef.current ?? undefined,
         }),
       });
@@ -296,6 +312,7 @@ function App() {
         version?: number;
         merged?: boolean;
         threads?: DiffCommentThread[];
+        decisions?: ReviewDecision[];
       };
       if (typeof result.version === 'number') {
         serverCommentVersionRef.current = result.version;
@@ -304,9 +321,12 @@ function App() {
       if (result.merged && Array.isArray(result.threads)) {
         skipNextCommentSyncRef.current = true;
         replaceThreads(result.threads);
+        if (Array.isArray(result.decisions)) {
+          mergeDecisions(result.decisions);
+        }
       }
     },
-    [getCommentApiUrl, replaceThreads],
+    [getCommentApiUrl, mergeDecisions, replaceThreads],
   );
 
   // Viewed files management
@@ -1009,6 +1029,7 @@ function App() {
 
     const data = JSON.stringify({
       threads,
+      decisions,
       baseVersion: serverCommentVersionRef.current ?? undefined,
     });
     const commentsApiUrl = getCommentApiUrl('/api/comments');
@@ -1028,14 +1049,14 @@ function App() {
       };
     }
 
-    syncThreadsToServer(threads).catch((syncError) => {
+    syncThreadsToServer(threads, decisions).catch((syncError) => {
       console.error('Failed to sync comments:', syncError);
     });
 
     return () => {
       window.removeEventListener('beforeunload', sendCommentsBeforeUnload);
     };
-  }, [getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
+  }, [decisions, getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
 
   // Establish SSE connection for tab close detection
   useEffect(() => {

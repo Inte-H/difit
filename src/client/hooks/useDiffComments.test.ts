@@ -13,7 +13,7 @@ vi.mock('../services/StorageService', () => ({
       (baseCommitish: string, targetCommitish: string, threads: DiffContextStorage['threads']) => {
         const now = new Date().toISOString();
         mockDiffContextData = {
-          version: 2,
+          version: 3,
           baseCommitish,
           targetCommitish,
           createdAt: mockDiffContextData?.createdAt ?? now,
@@ -21,6 +21,7 @@ vi.mock('../services/StorageService', () => ({
           threads,
           viewedFiles: mockDiffContextData?.viewedFiles ?? [],
           appliedCommentImportIds: mockDiffContextData?.appliedCommentImportIds ?? [],
+          decisions: mockDiffContextData?.decisions ?? [],
         };
       },
     ),

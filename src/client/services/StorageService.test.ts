@@ -199,7 +199,7 @@ describe('StorageService - Repository Isolation', () => {
 
     it('preserves applied import ids when saving viewed files', () => {
       service.saveDiffContextData('base', 'target', {
-        version: 2,
+        version: 3,
         baseCommitish: 'base',
         targetCommitish: 'target',
         createdAt: '2024-01-01T00:00:00Z',
@@ -207,6 +207,7 @@ describe('StorageService - Repository Isolation', () => {
         threads: [],
         viewedFiles: [],
         appliedCommentImportIds: ['import-bundle-1'],
+        decisions: [],
       });
 
       service.saveViewedFiles('base', 'target', [

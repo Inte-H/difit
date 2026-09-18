@@ -1,0 +1,108 @@
+import { describe, expect, it } from 'vitest';
+
+import type { ReviewDecision, ThreadFixup } from '../types/diff';
+
+import {
+  deriveThreadReviewState,
+  mergeReviewDecisions,
+  normalizeReviewDecisions,
+  pendingFixupFor,
+} from './reviewDecisions';
+
+const fixup = (sha: string, threadIds = ['t1']): ThreadFixup => ({
+  sha,
+  shortSha: sha.slice(0, 7),
+  subject: 'fixup! x',
+  threadIds,
+  files: [],
+});
+
+const decision = (
+  kind: ReviewDecision['kind'],
+  fixupSha: string,
+  at = '2026-01-01T00:00:00Z',
+  threadId = 't1',
+): ReviewDecision => ({ threadId, kind, fixupSha, at });
+
+describe('deriveThreadReviewState', () => {
+  it('is awaiting-fix with no fixup and no decision', () => {
+    expect(deriveThreadReviewState('t1', [], [])).toBe('awaiting-fix');
+  });
+
+  it('is awaiting-approval once a fixup arrives', () => {
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [])).toBe('awaiting-approval');
+  });
+
+  it('is rejected after rejecting the only fixup, then awaiting-approval when a new one arrives', () => {
+    const rejected = [decision('rejected', 'aaaa')];
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], rejected)).toBe('rejected');
+    expect(deriveThreadReviewState('t1', [], rejected)).toBe('rejected');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa'), fixup('bbbb')], rejected)).toBe(
+      'awaiting-approval',
+    );
+  });
+
+  it('is approved while the record exists and folded once a fold record lands', () => {
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [decision('approved', 'aaaa')])).toBe(
+      'approved',
+    );
+    expect(
+      deriveThreadReviewState(
+        't1',
+        [],
+        [decision('approved', 'aaaa'), decision('folded', 'aaaa', '2026-01-02T00:00:00Z')],
+      ),
+    ).toBe('folded');
+  });
+
+  it('ignores other threads’ decisions', () => {
+    expect(
+      deriveThreadReviewState(
+        't1',
+        [fixup('aaaa')],
+        [decision('rejected', 'aaaa', undefined, 't2')],
+      ),
+    ).toBe('awaiting-approval');
+  });
+});
+
+describe('pendingFixupFor', () => {
+  it('returns the single fixup not yet rejected, and null when there are several or none', () => {
+    expect(pendingFixupFor('t1', [fixup('aaaa')], [])?.sha).toBe('aaaa');
+    expect(
+      pendingFixupFor('t1', [fixup('aaaa'), fixup('bbbb')], [decision('rejected', 'aaaa')])?.sha,
+    ).toBe('bbbb');
+    expect(pendingFixupFor('t1', [fixup('aaaa'), fixup('bbbb')], [])).toBeNull();
+    expect(pendingFixupFor('t1', [], [])).toBeNull();
+  });
+});
+
+describe('mergeReviewDecisions', () => {
+  it('unions by thread, kind and fixup, keeping the incoming copy and sorting by time', () => {
+    const merged = mergeReviewDecisions(
+      [decision('approved', 'aaaa', '2026-01-03T00:00:00Z')],
+      [
+        decision('rejected', 'zzzz', '2026-01-01T00:00:00Z'),
+        decision('approved', 'aaaa', '2026-01-02T00:00:00Z'),
+      ],
+    );
+    expect(merged.map((d) => [d.kind, d.at])).toEqual([
+      ['rejected', '2026-01-01T00:00:00Z'],
+      ['approved', '2026-01-02T00:00:00Z'],
+    ]);
+  });
+});
+
+describe('normalizeReviewDecisions', () => {
+  it('drops entries that are not decisions', () => {
+    expect(
+      normalizeReviewDecisions([
+        decision('approved', 'aaaa'),
+        { threadId: 't1', kind: 'nope', fixupSha: 'a', at: 'x' },
+        'garbage',
+        null,
+      ]),
+    ).toHaveLength(1);
+    expect(normalizeReviewDecisions(undefined)).toEqual([]);
+  });
+});
