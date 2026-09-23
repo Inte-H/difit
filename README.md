@@ -181,6 +181,70 @@ src/components/Button.tsx:L42-L48   # This line is automatically added
 This section is unnecessary
 ```
 
+## 🔁 지적에 대한 수정을 겹쳐 보는 리뷰 (포크)
+
+에이전트가 지적마다 고친 내용을 지적 달린 줄 아래에 겹쳐 그리고, 리뷰어는 지적 하나씩 승인하거나 거절한다.
+
+### 리뷰 열기
+
+리뷰할 커밋을 SHA로 고정해서 연다.
+
+```sh
+difit "$(git rev-parse HEAD)"
+```
+
+`HEAD`나 브랜치 이름으로 열면 에이전트가 고친 커밋이 쌓일 때마다 리뷰 대상도 따라 움직인다. 그러면 고친 내용이 이미 diff 안에 들어가 있어서 겹쳐 그릴 것이 없다. SHA로 고정하면 그 커밋 뒤에 쌓인 수정만 따로 모아 겹쳐 보여 준다.
+
+위쪽 도구 막대의 `수정을 겹쳐 보기`로 겹침 카드를 켜고 끈다.
+
+### 지적 카드의 상태
+
+| 상태         | 뜻                                          | 리뷰어가 할 일            |
+| ------------ | ------------------------------------------- | ------------------------- |
+| 수정 중      | 에이전트가 아직 답하지 않았다               | 기다린다                  |
+| 승인 대기    | 수정이 도착해 줄 아래에 겹쳐 보인다         | `승인` 또는 `거절`        |
+| 승인됨       | 승인했지만 아직 원래 커밋에 합쳐지지 않았다 | 잘못 눌렀으면 `승인 취소` |
+| 접힘         | 승인한 수정이 원래 커밋에 합쳐졌다          | 없음                      |
+| 다시 수정 중 | 거절해서 에이전트가 다시 고치고 있다        | 기다린다                  |
+
+### 에이전트용: 지적에 답하기
+
+1. 지적과 스레드 id를 읽는다. 텍스트 출력에는 id가 없으므로 JSON으로 읽는다.
+
+   ```sh
+   difit comment get --port <port> --format json
+   ```
+
+2. 코드를 고친 뒤, 리뷰 대상 커밋을 향한 fixup 커밋을 만들고 스레드 id를 트레일러로 붙인다.
+
+   ```sh
+   git commit -a --fixup=<리뷰 대상 SHA> --trailer "Review-Thread: <threadId>"
+   ```
+
+   - 지적 하나에 fixup 커밋 하나만 둔다. 같은 지적에 fixup이 둘이면 화면이 어느 쪽을 판정할지 정하지 못한다.
+   - 판정 전에 같은 지적을 또 고쳤다면 새 커밋을 만들지 말고 앞의 fixup 커밋에 합친다. 그 커밋이 맨 위면 `git commit -a --amend --no-edit`, 아니면 `git rebase -i`에서 그 커밋을 `edit`한다.
+   - 지적 여러 개를 고쳤으면 지적마다 fixup 커밋을 따로 만든다.
+
+3. 리뷰어가 거절하면 `comment get --format json`의 `decisions`에 `"kind": "rejected"`와 그 fixup의 SHA가 남는다. 거절된 fixup 커밋은 버리고(`git rebase -i`에서 `drop`) 새로 고쳐 다시 만든다.
+
+### 에이전트용: 승인된 수정 접기와 기록 올리기
+
+브랜치를 마무리할 때 한 번에 접는다. `--autosquash`는 범위 안의 fixup을 모두 접으므로, 남은 fixup이 전부 승인된 뒤에 돌린다.
+
+```sh
+GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 대상 SHA>^
+```
+
+접으면 fixup 커밋이 사라지므로, 어떤 수정이 어느 커밋으로 들어갔는지를 실행 중인 서버에 기록한다. 지적마다 옛 fixup SHA와 접힌 뒤의 새 커밋 SHA를 짝지어 올린다.
+
+```sh
+curl -X POST "http://localhost:<port>/api/decisions" \
+  -H 'Content-Type: application/json' \
+  -d '[{"threadId":"<threadId>","kind":"folded","fixupSha":"<옛 fixup SHA>","targetSha":"<접힌 뒤 커밋 SHA>","at":"2026-09-23T10:00:00Z"}]'
+```
+
+응답이 `{"success":true,"changed":true,...}`면 받은 것이다. 같은 기록을 다시 보내도 중복으로 쌓이지 않는다.
+
 ## 🤖 Calling from Agents
 
 You can install the following Skills to work with difit from AI agents.
