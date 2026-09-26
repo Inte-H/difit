@@ -57,7 +57,7 @@ describe('locateThread', () => {
     const thread = buildThread({ position: { side: 'new', line: 10 } });
     const index = buildFileLineIndex(buildFile([newLine(10, 'const value = 1;')]));
 
-    expect(locateThread(thread, index)).toEqual({ line: 10, isOutdated: false });
+    expect(locateThread(thread, index, null)).toEqual({ line: 10, isOutdated: false });
   });
 
   it('moves the thread to where its snapshot now sits when lines were inserted above', () => {
@@ -74,14 +74,14 @@ describe('locateThread', () => {
       ]),
     );
 
-    expect(locateThread(thread, index)).toEqual({ line: [12, 13], isOutdated: false });
+    expect(locateThread(thread, index, null)).toEqual({ line: [12, 13], isOutdated: false });
   });
 
   it('is outdated at the stored line when the snapshot is gone', () => {
     const thread = buildThread({ position: { side: 'new', line: 10 } });
     const index = buildFileLineIndex(buildFile([newLine(10, 'const value = 2;')]));
 
-    expect(locateThread(thread, index)).toEqual({
+    expect(locateThread(thread, index, null)).toEqual({
       line: 10,
       isOutdated: true,
       outdatedReason: 'missing',
@@ -94,15 +94,31 @@ describe('locateThread', () => {
       buildFile([newLine(10, 'const value = 1;'), newLine(20, 'const value = 1;')]),
     );
 
-    expect(locateThread(thread, index)).toEqual({
+    expect(locateThread(thread, index, null)).toEqual({
       line: 10,
       isOutdated: true,
       outdatedReason: 'ambiguous',
     });
   });
 
+  it('trusts the stored line of a repeated snapshot while viewing the commit it was made on', () => {
+    const fullHash = 'b7c2e10' + '0'.repeat(33);
+    const thread = buildThread({
+      position: { side: 'new', line: 20 },
+      codeSnapshot: { content: '}', commit: fullHash },
+    });
+    const index = buildFileLineIndex(buildFile([newLine(10, '}'), newLine(20, '}')]));
+
+    expect(locateThread(thread, index, 'b7c2e10')).toEqual({ line: 20, isOutdated: false });
+    expect(locateThread(thread, index, '6e4f6d5')).toEqual({
+      line: 20,
+      isOutdated: true,
+      outdatedReason: 'ambiguous',
+    });
+  });
+
   it('is outdated when the file is missing from the index map (file no longer in the diff)', () => {
-    expect(locateThread(buildThread(), undefined)).toEqual({
+    expect(locateThread(buildThread(), undefined, null)).toEqual({
       line: 10,
       isOutdated: true,
       outdatedReason: 'missing',
@@ -113,7 +129,7 @@ describe('locateThread', () => {
     const thread = buildThread({ codeSnapshot: undefined });
     const index = buildFileLineIndex(buildFile([newLine(10, 'anything')]));
 
-    expect(locateThread(thread, index)).toEqual({ line: 10, isOutdated: false });
+    expect(locateThread(thread, index, null)).toEqual({ line: 10, isOutdated: false });
   });
 
   it('ignores trailing whitespace and line endings when matching', () => {
@@ -125,7 +141,7 @@ describe('locateThread', () => {
       buildFile([newLine(10, 'const value = 1;'), newLine(11, 'const next = 2;')]),
     );
 
-    expect(locateThread(thread, index)).toEqual({ line: [10, 11], isOutdated: false });
+    expect(locateThread(thread, index, null)).toEqual({ line: [10, 11], isOutdated: false });
   });
 
   it('compares against the "old" side when the thread is anchored to a deletion', () => {
@@ -136,8 +152,8 @@ describe('locateThread', () => {
     const changed = buildFileLineIndex(buildFile([oldLine(42, 'const removed = false;')]));
     const same = buildFileLineIndex(buildFile([oldLine(42, 'const removed = true;')]));
 
-    expect(locateThread(thread, changed).isOutdated).toBe(true);
-    expect(locateThread(thread, same)).toEqual({ line: 42, isOutdated: false });
+    expect(locateThread(thread, changed, null).isOutdated).toBe(true);
+    expect(locateThread(thread, same, null)).toEqual({ line: 42, isOutdated: false });
   });
 
   it('does not confuse "old" and "new" line numbers when both sides exist', () => {
@@ -149,6 +165,6 @@ describe('locateThread', () => {
       buildFile([{ type: 'normal', content: 'new-side text', oldLineNumber: 5, newLineNumber: 5 }]),
     );
 
-    expect(locateThread(thread, index).isOutdated).toBe(true);
+    expect(locateThread(thread, index, null).isOutdated).toBe(true);
   });
 });

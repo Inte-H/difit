@@ -538,12 +538,16 @@ function App() {
     return map;
   }, [navigableFiles]);
 
+  const targetCommit = useMemo(() => {
+    const target = resolvedSelection?.targetCommitish;
+    return target && isCommitTarget(target) ? target : null;
+  }, [resolvedSelection]);
   const normalizedThreads = useMemo<CommentThread[]>(
     () =>
       threads.map((thread) => ({
         id: thread.id,
         file: thread.filePath,
-        ...locateThread(thread, fileLineIndexByPath.get(thread.filePath)),
+        ...locateThread(thread, fileLineIndexByPath.get(thread.filePath), targetCommit),
         side: thread.position.side,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
@@ -551,7 +555,7 @@ function App() {
         anchorCommit: thread.codeSnapshot?.commit,
         messages: thread.messages,
       })),
-    [threads, fileLineIndexByPath],
+    [threads, fileLineIndexByPath, targetCommit],
   );
   const showAuthorBadges = useMemo(
     () => hasMultipleCommentAuthors(normalizedThreads.flatMap((thread) => thread.messages)),
@@ -911,10 +915,6 @@ function App() {
     [fetchDiffData, selectedRevision],
   );
 
-  const targetCommit = useMemo(() => {
-    const target = resolvedSelection?.targetCommitish;
-    return target && isCommitTarget(target) ? target : null;
-  }, [resolvedSelection]);
   const openReviewAt = useCallback(
     (commit: string) => {
       void handleRevisionChange(

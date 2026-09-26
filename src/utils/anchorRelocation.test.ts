@@ -35,6 +35,28 @@ describe('relocateAnchor', () => {
     ).toEqual({ kind: 'located', line: { start: 2, end: 4 } });
   });
 
+  it('keeps a repeated line at its saved number when viewing the anchor commit', () => {
+    const lines = fileLines(['if (a) {', '}', 'if (b) {', '}']);
+
+    expect(relocateAnchor({ line: 4, content: '}' }, lines, true)).toEqual({
+      kind: 'located',
+      line: 4,
+    });
+    expect(relocateAnchor({ line: 4, content: '}' }, lines)).toEqual({
+      kind: 'stale',
+      reason: 'ambiguous',
+    });
+  });
+
+  it('still searches when the anchor commit no longer holds the content at the saved number', () => {
+    const lines = fileLines(['const a = 1;', 'const b = 2;']);
+
+    expect(relocateAnchor({ line: 1, content: 'const b = 2;' }, lines, true)).toEqual({
+      kind: 'located',
+      line: 2,
+    });
+  });
+
   it('is stale as missing when the saved content is gone', () => {
     const lines = fileLines(['const a = 1;', 'const b = 20;']);
 

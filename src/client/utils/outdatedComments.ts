@@ -1,5 +1,6 @@
 import type { AnchorStaleReason, DiffCommentThread, DiffFile, LineNumber } from '../../types/diff';
 import { relocateAnchor } from '../../utils/anchorRelocation';
+import { isSameCommit } from '../../utils/diffSelection';
 
 export interface FileLineIndex {
   old: Map<number, string>;
@@ -37,15 +38,18 @@ const toLineNumber = (line: DiffCommentThread['position']['line']): LineNumber =
 export function locateThread(
   thread: DiffCommentThread,
   index: FileLineIndex | undefined,
+  targetCommit: string | null,
 ): ThreadPlacement {
   const storedLine = toLineNumber(thread.position.line);
   const snapshot = thread.codeSnapshot?.content;
   if (snapshot === undefined) return { line: storedLine, isOutdated: false };
   if (!index) return { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
 
+  const anchorCommit = thread.codeSnapshot?.commit;
   const relocation = relocateAnchor(
     { line: thread.position.line, content: snapshot },
     thread.position.side === 'old' ? index.old : index.new,
+    anchorCommit !== undefined && targetCommit !== null && isSameCommit(anchorCommit, targetCommit),
   );
   if (relocation.kind === 'stale') {
     return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };

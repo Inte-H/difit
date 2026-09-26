@@ -15,9 +15,11 @@ const splitContent = (content: string) =>
   content.replace(/\r\n/g, '\n').split('\n').map(trimTrailingWhitespace);
 
 // Moves only to an exact match that occurs exactly once; never fits by surrounding context.
+// At the anchor's own commit the stored line numbers are exact, so a match there wins outright.
 export function relocateAnchor(
   anchor: ThreadAnchor,
   lines: ReadonlyMap<number, string>,
+  atAnchorCommit = false,
 ): AnchorRelocation {
   const expected = splitContent(anchor.content);
   const matchesAt = (start: number) =>
@@ -25,6 +27,9 @@ export function relocateAnchor(
       const current = lines.get(start + offset);
       return current !== undefined && trimTrailingWhitespace(current) === content;
     });
+
+  const storedStart = typeof anchor.line === 'number' ? anchor.line : anchor.line.start;
+  if (atAnchorCommit && matchesAt(storedStart)) return { kind: 'located', line: anchor.line };
 
   const [start, ...others] = [...lines.keys()].filter(matchesAt);
   if (start === undefined) return { kind: 'stale', reason: 'missing' };
