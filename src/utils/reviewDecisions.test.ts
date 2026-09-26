@@ -14,6 +14,7 @@ import {
 const fixup = (sha: string, threadIds = ['t1']): ThreadFixup => ({
   sha,
   shortSha: sha.slice(0, 7),
+  patchId: `patch-${sha}`,
   subject: 'fixup! x',
   threadIds,
   files: [],
@@ -27,6 +28,18 @@ const decision = (
 ): ReviewDecision => ({ threadId, kind, fixupSha, at });
 
 describe('deriveThreadReviewState', () => {
+  it('keeps a rejected fixup rejected after a rebase rewrites its sha', () => {
+    const rejected = { ...fixup('a'.repeat(40)), patchId: 'same-change' };
+    const rewritten = { ...fixup('b'.repeat(40)), patchId: 'same-change' };
+    const decisions = [{ ...decision('rejected', rejected.sha), patchId: 'same-change' }];
+
+    expect(deriveThreadReviewState('t1', [rewritten], decisions)).toBe('rejected');
+
+    const answer = fixup('c'.repeat(40));
+    expect(deriveThreadReviewState('t1', [rewritten, answer], decisions)).toBe('awaiting-approval');
+    expect(pendingFixupFor('t1', [rewritten, answer], decisions)).toBe(answer);
+  });
+
   it('is awaiting-fix with no fixup and no decision', () => {
     expect(deriveThreadReviewState('t1', [], [])).toBe('awaiting-fix');
   });

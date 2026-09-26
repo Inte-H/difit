@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { isAbsolute, resolve, sep } from 'path';
 
@@ -18,6 +19,23 @@ import {
 } from '../utils/diffSelection.js';
 
 import { isGeneratedFile } from './generated-file-check.js';
+
+// Hashes every diff line with its surrounding context but not the line numbers, so a rebase keeps
+// the id. A fixup with no changed text lines (empty or binary-only) keeps its own sha.
+function patchIdOf(sha: string, files: ThreadFixup['files']): string {
+  const hash = createHash('sha1');
+  let changedLines = 0;
+  for (const file of files) {
+    hash.update(`${file.path}\n`);
+    for (const chunk of file.chunks) {
+      for (const line of chunk.lines) {
+        if (line.type === 'add' || line.type === 'delete') changedLines += 1;
+        hash.update(`${line.type}:${line.content}\n`);
+      }
+    }
+  }
+  return changedLines > 0 ? hash.digest('hex') : sha;
+}
 
 export class GitDiffParser {
   private git: SimpleGit;
@@ -650,7 +668,14 @@ export class GitDiffParser {
         status,
         chunks,
       }));
-      fixups.push({ sha, shortSha: shortHash(sha), subject: subject ?? '', threadIds, files });
+      fixups.push({
+        sha,
+        shortSha: shortHash(sha),
+        patchId: patchIdOf(sha, files),
+        subject: subject ?? '',
+        threadIds,
+        files,
+      });
     }
     return fixups;
   }

@@ -36,7 +36,7 @@ import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
-import type { FixupOverlayState } from './contexts/FixupOverlayContext';
+import { recordWithPatchId, type FixupOverlayState } from './contexts/FixupOverlayContext';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
@@ -929,7 +929,7 @@ function App() {
       fixupsByThread,
       decisions,
       targetCommit,
-      recordDecision,
+      recordDecision: recordWithPatchId(recordDecision, fixupsByThread),
       undoApproval,
       openReviewAt,
     }),

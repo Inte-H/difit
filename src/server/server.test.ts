@@ -841,6 +841,7 @@ describe('Server Integration Tests', () => {
       const fixup = (sha: string, threadId: string) => ({
         sha,
         shortSha: sha.slice(0, 7),
+        patchId: `patch-${sha}`,
         subject: 'fixup! x',
         threadIds: [threadId],
         files: [],

@@ -252,6 +252,7 @@ describe('SideBySideDiffChunk fixup overlay', () => {
   const fixup = (sha: string): ThreadFixup => ({
     sha,
     shortSha: sha.slice(0, 7),
+    patchId: `patch-${sha}`,
     subject: 'fixup! add third',
     threadIds: ['t1'],
     files: [
@@ -376,6 +377,7 @@ describe('DiffChunk fixup overlay', () => {
   const fixup: ThreadFixup = {
     sha: 'abc1234abc1234',
     shortSha: 'abc1234',
+    patchId: 'patch-abc1234',
     subject: 'fixup! x',
     threadIds: ['t1'],
     files: [

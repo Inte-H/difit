@@ -1673,5 +1673,46 @@ index abc123..def456 100644
         'normal',
       ]);
     });
+
+    it('gives fixups the same patch id only when line numbers alone differ', async () => {
+      const gitRevparse = (parser as any).git.revparse;
+      const gitRaw = (parser as any).git.raw;
+      const gitDiff = (parser as any).git.diff;
+      const patch = (start: number, added: string, context = 'a') =>
+        [
+          'diff --git a/f.txt b/f.txt',
+          '--- a/f.txt',
+          '+++ b/f.txt',
+          `@@ -${start},1 +${start},2 @@`,
+          ` ${context}`,
+          `+${added}`,
+        ].join('\n');
+
+      gitRevparse.mockResolvedValueOnce('t\n').mockResolvedValueOnce('h\n');
+      gitRaw.mockResolvedValue(
+        ['1', '2', '3', '4', '5', '6']
+          .map((sha) => `${sha}\u001ffixup! x\u001ft${sha}\u001e\n`)
+          .join(''),
+      );
+      gitDiff
+        .mockResolvedValueOnce(patch(1, 'const x = 1;'))
+        .mockResolvedValueOnce(patch(9, 'const x = 1;'))
+        .mockResolvedValueOnce(patch(1, '  const x = 1;'))
+        .mockResolvedValueOnce(patch(20, 'const x = 1;', 'b'))
+        .mockResolvedValueOnce('')
+        .mockResolvedValueOnce('');
+
+      const [first, moved, reindented, elsewhere, empty, otherEmpty] =
+        await parser.listThreadFixups({
+          targetCommitish: 'feature',
+          baseCommitish: 'main',
+        });
+
+      expect(moved.patchId).toBe(first.patchId);
+      expect(reindented.patchId).not.toBe(first.patchId);
+      expect(elsewhere.patchId).not.toBe(first.patchId);
+      expect(empty.patchId).toBe('5');
+      expect(otherEmpty.patchId).toBe('6');
+    });
   });
 });

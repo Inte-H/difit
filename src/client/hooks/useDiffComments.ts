@@ -44,7 +44,12 @@ interface UseDiffCommentsReturn {
   replaceThreads: (threads: DiffCommentThread[]) => void;
   replaceDecisions: (decisions: ReviewDecision[]) => void;
   mergeDecisions: (decisions: ReviewDecision[]) => void;
-  recordDecision: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
+  recordDecision: (
+    threadId: string,
+    kind: ReviewDecisionKind,
+    fixupSha: string,
+    patchId?: string,
+  ) => void;
   undoApproval: (threadId: string) => void;
   addComment: (params: AddThreadParams) => LegacyDiffComment;
   addThread: (params: AddThreadParams) => DiffCommentThread;
@@ -245,10 +250,10 @@ export function useDiffComments(
   );
 
   const recordDecision = useCallback(
-    (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => {
+    (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) => {
       saveDecisions(
         mergeReviewDecisions(decisions, [
-          { threadId, kind, fixupSha, at: new Date().toISOString() },
+          { threadId, kind, fixupSha, patchId, at: new Date().toISOString() },
         ]),
       );
     },

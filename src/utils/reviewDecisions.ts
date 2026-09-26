@@ -42,12 +42,16 @@ export function normalizeReviewDecisions(value: unknown): ReviewDecision[] {
   });
 }
 
-function rejectedShasFor(threadId: string, decisions: ReviewDecision[]): Set<string> {
-  return new Set(
-    decisions
-      .filter((decision) => decision.threadId === threadId && decision.kind === 'rejected')
-      .map((decision) => decision.fixupSha),
+function rejectionCheckFor(
+  threadId: string,
+  decisions: ReviewDecision[],
+): (fixup: ThreadFixup) => boolean {
+  const rejections = decisions.filter(
+    (decision) => decision.threadId === threadId && decision.kind === 'rejected',
   );
+  const shas = new Set(rejections.map((decision) => decision.fixupSha));
+  const patchIds = new Set(rejections.flatMap((decision) => decision.patchId ?? []));
+  return (fixup) => shas.has(fixup.sha) || patchIds.has(fixup.patchId);
 }
 
 export function deriveThreadReviewState(
@@ -59,9 +63,9 @@ export function deriveThreadReviewState(
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
   if (own.some((decision) => decision.kind === 'approved')) return 'approved';
 
-  const rejectedShas = rejectedShasFor(threadId, decisions);
-  if (fixups.some((fixup) => !rejectedShas.has(fixup.sha))) return 'awaiting-approval';
-  return rejectedShas.size > 0 ? 'rejected' : 'awaiting-fix';
+  const isRejected = rejectionCheckFor(threadId, decisions);
+  if (fixups.some((fixup) => !isRejected(fixup))) return 'awaiting-approval';
+  return own.some((decision) => decision.kind === 'rejected') ? 'rejected' : 'awaiting-fix';
 }
 
 // Threads the agent still owes an answer: nothing to judge yet, or the last answer was rejected.
@@ -86,7 +90,7 @@ export function pendingFixupFor(
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
 ): ThreadFixup | null {
-  const rejectedShas = rejectedShasFor(threadId, decisions);
-  const pending = fixups.filter((fixup) => !rejectedShas.has(fixup.sha));
+  const isRejected = rejectionCheckFor(threadId, decisions);
+  const pending = fixups.filter((fixup) => !isRejected(fixup));
   return pending.length === 1 ? (pending[0] ?? null) : null;
 }

@@ -8,6 +8,7 @@ import { useThreadFixups } from './useThreadFixups';
 const fixup = (sha: string): ThreadFixup => ({
   sha,
   shortSha: sha.slice(0, 7),
+  patchId: `patch-${sha}`,
   subject: 'fixup! x',
   threadIds: ['t1'],
   files: [],

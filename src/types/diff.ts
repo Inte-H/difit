@@ -211,6 +211,8 @@ export interface ReviewDecision {
   threadId: string;
   kind: ReviewDecisionKind;
   fixupSha: string;
+  // Identifies the fixup's changes across rebases that rewrite fixupSha.
+  patchId?: string;
   targetSha?: string;
   at: string; // ISO 8601 format
 }
@@ -228,6 +230,8 @@ export const REVIEW_THREAD_TRAILER = 'Review-Thread';
 export interface ThreadFixup {
   sha: string;
   shortSha: string;
+  // Same for two commits that add and remove the same lines in the same files.
+  patchId: string;
   subject: string;
   threadIds: string[];
   files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks'>>;

@@ -55,6 +55,19 @@ export interface ThreadReviewControls {
   onOpenReviewAt: (commit: string) => void;
 }
 
+export function recordWithPatchId(
+  record: (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) => void,
+  fixupsByThread: ReadonlyMap<string, ThreadFixup[]>,
+): FixupOverlayState['recordDecision'] {
+  return (threadId, kind, fixupSha) =>
+    record(
+      threadId,
+      kind,
+      fixupSha,
+      fixupsByThread.get(threadId)?.find((fixup) => fixup.sha === fixupSha)?.patchId,
+    );
+}
+
 export function threadReviewControls(
   overlay: FixupOverlayState,
   threadId: string,
