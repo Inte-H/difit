@@ -245,9 +245,13 @@ function App() {
     },
     [commentSessionQueryString],
   );
+  const targetCommit = useMemo(() => {
+    const target = resolvedSelection?.targetCommitish;
+    return target && isCommitTarget(target) ? target : null;
+  }, [resolvedSelection]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
   const fixupsByThread = useThreadFixups(
-    diffData ? getCommentApiUrl('/api/fixups') : null,
+    diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,
     diffDataVersion,
   );
   const openThreads = useMemo(
@@ -538,10 +542,6 @@ function App() {
     return map;
   }, [navigableFiles]);
 
-  const targetCommit = useMemo(() => {
-    const target = resolvedSelection?.targetCommitish;
-    return target && isCommitTarget(target) ? target : null;
-  }, [resolvedSelection]);
   const normalizedThreads = useMemo<CommentThread[]>(
     () =>
       threads.map((thread) => ({
