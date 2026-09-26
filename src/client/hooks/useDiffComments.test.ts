@@ -220,6 +220,64 @@ const next = true;
     });
   });
 
+  describe('review decisions', () => {
+    it('keeps a decision recorded while an older merge callback was in flight', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const staleMerge = result.current.mergeDecisions;
+
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40));
+      });
+      act(() => {
+        staleMerge([]);
+      });
+
+      expect(result.current.decisions.map((decision) => decision.threadId)).toEqual(['t1']);
+    });
+
+    it('ignores a merge from a review the page has switched away from', () => {
+      const { result, rerender } = renderHook(
+        ({ target }) => useDiffComments('main', target, 'abc123'),
+        { initialProps: { target: 'review-a' } },
+      );
+      const mergeForReviewA = result.current.mergeDecisions;
+
+      rerender({ target: 'review-b' });
+      act(() => {
+        mergeForReviewA([
+          {
+            threadId: 't1',
+            kind: 'approved',
+            fixupSha: 'a'.repeat(40),
+            at: '2026-01-01T00:00:00Z',
+          },
+        ]);
+      });
+
+      expect(result.current.decisions).toEqual([]);
+    });
+
+    it('records an undo instead of deleting the approval', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40), 'change-1');
+      });
+      act(() => {
+        result.current.undoApproval('t1');
+      });
+
+      expect(result.current.decisions.map((decision) => decision.kind)).toEqual([
+        'approved',
+        'unapproved',
+      ]);
+      expect(result.current.decisions[1]).toMatchObject({
+        fixupSha: 'a'.repeat(40),
+        patchId: 'change-1',
+      });
+    });
+  });
+
   describe('comment CRUD operations', () => {
     it('should add comment with code snapshot', () => {
       const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));

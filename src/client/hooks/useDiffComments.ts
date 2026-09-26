@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 import {
   type BaseMode,
@@ -111,6 +111,9 @@ export function useDiffComments(
 ): UseDiffCommentsReturn {
   const [threads, setThreads] = useState<DiffCommentThread[]>([]);
   const [decisions, setDecisions] = useState<ReviewDecision[]>([]);
+  const reviewKey = [repositoryId, baseMode, baseCommitish, targetCommitish].join('|');
+  // Decisions of the review currently loaded; callbacks of a review switched away from write nothing.
+  const decisionsRef = useRef({ reviewKey, list: decisions });
   const [hasLoadedComments, setHasLoadedComments] = useState(false);
 
   const loadDiffContextData = useCallback(() => {
@@ -167,7 +170,8 @@ export function useDiffComments(
         baseMode,
       );
     setThreads(loadedThreads);
-    setDecisions(loadedData?.decisions ?? []);
+    decisionsRef.current = { reviewKey, list: loadedData?.decisions ?? [] };
+    setDecisions(decisionsRef.current.list);
     setHasLoadedComments(true);
   }, [
     baseCommitish,
@@ -177,6 +181,7 @@ export function useDiffComments(
     repositoryId,
     baseMode,
     loadDiffContextData,
+    reviewKey,
   ]);
 
   const saveThreads = useCallback(
@@ -208,6 +213,7 @@ export function useDiffComments(
   const saveDecisions = useCallback(
     (newDecisions: ReviewDecision[]) => {
       if (!baseCommitish || !targetCommitish) return;
+      if (decisionsRef.current.reviewKey !== reviewKey) return;
 
       const existingData = loadDiffContextData() || createEmptyDiffContext();
       if (!existingData) return;
@@ -221,9 +227,11 @@ export function useDiffComments(
         repositoryId,
         baseMode,
       );
+      decisionsRef.current = { reviewKey, list: newDecisions };
       setDecisions(newDecisions);
     },
     [
+      reviewKey,
       baseCommitish,
       targetCommitish,
       branchToHash,
@@ -244,31 +252,32 @@ export function useDiffComments(
 
   const mergeDecisions = useCallback(
     (incoming: ReviewDecision[]) => {
-      saveDecisions(mergeReviewDecisions(decisions, incoming));
+      saveDecisions(mergeReviewDecisions(decisionsRef.current.list, incoming));
     },
-    [decisions, saveDecisions],
+    [saveDecisions],
   );
 
   const recordDecision = useCallback(
     (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) => {
       saveDecisions(
-        mergeReviewDecisions(decisions, [
+        mergeReviewDecisions(decisionsRef.current.list, [
           { threadId, kind, fixupSha, patchId, at: new Date().toISOString() },
         ]),
       );
     },
-    [decisions, saveDecisions],
+    [saveDecisions],
   );
 
   const undoApproval = useCallback(
     (threadId: string) => {
-      saveDecisions(
-        decisions.filter(
-          (decision) => !(decision.threadId === threadId && decision.kind === 'approved'),
-        ),
+      const approvals = decisionsRef.current.list.filter(
+        (decision) => decision.threadId === threadId && decision.kind === 'approved',
       );
+      const approval = approvals[approvals.length - 1];
+      if (!approval) return;
+      recordDecision(threadId, 'unapproved', approval.fixupSha, approval.patchId);
     },
-    [decisions, saveDecisions],
+    [recordDecision],
   );
 
   const addThread = useCallback(

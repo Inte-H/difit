@@ -233,6 +233,8 @@ SHA로 고정한 리뷰는 파일 변경을 감시하지 않는다. 에이전트
 
 브랜치를 마무리할 때 한 번에 접는다. `--autosquash`는 범위 안의 fixup을 모두 접으므로, 남은 fixup이 전부 승인된 뒤에 돌린다.
 
+승인 여부는 `difit comment get --port <port>` 텍스트 출력에서 지적마다 붙는 `[승인됨]`으로 확인한다. JSON의 `decisions`는 판정을 지우지 않고 쌓기만 한다. 리뷰어가 승인을 취소하면 `"kind": "unapproved"`가 더해지므로, 같은 지적의 `approved`와 `unapproved` 가운데 시각이 늦은 쪽이 지금의 판정이다.
+
 ```sh
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 대상 SHA>^
 ```

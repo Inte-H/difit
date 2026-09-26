@@ -203,7 +203,7 @@ export interface DiffContextStorage {
   decisions: ReviewDecision[];
 }
 
-export type ReviewDecisionKind = 'rejected' | 'approved' | 'folded';
+export type ReviewDecisionKind = 'rejected' | 'approved' | 'unapproved' | 'folded';
 
 // Threads carry no resolved state; a thread's screen state is derived from these
 // records plus the fixup commits found by trailer.

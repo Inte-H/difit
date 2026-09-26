@@ -28,6 +28,53 @@ const decision = (
 ): ReviewDecision => ({ threadId, kind, fixupSha, at });
 
 describe('deriveThreadReviewState', () => {
+  it('follows the latest of an approval and its undo', () => {
+    const fixups = [fixup('a'.repeat(40))];
+    const approved = decision('approved', 'a'.repeat(40), '2026-01-01T00:00:00Z');
+    const undone = decision('unapproved', 'a'.repeat(40), '2026-01-01T00:01:00Z');
+    const reapproved = decision('approved', 'a'.repeat(40), '2026-01-01T00:02:00Z');
+
+    expect(deriveThreadReviewState('t1', fixups, [approved, undone])).toBe('awaiting-approval');
+    expect(
+      deriveThreadReviewState('t1', fixups, mergeReviewDecisions([undone], [reapproved])),
+    ).toBe('approved');
+  });
+
+  it('keeps a re-approval when an older copy of the same approval is merged back in', () => {
+    const fixups = [fixup('a'.repeat(40))];
+    const first = decision('approved', 'a'.repeat(40), '2026-01-01T00:00:00Z');
+    const undone = decision('unapproved', 'a'.repeat(40), '2026-01-01T00:01:00Z');
+    const again = decision('approved', 'a'.repeat(40), '2026-01-01T00:02:00Z');
+
+    const merged = mergeReviewDecisions([undone, again], [first, undone]);
+
+    expect(deriveThreadReviewState('t1', fixups, merged)).toBe('approved');
+  });
+
+  it('orders decisions by time even when their timestamps are written differently', () => {
+    const fixups = [fixup('a'.repeat(40))];
+    const approved = decision('approved', 'a'.repeat(40), '2026-09-23T10:00:00.500Z');
+    const undone = decision('unapproved', 'a'.repeat(40), '2026-09-23T19:00:01+09:00');
+
+    expect(deriveThreadReviewState('t1', fixups, [approved, undone])).toBe('awaiting-approval');
+    expect(
+      mergeReviewDecisions(
+        [decision('approved', 'b', '2026-09-23T10:00:00.500Z')],
+        [decision('approved', 'b', '2026-09-23T10:00:00Z')],
+      )[0]?.at,
+    ).toBe('2026-09-23T10:00:00.500Z');
+  });
+
+  it('does not revive an undone approval when a stale list is merged back in', () => {
+    const fixups = [fixup('a'.repeat(40))];
+    const approved = decision('approved', 'a'.repeat(40), '2026-01-01T00:00:00Z');
+    const undone = decision('unapproved', 'a'.repeat(40), '2026-01-01T00:01:00Z');
+
+    const merged = mergeReviewDecisions([approved, undone], [approved]);
+
+    expect(deriveThreadReviewState('t1', fixups, merged)).toBe('awaiting-approval');
+  });
+
   it('keeps a rejected fixup rejected after a rebase rewrites its sha', () => {
     const rejected = { ...fixup('a'.repeat(40)), patchId: 'same-change' };
     const rewritten = { ...fixup('b'.repeat(40)), patchId: 'same-change' };
@@ -139,7 +186,7 @@ describe('pendingFixupFor', () => {
 });
 
 describe('mergeReviewDecisions', () => {
-  it('unions by thread, kind and fixup, keeping the incoming copy and sorting by time', () => {
+  it('unions by thread, kind and fixup, keeping the later copy and sorting by time', () => {
     const merged = mergeReviewDecisions(
       [decision('approved', 'aaaa', '2026-01-03T00:00:00Z')],
       [
@@ -149,7 +196,7 @@ describe('mergeReviewDecisions', () => {
     );
     expect(merged.map((d) => [d.kind, d.at])).toEqual([
       ['rejected', '2026-01-01T00:00:00Z'],
-      ['approved', '2026-01-02T00:00:00Z'],
+      ['approved', '2026-01-03T00:00:00Z'],
     ]);
   });
 });

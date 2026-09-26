@@ -1,6 +1,11 @@
 import type { ReviewDecision, ThreadFixup, ThreadReviewState } from '../types/diff.js';
 
-const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = ['rejected', 'approved', 'folded'];
+const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
+  'rejected',
+  'approved',
+  'unapproved',
+  'folded',
+];
 
 const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
   'awaiting-fix': '수정 중',
@@ -14,6 +19,9 @@ export function reviewStateLabel(state: ThreadReviewState): string {
   return REVIEW_STATE_LABEL[state];
 }
 
+// Timestamps come from different writers and formats, so they are compared as instants.
+const decidedAt = (decision: ReviewDecision) => Date.parse(decision.at) || 0;
+
 const decisionKey = (decision: ReviewDecision) =>
   `${decision.threadId}|${decision.kind}|${decision.fixupSha}`;
 
@@ -23,9 +31,11 @@ export function mergeReviewDecisions(
 ): ReviewDecision[] {
   const byKey = new Map<string, ReviewDecision>();
   for (const decision of [...current, ...incoming]) {
-    byKey.set(decisionKey(decision), decision);
+    const key = decisionKey(decision);
+    const kept = byKey.get(key);
+    if (!kept || decidedAt(kept) <= decidedAt(decision)) byKey.set(key, decision);
   }
-  return [...byKey.values()].sort((a, b) => a.at.localeCompare(b.at));
+  return [...byKey.values()].sort((a, b) => decidedAt(a) - decidedAt(b));
 }
 
 export function normalizeReviewDecisions(value: unknown): ReviewDecision[] {
@@ -54,6 +64,15 @@ function rejectionCheckFor(
   return (fixup) => shas.has(fixup.sha) || patchIds.has(fixup.patchId);
 }
 
+function latestApprovalOrUndo(own: ReviewDecision[]): ReviewDecision | undefined {
+  return own
+    .filter((decision) => decision.kind === 'approved' || decision.kind === 'unapproved')
+    .reduce<ReviewDecision | undefined>(
+      (latest, decision) => (latest && decidedAt(latest) > decidedAt(decision) ? latest : decision),
+      undefined,
+    );
+}
+
 export function deriveThreadReviewState(
   threadId: string,
   fixups: ThreadFixup[],
@@ -61,7 +80,7 @@ export function deriveThreadReviewState(
 ): ThreadReviewState {
   const own = decisions.filter((decision) => decision.threadId === threadId);
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
-  if (own.some((decision) => decision.kind === 'approved')) return 'approved';
+  if (latestApprovalOrUndo(own)?.kind === 'approved') return 'approved';
 
   const isRejected = rejectionCheckFor(threadId, decisions);
   if (fixups.some((fixup) => !isRejected(fixup))) return 'awaiting-approval';
