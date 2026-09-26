@@ -870,6 +870,22 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('test.js:L50 [접힘]\nFolded');
     });
 
+    it('GET /api/comments-output adds no review state for a working-tree review', async () => {
+      const query = '?base=HEAD&target=working';
+      await fetch(`http://localhost:${port}/api/comments${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: [{ file: 'test.js', line: 10, body: 'Plain review' }] }),
+      });
+
+      const output = await (
+        await fetch(`http://localhost:${port}/api/comments-output${query}`)
+      ).text();
+
+      expect(output).toContain('test.js:L10\nPlain review');
+      expect(output).not.toContain('[수정 중]');
+    });
+
     it('GET /api/comments-output formats multi-line comments correctly', async () => {
       // Post comments with both single-line and multi-line formats
       const comments = [

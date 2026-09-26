@@ -14,22 +14,36 @@ const trimTrailingWhitespace = (line: string) => line.replace(/[ \t]+$/, '');
 const splitContent = (content: string) =>
   content.replace(/\r\n/g, '\n').split('\n').map(trimTrailingWhitespace);
 
+// Lines missing from `lines` (collapsed context) cannot contradict the anchor, so they pass.
+export function noVisibleLineContradictsAnchor(
+  anchor: ThreadAnchor,
+  lines: ReadonlyMap<number, string>,
+): boolean {
+  const start = typeof anchor.line === 'number' ? anchor.line : anchor.line.start;
+  return splitContent(anchor.content).every((content, offset) => {
+    const current = lines.get(start + offset);
+    return current === undefined || trimTrailingWhitespace(current) === content;
+  });
+}
+
 // Moves only to an exact match that occurs exactly once; never fits by surrounding context.
-// At the anchor's own commit the stored line numbers are exact, so a match there wins outright.
+// At the anchor's own commit the stored line numbers are exact, so the stored position wins
+// unless a visible line contradicts it.
 export function relocateAnchor(
   anchor: ThreadAnchor,
   lines: ReadonlyMap<number, string>,
   atAnchorCommit = false,
 ): AnchorRelocation {
+  if (atAnchorCommit && noVisibleLineContradictsAnchor(anchor, lines)) {
+    return { kind: 'located', line: anchor.line };
+  }
+
   const expected = splitContent(anchor.content);
   const matchesAt = (start: number) =>
     expected.every((content, offset) => {
       const current = lines.get(start + offset);
       return current !== undefined && trimTrailingWhitespace(current) === content;
     });
-
-  const storedStart = typeof anchor.line === 'number' ? anchor.line : anchor.line.start;
-  if (atAnchorCommit && matchesAt(storedStart)) return { kind: 'located', line: anchor.line };
 
   const [start, ...others] = [...lines.keys()].filter(matchesAt);
   if (start === undefined) return { kind: 'stale', reason: 'missing' };

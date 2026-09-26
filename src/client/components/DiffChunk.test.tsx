@@ -277,7 +277,7 @@ describe('SideBySideDiffChunk fixup overlay', () => {
 
   const renderSplit = (overlay: Partial<FixupOverlayState>, threads = [thread]) =>
     renderWithProviders(
-      <FixupOverlayProvider value={{ ...EMPTY_FIXUP_OVERLAY, ...overlay }}>
+      <FixupOverlayProvider value={{ ...EMPTY_FIXUP_OVERLAY, targetCommit: 'b7c2e10', ...overlay }}>
         <SideBySideDiffChunk
           chunk={testChunk}
           chunkIndex={0}
@@ -309,6 +309,17 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     expect(rows.indexOf(card.closest('tr')!)).toBe(rows.indexOf(commentedRow) + 1);
     expect(card).toHaveTextContent('const third = 3; // three');
     expect(screen.getByTestId('review-state-chip')).toHaveTextContent('승인 대기');
+  });
+
+  it('shows no review controls when the target is not a commit', () => {
+    renderSplit({
+      enabled: true,
+      targetCommit: null,
+      fixupsByThread: new Map([['t1', [fixup('a'.repeat(40))]]]),
+    });
+
+    expect(screen.queryByTestId('review-state-chip')).toBeNull();
+    expect(screen.queryByRole('button', { name: '승인' })).toBeNull();
   });
 
   it('hides the overlay card when overlaying is turned off', () => {
@@ -393,6 +404,7 @@ describe('DiffChunk fixup overlay', () => {
       <FixupOverlayProvider
         value={{
           ...EMPTY_FIXUP_OVERLAY,
+          targetCommit: 'b7c2e10',
           enabled: true,
           fixupsByThread: new Map([['t1', [fixup]]]),
         }}

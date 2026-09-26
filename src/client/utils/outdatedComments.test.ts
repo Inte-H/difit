@@ -52,12 +52,14 @@ const oldLine = (lineNumber: number, content: string): DiffLine => ({
   oldLineNumber: lineNumber,
 });
 
+const TARGET = '1234567';
+
 describe('locateThread', () => {
   it('keeps the stored line when the snapshot still sits there and nowhere else', () => {
     const thread = buildThread({ position: { side: 'new', line: 10 } });
     const index = buildFileLineIndex(buildFile([newLine(10, 'const value = 1;')]));
 
-    expect(locateThread(thread, index, null)).toEqual({ line: 10, isOutdated: false });
+    expect(locateThread(thread, index, TARGET)).toEqual({ line: 10, isOutdated: false });
   });
 
   it('moves the thread to where its snapshot now sits when lines were inserted above', () => {
@@ -74,14 +76,14 @@ describe('locateThread', () => {
       ]),
     );
 
-    expect(locateThread(thread, index, null)).toEqual({ line: [12, 13], isOutdated: false });
+    expect(locateThread(thread, index, TARGET)).toEqual({ line: [12, 13], isOutdated: false });
   });
 
   it('is outdated at the stored line when the snapshot is gone', () => {
     const thread = buildThread({ position: { side: 'new', line: 10 } });
     const index = buildFileLineIndex(buildFile([newLine(10, 'const value = 2;')]));
 
-    expect(locateThread(thread, index, null)).toEqual({
+    expect(locateThread(thread, index, TARGET)).toEqual({
       line: 10,
       isOutdated: true,
       outdatedReason: 'missing',
@@ -94,7 +96,7 @@ describe('locateThread', () => {
       buildFile([newLine(10, 'const value = 1;'), newLine(20, 'const value = 1;')]),
     );
 
-    expect(locateThread(thread, index, null)).toEqual({
+    expect(locateThread(thread, index, TARGET)).toEqual({
       line: 10,
       isOutdated: true,
       outdatedReason: 'ambiguous',
@@ -117,8 +119,49 @@ describe('locateThread', () => {
     });
   });
 
+  it('trusts a stored line in collapsed context while viewing the commit it was made on', () => {
+    const thread = buildThread({
+      position: { side: 'new', line: 10 },
+      codeSnapshot: { content: 'const value = 1;', commit: TARGET },
+    });
+    const index = buildFileLineIndex(buildFile([newLine(5, 'const other = 99;')]));
+
+    expect(locateThread(thread, index, TARGET)).toEqual({ line: 10, isOutdated: false });
+  });
+
+  describe('without a target commit', () => {
+    it('keeps a repeated line in place instead of calling it ambiguous', () => {
+      const thread = buildThread({ position: { side: 'new', line: 20 } });
+      const index = buildFileLineIndex(
+        buildFile([newLine(10, 'const value = 1;'), newLine(20, 'const value = 1;')]),
+      );
+
+      expect(locateThread(thread, index, null)).toEqual({ line: 20, isOutdated: false });
+    });
+
+    it('does not move the thread when lines were inserted above', () => {
+      const thread = buildThread({ position: { side: 'new', line: 10 } });
+      const index = buildFileLineIndex(
+        buildFile([newLine(10, 'import x;'), newLine(11, 'const value = 1;')]),
+      );
+
+      expect(locateThread(thread, index, null)).toEqual({
+        line: 10,
+        isOutdated: true,
+        outdatedReason: 'missing',
+      });
+    });
+
+    it('does not judge a stored line hidden in collapsed context', () => {
+      const thread = buildThread({ position: { side: 'new', line: 10 } });
+      const index = buildFileLineIndex(buildFile([newLine(5, 'const other = 99;')]));
+
+      expect(locateThread(thread, index, null)).toEqual({ line: 10, isOutdated: false });
+    });
+  });
+
   it('is outdated when the file is missing from the index map (file no longer in the diff)', () => {
-    expect(locateThread(buildThread(), undefined, null)).toEqual({
+    expect(locateThread(buildThread(), undefined, TARGET)).toEqual({
       line: 10,
       isOutdated: true,
       outdatedReason: 'missing',
@@ -129,7 +172,7 @@ describe('locateThread', () => {
     const thread = buildThread({ codeSnapshot: undefined });
     const index = buildFileLineIndex(buildFile([newLine(10, 'anything')]));
 
-    expect(locateThread(thread, index, null)).toEqual({ line: 10, isOutdated: false });
+    expect(locateThread(thread, index, TARGET)).toEqual({ line: 10, isOutdated: false });
   });
 
   it('ignores trailing whitespace and line endings when matching', () => {
@@ -141,7 +184,7 @@ describe('locateThread', () => {
       buildFile([newLine(10, 'const value = 1;'), newLine(11, 'const next = 2;')]),
     );
 
-    expect(locateThread(thread, index, null)).toEqual({ line: [10, 11], isOutdated: false });
+    expect(locateThread(thread, index, TARGET)).toEqual({ line: [10, 11], isOutdated: false });
   });
 
   it('compares against the "old" side when the thread is anchored to a deletion', () => {
@@ -152,8 +195,8 @@ describe('locateThread', () => {
     const changed = buildFileLineIndex(buildFile([oldLine(42, 'const removed = false;')]));
     const same = buildFileLineIndex(buildFile([oldLine(42, 'const removed = true;')]));
 
-    expect(locateThread(thread, changed, null).isOutdated).toBe(true);
-    expect(locateThread(thread, same, null)).toEqual({ line: 42, isOutdated: false });
+    expect(locateThread(thread, changed, TARGET).isOutdated).toBe(true);
+    expect(locateThread(thread, same, TARGET)).toEqual({ line: 42, isOutdated: false });
   });
 
   it('does not confuse "old" and "new" line numbers when both sides exist', () => {
@@ -165,6 +208,6 @@ describe('locateThread', () => {
       buildFile([{ type: 'normal', content: 'new-side text', oldLineNumber: 5, newLineNumber: 5 }]),
     );
 
-    expect(locateThread(thread, index, null).isOutdated).toBe(true);
+    expect(locateThread(thread, index, TARGET).isOutdated).toBe(true);
   });
 });

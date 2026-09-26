@@ -11,7 +11,11 @@ import {
   type ThreadFixup,
   REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
-import { getMergeBaseTargetRef, normalizeBaseMode } from '../utils/diffSelection.js';
+import {
+  getMergeBaseTargetRef,
+  isCommitTarget,
+  normalizeBaseMode,
+} from '../utils/diffSelection.js';
 
 import { isGeneratedFile } from './generated-file-check.js';
 
@@ -609,7 +613,7 @@ export class GitDiffParser {
 
   async listThreadFixups(selection: DiffSelection): Promise<ThreadFixup[]> {
     const { targetCommitish } = selection;
-    if (targetCommitish === 'working' || targetCommitish === 'staged' || targetCommitish === '.') {
+    if (!isCommitTarget(targetCommitish)) {
       return [];
     }
 

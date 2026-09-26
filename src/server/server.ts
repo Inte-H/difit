@@ -52,6 +52,7 @@ import {
   createDiffSelection,
   diffSelectionsEqual,
   getDiffSelectionKey,
+  isCommitTarget,
 } from '../utils/diffSelection.js';
 
 interface ServerOptions {
@@ -882,7 +883,7 @@ export async function startServer(
   async function threadReviewStatesFor(
     selection: DiffSelection,
   ): Promise<Map<string, ThreadReviewState> | undefined> {
-    if (options.stdinDiff) return undefined;
+    if (options.stdinDiff || !isCommitTarget(selection.targetCommitish)) return undefined;
     const session = getOrCreateCommentSession(selection);
     try {
       const fixups = await parser.listThreadFixups(selection);

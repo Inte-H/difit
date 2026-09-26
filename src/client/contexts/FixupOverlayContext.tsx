@@ -58,7 +58,8 @@ export interface ThreadReviewControls {
 export function threadReviewControls(
   overlay: FixupOverlayState,
   threadId: string,
-): ThreadReviewControls {
+): ThreadReviewControls | undefined {
+  if (overlay.targetCommit === null) return undefined;
   const fixups = overlay.fixupsByThread.get(threadId) ?? [];
   return {
     state: deriveThreadReviewState(threadId, fixups, overlay.decisions),

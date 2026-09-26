@@ -1,5 +1,5 @@
 import type { AnchorStaleReason, DiffCommentThread, DiffFile, LineNumber } from '../../types/diff';
-import { relocateAnchor } from '../../utils/anchorRelocation';
+import { noVisibleLineContradictsAnchor, relocateAnchor } from '../../utils/anchorRelocation';
 import { isSameCommit } from '../../utils/diffSelection';
 
 export interface FileLineIndex {
@@ -34,7 +34,8 @@ export function buildFileLineIndex(file: DiffFile): FileLineIndex {
 const toLineNumber = (line: DiffCommentThread['position']['line']): LineNumber =>
   typeof line === 'number' ? line : [line.start, line.end];
 
-// A stale thread keeps its stored position.
+// A stale thread keeps its stored position. Without a target commit (working tree, index, stdin)
+// the thread is never moved, only checked at its stored line.
 export function locateThread(
   thread: DiffCommentThread,
   index: FileLineIndex | undefined,
@@ -45,11 +46,19 @@ export function locateThread(
   if (snapshot === undefined) return { line: storedLine, isOutdated: false };
   if (!index) return { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
 
+  const anchor = { line: thread.position.line, content: snapshot };
+  const lines = thread.position.side === 'old' ? index.old : index.new;
+  if (targetCommit === null) {
+    return noVisibleLineContradictsAnchor(anchor, lines)
+      ? { line: storedLine, isOutdated: false }
+      : { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
+  }
+
   const anchorCommit = thread.codeSnapshot?.commit;
   const relocation = relocateAnchor(
-    { line: thread.position.line, content: snapshot },
-    thread.position.side === 'old' ? index.old : index.new,
-    anchorCommit !== undefined && targetCommit !== null && isSameCommit(anchorCommit, targetCommit),
+    anchor,
+    lines,
+    anchorCommit !== undefined && isSameCommit(anchorCommit, targetCommit),
   );
   if (relocation.kind === 'stale') {
     return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };
