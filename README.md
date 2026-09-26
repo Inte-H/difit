@@ -245,6 +245,32 @@ curl -X POST "http://localhost:<port>/api/decisions" \
 
 응답이 `{"success":true,"changed":true,...}`면 받은 것이다. 같은 기록을 다시 보내도 중복으로 쌓이지 않는다.
 
+### 에이전트용: 접은 뒤의 커밋으로 지적 옮기기
+
+접으면 리뷰 대상 커밋의 SHA가 바뀐다. 새 SHA로 리뷰를 다시 열면 지적은 옛 SHA의 리뷰에 남아 있으므로, 옛 서버에서 꺼내 새 서버에 넣는다. `comment get`은 지적마다 메시지를 배열로 주고 `comment add`는 첫 메시지를 `thread`, 나머지를 `reply`로 받으므로 모양을 바꿔 넣는다. 지적 id와 `codeSnapshot`(줄 내용과 지적을 단 커밋)을 그대로 실어야 fixup 트레일러와 결정 기록이 같은 지적을 가리키고, 화면이 지적의 자리를 다시 찾을 수 있다.
+
+```sh
+difit comment get --port <옛 port> --format json > old.json
+
+difit comment add --port <새 port> "$(jq '[.threads[] | . as $t
+  | ($t.messages[0] | {type: "thread", id: $t.id, filePath: $t.filePath, position: $t.position,
+                       body, author, createdAt, codeSnapshot: $t.codeSnapshot}),
+    ($t.messages[1:][] | {type: "reply", filePath: $t.filePath, position: $t.position,
+                          body, author, createdAt})
+  | with_entries(select(.value != null))]' old.json)"
+
+jq '.decisions' old.json | curl -X POST "http://localhost:<새 port>/api/decisions" \
+  -H 'Content-Type: application/json' -d @-
+```
+
+새 커밋의 화면은 옮겨 온 지적을 이렇게 놓는다.
+
+- 저장한 줄 내용과 똑같은 줄이 보이는 줄 가운데 한 곳뿐이면, 줄 번호가 밀렸어도 그 줄로 옮긴다.
+- 그 내용이 사라졌거나 `}`처럼 여러 곳에 있으면 `낡음`으로 두고 수정을 겹쳐 그리지 않는다. 비슷한 자리에 끼워 맞추지 않는다.
+- 낡은 지적에는 `이 지적을 달던 시점으로` 단추가 뜨고, 누르면 지적을 단 커밋으로 리뷰를 다시 연다.
+
+이 단추에는 한계가 있다. 옛 리뷰의 지적은 브라우저 저장소에 남아 있으므로, 옛 리뷰를 본 브라우저에서 같은 저장소 폴더를 같은 주소(포트)로 열었을 때만 지적이 함께 보인다. 돌아가도 fixup은 이미 접혀 없으므로 어떻게 고쳤는지는 보이지 않는다.
+
 ## 🤖 Calling from Agents
 
 You can install the following Skills to work with difit from AI agents.
