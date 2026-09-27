@@ -36,6 +36,8 @@ export interface DiffCommentPosition {
 export interface DiffCommentCodeSnapshot {
   content: string;
   language?: string;
+  // The target commit the content was read from; absent when the target was not a commit.
+  commit?: string;
 }
 
 export type BaseMode = 'direct' | 'merge-base';
@@ -185,17 +187,65 @@ export interface DiffContextStorage {
   threads: DiffCommentThread[];
   viewedFiles: ViewedFileRecord[];
   appliedCommentImportIds: string[];
+  // Optional so a record stays version 2 and an older difit still reads it.
+  decisions?: ReviewDecision[];
 }
+
+type ReviewDecisionKind = 'rejected' | 'approved' | 'unapproved' | 'folded';
+
+// Threads carry no resolved state; a thread's screen state is derived from these
+// records plus the fixup commits found by trailer.
+export interface ReviewDecision {
+  threadId: string;
+  kind: ReviewDecisionKind;
+  fixupSha: string;
+  // Identifies the fixup's changes across rebases that rewrite fixupSha.
+  patchId?: string;
+  targetSha?: string;
+  at: string; // ISO 8601 format
+}
+
+export type ThreadReviewState =
+  | 'awaiting-fix'
+  | 'awaiting-approval'
+  | 'approved'
+  | 'folded'
+  | 'rejected';
+
+// A commit carrying a `Review-Thread: <threadId>` trailer is the agent's answer to that thread.
+export const REVIEW_THREAD_TRAILER = 'Review-Thread';
+
+export interface ThreadFixup {
+  sha: string;
+  shortSha: string;
+  // Same for two commits that make the same changes next to the same unchanged lines in the same
+  // files, wherever the line numbers fall.
+  patchId: string;
+  subject: string;
+  threadIds: string[];
+  files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks'>>;
+}
+
+export interface FixupsResponse {
+  // Commits between the reviewed target and HEAD that carry the trailer, oldest first.
+  fixups: ThreadFixup[];
+}
+
+// The saved snapshot is gone from the file, or occurs in more than one place.
+type AnchorStaleReason = 'missing' | 'ambiguous';
 
 export interface CommentThread {
   id: string;
   file: string;
+  // Where the thread is drawn now, relocated by snapshot content; may differ from the stored position.
   line: LineNumber;
   side?: DiffSide;
   createdAt: string;
   updatedAt: string;
   codeContent?: string;
+  anchorCommit?: string;
   isOutdated?: boolean;
+  outdatedReason?: AnchorStaleReason;
   messages: DiffCommentMessage[];
 }
 

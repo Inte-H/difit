@@ -24,6 +24,11 @@ import {
   resolveEditorOption,
 } from '../utils/editorOptions.js';
 import { getFileExtension } from '../utils/fileUtils.js';
+import {
+  deriveThreadReviewState,
+  mergeReviewDecisions,
+  normalizeReviewDecisions,
+} from '../utils/reviewDecisions.js';
 
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
@@ -37,13 +42,17 @@ import {
   type DiffCommentThread,
   type DiffResponse,
   type DiffSelection,
+  type FixupsResponse,
   type GeneratedStatusResponse,
+  type ReviewDecision,
   type RevisionsResponse,
+  type ThreadReviewState,
 } from '@/types/diff.js';
 import {
   createDiffSelection,
   diffSelectionsEqual,
   getDiffSelectionKey,
+  isCommitHash,
 } from '../utils/diffSelection.js';
 
 interface ServerOptions {
@@ -100,6 +109,7 @@ function setCachedDiffResponse(cache: Map<string, DiffResponse>, key: string, va
 
 interface CommentSessionState {
   threads: DiffCommentThread[];
+  decisions: ReviewDecision[];
   version: number;
 }
 
@@ -199,6 +209,15 @@ export async function startServer(
     initialSelection,
     Boolean(options.stdinDiff),
   );
+  // A target named by hash stays put while fixups pile up after it; HEAD or a branch moves with
+  // them, so only such reviews carry review states.
+  const pinnedCommentSessionKeys = new Set<string>();
+  const rememberPinnedReview = (requested: DiffSelection, resolved: DiffSelection) => {
+    if (isCommitHash(requested.targetCommitish)) {
+      pinnedCommentSessionKeys.add(createCommentSessionKey(resolved));
+    }
+  };
+  rememberPinnedReview(initialSelection, currentCommentSelection);
 
   function parseRepositoryRelativePath(filepath: unknown):
     | { ok: true; path: string }
@@ -251,6 +270,7 @@ export async function startServer(
   if (initialCommentThreads.length > 0) {
     commentSessions.set(createCommentSessionKey(currentCommentSelection), {
       threads: initialCommentThreads,
+      decisions: [],
       version: 1,
     });
   }
@@ -284,6 +304,7 @@ export async function startServer(
 
     const nextSession: CommentSessionState = {
       threads: [],
+      decisions: [],
       version: 0,
     };
     commentSessions.set(key, nextSession);
@@ -340,6 +361,7 @@ export async function startServer(
       requestedSelection,
       Boolean(options.stdinDiff),
     );
+    rememberPinnedReview(requestedSelection, currentCommentSelection);
 
     const baseCommitish =
       responseDiffData.baseCommitish ?? (options.stdinDiff ? 'stdin' : undefined);
@@ -694,6 +716,13 @@ export async function startServer(
     return [];
   }
 
+  // Absent when an older client or the CLI pushes threads alone; the session copy is kept then.
+  function parseDecisionsPayload(body: unknown): ReviewDecision[] | undefined {
+    const payload: unknown = typeof body === 'string' ? JSON.parse(body) : body;
+    if (!payload || typeof payload !== 'object' || !('decisions' in payload)) return undefined;
+    return normalizeReviewDecisions((payload as { decisions?: unknown }).decisions);
+  }
+
   // Version the client based its push on (omitted by older clients).
   function parseBaseVersion(payload: unknown): number | undefined {
     if (!payload || typeof payload !== 'object') return undefined;
@@ -712,11 +741,13 @@ export async function startServer(
   function updateCommentSession(
     selection: DiffSelection,
     nextThreads: DiffCommentThread[],
+    nextDecisions: ReviewDecision[] = getOrCreateCommentSession(selection).decisions,
   ): boolean {
     const session = getOrCreateCommentSession(selection);
-    const previous = JSON.stringify(session.threads);
-    const next = JSON.stringify(nextThreads);
+    const previous = JSON.stringify([session.threads, session.decisions]);
+    const next = JSON.stringify([nextThreads, nextDecisions]);
     session.threads = nextThreads;
+    session.decisions = nextDecisions;
 
     if (previous === next) {
       return false;
@@ -737,6 +768,7 @@ export async function startServer(
       const body: unknown =
         typeof req.body === 'string' ? (JSON.parse(req.body) as unknown) : req.body;
       const nextThreads = parseCommentsPayload(body);
+      const nextDecisions = parseDecisionsPayload(body);
       const baseVersion = parseBaseVersion(body);
       const session = getOrCreateCommentSession(selection);
 
@@ -746,14 +778,21 @@ export async function startServer(
       const resolvedThreads = isStale
         ? mergeCommentThreads(session.threads, nextThreads).threads
         : nextThreads;
+      const resolvedDecisions =
+        nextDecisions === undefined
+          ? session.decisions
+          : isStale
+            ? mergeReviewDecisions(session.decisions, nextDecisions)
+            : nextDecisions;
 
-      updateCommentSession(selection, resolvedThreads);
+      updateCommentSession(selection, resolvedThreads, resolvedDecisions);
 
       res.json({
         success: true,
         merged: isStale,
         version: session.version,
         threads: session.threads,
+        decisions: session.decisions,
       });
     } catch (error) {
       console.error('Error parsing comments:', error);
@@ -811,20 +850,85 @@ export async function startServer(
     res.json({
       version: session.version,
       threads: session.threads,
+      decisions: session.decisions,
     });
   });
 
-  app.get('/api/comments-output', (req, res) => {
-    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
-    const session = getOrCreateCommentSession(selection);
-    res.type('text/plain');
-
-    if (session.threads.length > 0) {
-      const output = formatCommentsOutput(session.threads.map(toCommentThread));
-      res.send(output);
-    } else {
-      res.send('');
+  app.post('/api/decisions', (req, res) => {
+    try {
+      const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+      const session = getOrCreateCommentSession(selection);
+      const body: unknown = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const incoming = normalizeReviewDecisions(body);
+      if (!Array.isArray(body) || incoming.length !== body.length) {
+        res.status(400).json({ error: 'Expected an array of review decisions' });
+        return;
+      }
+      const changed = updateCommentSession(
+        selection,
+        session.threads,
+        mergeReviewDecisions(session.decisions, incoming),
+      );
+      res.json({ success: true, changed, count: incoming.length, version: session.version });
+    } catch (error) {
+      console.error('Error parsing decisions:', error);
+      res.status(400).json({ error: 'Invalid decision data' });
     }
+  });
+
+  app.get('/api/fixups', async (req, res) => {
+    if (options.stdinDiff) {
+      res.json({ fixups: [] } satisfies FixupsResponse);
+      return;
+    }
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    try {
+      const fixups = await parser.listThreadFixups(selection);
+      res.json({ fixups } satisfies FixupsResponse);
+    } catch (error) {
+      console.error('Error listing fixups:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to list fixups',
+      });
+    }
+  });
+
+  async function threadReviewStatesFor(
+    selection: DiffSelection,
+  ): Promise<Map<string, ThreadReviewState> | undefined> {
+    if (options.stdinDiff || !pinnedCommentSessionKeys.has(createCommentSessionKey(selection))) {
+      return undefined;
+    }
+    const session = getOrCreateCommentSession(selection);
+    try {
+      const fixups = await parser.listThreadFixups(selection);
+      return new Map(
+        session.threads.map((thread) => [
+          thread.id,
+          deriveThreadReviewState(
+            thread.id,
+            fixups.filter((fixup) => fixup.threadIds.includes(thread.id)),
+            session.decisions,
+          ),
+        ]),
+      );
+    } catch (error) {
+      console.error('Error listing fixups:', error);
+      return undefined;
+    }
+  }
+
+  async function renderCommentsOutput(selection: DiffSelection): Promise<string> {
+    const session = getOrCreateCommentSession(selection);
+    if (session.threads.length === 0) return '';
+    const reviewStates = await threadReviewStatesFor(selection);
+    return formatCommentsOutput(session.threads.map(toCommentThread), reviewStates);
+  }
+
+  app.get('/api/comments-output', async (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    res.type('text/plain');
+    res.send(await renderCommentsOutput(selection));
   });
 
   app.get('/api/user-settings', async (_req, res) => {
@@ -958,10 +1062,10 @@ export async function startServer(
   });
 
   // Function to output comments when server shuts down
-  function outputFinalComments() {
-    const session = getOrCreateCommentSession(currentCommentSelection);
-    if (session.threads.length > 0) {
-      console.log(formatCommentsOutput(session.threads.map(toCommentThread)));
+  async function outputFinalComments() {
+    const output = await renderCommentsOutput(currentCommentSelection);
+    if (output) {
+      console.log(output);
     }
   }
 
@@ -1012,7 +1116,7 @@ export async function startServer(
           // Stop file watcher
           await fileWatcher.stop();
 
-          outputFinalComments();
+          await outputFinalComments();
           process.exit(0);
         }, 100);
       }
