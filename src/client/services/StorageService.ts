@@ -3,7 +3,6 @@ import {
   type DiffCommentThread,
   type ViewedFileRecord,
   type DiffContextStorage,
-  type DiffContextStorageV2,
   type LegacyDiffContextStorage,
   type LegacyDiffComment,
   type ViewedHashIndex,
@@ -189,19 +188,16 @@ export class StorageService {
 
       const parsed = JSON.parse(data) as
         | DiffContextStorage
-        | DiffContextStorageV2
+        | (Omit<DiffContextStorage, 'version'> & { version: 3 })
         | LegacyDiffContextStorage;
-      if (parsed.version === 3 && 'decisions' in parsed) {
-        return parsed;
-      }
-
-      if (parsed.version === 2 && 'threads' in parsed) {
-        return { ...parsed, version: 3, decisions: [] };
+      // Version 3 differed only by carrying decisions; it is read back as version 2.
+      if ((parsed.version === 2 || parsed.version === 3) && 'threads' in parsed) {
+        return { ...parsed, version: 2 };
       }
 
       if (parsed.version === 1 && 'comments' in parsed) {
         return {
-          version: 3,
+          version: 2,
           baseCommitish: parsed.baseCommitish,
           targetCommitish: parsed.targetCommitish,
           createdAt: parsed.createdAt,
@@ -275,7 +271,7 @@ export class StorageService {
       // Ensure data includes original commitish values
       const dataToSave: DiffContextStorage = {
         ...data,
-        version: 3,
+        version: 2,
         baseCommitish,
         targetCommitish,
         baseMode,
@@ -360,7 +356,7 @@ export class StorageService {
       baseMode,
     );
     const data: DiffContextStorage = existingData || {
-      version: 3,
+      version: 2,
       baseCommitish,
       targetCommitish,
       baseMode,
@@ -450,7 +446,7 @@ export class StorageService {
       baseMode,
     );
     const data: DiffContextStorage = existingData || {
-      version: 3,
+      version: 2,
       baseCommitish,
       targetCommitish,
       baseMode,

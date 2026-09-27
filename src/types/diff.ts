@@ -176,7 +176,7 @@ export interface LegacyDiffContextStorage {
   viewedFiles: ViewedFileRecord[];
 }
 
-export interface DiffContextStorageV2 {
+export interface DiffContextStorage {
   version: 2; // Schema version
   baseCommitish: string;
   targetCommitish: string;
@@ -187,20 +187,8 @@ export interface DiffContextStorageV2 {
   threads: DiffCommentThread[];
   viewedFiles: ViewedFileRecord[];
   appliedCommentImportIds: string[];
-}
-
-export interface DiffContextStorage {
-  version: 3; // Schema version
-  baseCommitish: string;
-  targetCommitish: string;
-  baseMode?: BaseMode;
-  createdAt: string; // ISO 8601 format
-  lastModifiedAt: string; // ISO 8601 format
-
-  threads: DiffCommentThread[];
-  viewedFiles: ViewedFileRecord[];
-  appliedCommentImportIds: string[];
-  decisions: ReviewDecision[];
+  // Optional so a record stays version 2 and an older difit still reads it.
+  decisions?: ReviewDecision[];
 }
 
 export type ReviewDecisionKind = 'rejected' | 'approved' | 'unapproved' | 'folded';
