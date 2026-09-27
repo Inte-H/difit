@@ -1,5 +1,6 @@
-import type { DiffChunk, DiffLine, ThreadFixup } from '../../types/diff';
+import type { CommentThread, DiffChunk, DiffLine, ThreadFixup } from '../../types/diff';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
+import { overlaidFixup, useFixupOverlay } from '../contexts/FixupOverlayContext';
 
 import { DiffCodeLine } from './DiffCodeLine';
 import type { AppearanceSettings } from './SettingsModal';
@@ -23,10 +24,11 @@ const getOverlayLineClass = (line: DiffLine) => {
   }
 };
 
-export function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProps) {
-  const chunks: DiffChunk[] = fixup.files
-    .filter((file) => file.path === filePath || file.oldPath === filePath)
-    .flatMap((file) => file.chunks);
+function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProps) {
+  const isThisFile = (file: ThreadFixup['files'][number]) =>
+    file.path === filePath || file.oldPath === filePath;
+  const chunks: DiffChunk[] = fixup.files.filter(isThisFile).flatMap((file) => file.chunks);
+  const otherPaths = fixup.files.filter((file) => !isThisFile(file)).map((file) => file.path);
 
   return (
     <div
@@ -35,6 +37,7 @@ export function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayC
     >
       <div className="px-3 py-1 text-xs font-mono text-github-text-secondary border-b border-github-border">
         {fixup.shortSha}
+        {otherPaths.length > 0 && <span> · 다른 파일도 고침: {otherPaths.join(', ')}</span>}
       </div>
       <FileLevelTokensProvider value={NO_PRECOMPUTED_TOKENS}>
         <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
@@ -60,5 +63,24 @@ export function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayC
         </table>
       </FileLevelTokensProvider>
     </div>
+  );
+}
+
+interface FixupOverlayRowProps {
+  thread: CommentThread;
+  filePath: string | undefined;
+  colSpan: number;
+  syntaxTheme?: AppearanceSettings['syntaxTheme'];
+}
+
+export function FixupOverlayRow({ thread, filePath, colSpan, syntaxTheme }: FixupOverlayRowProps) {
+  const fixup = overlaidFixup(useFixupOverlay(), thread);
+  if (!fixup || !filePath) return null;
+  return (
+    <tr>
+      <td colSpan={colSpan} className="p-0">
+        <FixupOverlayCard fixup={fixup} filePath={filePath} syntaxTheme={syntaxTheme} />
+      </td>
+    </tr>
   );
 }

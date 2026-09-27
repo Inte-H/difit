@@ -8,11 +8,7 @@ import {
   type LineNumber,
   type LineSelection,
 } from '../../types/diff';
-import {
-  overlaidFixup,
-  threadReviewControls,
-  useFixupOverlay,
-} from '../contexts/FixupOverlayContext';
+import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -25,7 +21,7 @@ import { CommentButton } from './CommentButton';
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
-import { FixupOverlayCard } from './FixupOverlayCard';
+import { FixupOverlayRow } from './FixupOverlayCard';
 import { OpenInEditorButton } from './OpenInEditorButton';
 import type { AppearanceSettings } from './SettingsModal';
 import { WordLevelDiffHighlighter } from './WordLevelDiffHighlighter';
@@ -784,21 +780,15 @@ export function SideBySideDiffChunk({
                   </td>
                 </tr>
 
-                {allThreads.map((thread) => {
-                  const fixup = overlaidFixup(overlay, thread);
-                  if (!fixup || !filename) return null;
-                  return (
-                    <tr key={`fixup-${thread.id}`}>
-                      <td colSpan={4} className="p-0">
-                        <FixupOverlayCard
-                          fixup={fixup}
-                          filePath={filename}
-                          syntaxTheme={syntaxTheme}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
+                {allThreads.map((thread) => (
+                  <FixupOverlayRow
+                    key={`fixup-${thread.id}`}
+                    thread={thread}
+                    filePath={filename}
+                    colSpan={4}
+                    syntaxTheme={syntaxTheme}
+                  />
+                ))}
 
                 {/* Comment threads row */}
                 {allThreads.length > 0 && (

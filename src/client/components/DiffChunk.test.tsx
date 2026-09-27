@@ -401,14 +401,17 @@ describe('DiffChunk fixup overlay', () => {
     ],
   };
 
-  const renderWithOverlay = (threads: CommentThread[]) =>
+  const renderWithOverlay = (
+    threads: CommentThread[],
+    fixupsByThread = new Map([['t1', [fixup]]]),
+  ) =>
     renderWithProviders(
       <FixupOverlayProvider
         value={{
           ...EMPTY_FIXUP_OVERLAY,
           targetCommit: 'b7c2e10',
           enabled: true,
-          fixupsByThread: new Map([['t1', [fixup]]]),
+          fixupsByThread,
         }}
       >
         <DiffChunk
@@ -432,6 +435,50 @@ describe('DiffChunk fixup overlay', () => {
 
     expect(screen.getByTestId('fixup-overlay-card')).toBeInTheDocument();
     expect(screen.getByText('Rename this')).toBeInTheDocument();
+  });
+
+  it('draws each fixup right above the card of the thread it answers', () => {
+    const second: CommentThread = {
+      ...thread,
+      id: 't2',
+      messages: [{ ...thread.messages[0]!, id: 'm2', body: 'Add a comment' }],
+    };
+    const secondFixup: ThreadFixup = { ...fixup, sha: 'def5678def5678', shortSha: 'def5678' };
+    renderWithOverlay(
+      [thread, second],
+      new Map([
+        ['t1', [fixup]],
+        ['t2', [secondFixup]],
+      ]),
+    );
+
+    const order = [
+      screen.getByText('abc1234'),
+      screen.getByText('Rename this'),
+      screen.getByText('def5678'),
+      screen.getByText('Add a comment'),
+    ];
+    order.slice(1).forEach((node, index) => {
+      expect(order[index]!.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    });
+  });
+
+  it('names the other files a fixup changed, since the card only draws this file', () => {
+    const touchingOthers: ThreadFixup = {
+      ...fixup,
+      files: [
+        ...fixup.files,
+        { path: 'src/example.test.ts', status: 'modified', chunks: [] },
+        { path: 'src/caller.ts', status: 'modified', chunks: [] },
+      ],
+    };
+    renderWithOverlay([thread], new Map([['t1', [touchingOthers]]]));
+
+    expect(screen.getByTestId('fixup-overlay-card')).toHaveTextContent(
+      '다른 파일도 고침: src/example.test.ts, src/caller.ts',
+    );
   });
 
   it('keeps a stale thread card, with its decision buttons, but draws no overlay card', () => {
