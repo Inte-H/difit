@@ -246,7 +246,10 @@ export function useDiffComments(
 
   const mergeDecisions = useCallback(
     (incoming: ReviewDecision[]) => {
-      saveDecisions(mergeReviewDecisions(decisionsRef.current.list, incoming));
+      const current = decisionsRef.current.list;
+      const merged = mergeReviewDecisions(current, incoming);
+      if (JSON.stringify(merged) === JSON.stringify(current)) return;
+      saveDecisions(merged);
     },
     [saveDecisions],
   );

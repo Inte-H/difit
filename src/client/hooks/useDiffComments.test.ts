@@ -2,6 +2,8 @@ import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import type { DiffContextStorage } from '../../types/diff';
+import { storageService } from '../services/StorageService';
+
 import { useDiffComments } from './useDiffComments';
 
 // Mock StorageService
@@ -233,6 +235,22 @@ const next = true;
       });
 
       expect(result.current.decisions.map((decision) => decision.threadId)).toEqual(['t1']);
+    });
+
+    it('leaves storage and state alone when merged decisions change nothing', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40));
+      });
+      const before = result.current.decisions;
+      vi.mocked(storageService.saveDiffContextData).mockClear();
+
+      act(() => {
+        result.current.mergeDecisions(structuredClone(before));
+      });
+
+      expect(storageService.saveDiffContextData).not.toHaveBeenCalled();
+      expect(result.current.decisions).toBe(before);
     });
 
     it('ignores a merge from a review the page has switched away from', () => {
