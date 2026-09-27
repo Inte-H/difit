@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
@@ -1395,34 +1395,70 @@ describe('App Component - Sidebar persistence', () => {
   });
 });
 
-describe('App Component - Mobile sidebar auto-close', () => {
+describe('App Component - Mobile layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockComments = [];
     mockConfirm.mockReturnValue(false);
     vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+    mockFetch(mockDiffResponse);
   });
 
   afterEach(() => {
     vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
   });
 
-  it('closes the sidebar when a file is selected on mobile', async () => {
-    mockFetch(mockDiffResponse);
+  it('lists changed files as chips and keeps the file tree drawer closed on load', async () => {
+    window.localStorage.setItem('difit.sidebarOpen', 'true');
+
     renderApp();
 
-    // Sidebar toggle button
+    const chips = await screen.findByRole('navigation', { name: 'Changed files' });
+    expect(within(chips).getByRole('button', { name: 'test.ts' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /toggle file tree panel/i })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+  });
+
+  it('closes the drawer when a file is selected on mobile', async () => {
+    renderApp();
+
     const toggleButton = await screen.findByRole('button', { name: /toggle file tree panel/i });
+    fireEvent.click(toggleButton);
     expect(toggleButton).toHaveAttribute('aria-expanded', 'true');
 
-    // Wait for file list to render, then click the file row
-    const fileRow = await screen.findByTitle('test.ts');
-    fireEvent.click(fileRow.closest('[data-file-row]')!);
+    const fileTree = document.getElementById('file-tree-panel')!;
+    fireEvent.click(within(fileTree).getByTitle('test.ts').closest('[data-file-row]')!);
 
-    // Sidebar should now be closed on mobile
     await waitFor(() => {
       expect(toggleButton).toHaveAttribute('aria-expanded', 'false');
     });
+  });
+
+  it('leaves the PC sidebar preference alone when the drawer is toggled on a phone', async () => {
+    window.localStorage.setItem('difit.sidebarOpen', 'true');
+
+    renderApp();
+
+    const toggleButton = await screen.findByRole('button', { name: /toggle file tree panel/i });
+    fireEvent.click(toggleButton);
+    expect(toggleButton).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(toggleButton);
+
+    await waitFor(() => {
+      expect(toggleButton).toHaveAttribute('aria-expanded', 'false');
+    });
+    expect(window.localStorage.getItem('difit.sidebarOpen')).toBe('true');
+  });
+
+  it('shows no file chips on a PC', async () => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+
+    renderApp();
+
+    await screen.findByRole('button', { name: /toggle file tree panel/i });
+    expect(screen.queryByRole('navigation', { name: 'Changed files' })).not.toBeInTheDocument();
   });
 });
 

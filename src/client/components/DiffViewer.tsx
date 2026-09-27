@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 
 import {
   type DiffFile,
@@ -339,7 +339,6 @@ export const DiffViewer = memo(function DiffViewer({
     reloadKey: diffVersion,
   });
 
-  const lineNumberWidth = '4em';
   const ViewerComponent = viewer.Component;
   const viewerProps: DiffViewerBodyProps = {
     file,
@@ -370,8 +369,7 @@ export const DiffViewer = memo(function DiffViewer({
   return (
     <div
       ref={containerRef}
-      className="bg-github-bg-primary"
-      style={{ '--line-number-width': lineNumberWidth } as React.CSSProperties}
+      className="bg-github-bg-primary [--line-number-width:4em] max-md:[--line-number-width:30px]"
     >
       <DiffViewerHeader
         file={file}

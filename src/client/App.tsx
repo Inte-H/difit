@@ -29,6 +29,7 @@ import { CommentsDropdown, type CopyAllNotice } from './components/CommentsDropd
 import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
+import { FileChips } from './components/FileChips';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
@@ -147,6 +148,8 @@ function App() {
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
+  // The phone drawer covers the diff, so it starts closed and does not touch the saved PC preference.
+  const [isFileDrawerOpen, setIsFileDrawerOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showSparkles, setShowSparkles] = useState(false);
   const [hasTriggeredSparkles, setHasTriggeredSparkles] = useState(false);
@@ -192,6 +195,7 @@ function App() {
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
+  const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
 
   // New diff-aware comment system
   const {
@@ -483,7 +487,7 @@ function App() {
   );
 
   const handleMobileFileSelected = useCallback(() => {
-    setIsFileTreeOpen(false);
+    setIsFileDrawerOpen(false);
   }, []);
 
   const handleDiffModeChange = useCallback((mode: DiffViewMode) => {
@@ -1320,14 +1324,18 @@ function App() {
             </h1>
             <div className="flex items-center gap-1">
               <button
-                onClick={() => setIsFileTreeOpen(!isFileTreeOpen)}
+                onClick={() =>
+                  isMobile
+                    ? setIsFileDrawerOpen(!isFileDrawerOpen)
+                    : setIsFileTreeOpen(!isFileTreeOpen)
+                }
                 className="p-2 text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary rounded transition-colors"
-                title={isFileTreeOpen ? 'Collapse file tree' : 'Expand file tree'}
-                aria-expanded={isFileTreeOpen}
+                title={isFileTreeShown ? 'Collapse file tree' : 'Expand file tree'}
+                aria-expanded={isFileTreeShown}
                 aria-controls="file-tree-panel"
                 aria-label="Toggle file tree panel"
               >
-                {isFileTreeOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
+                {isFileTreeShown ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
               </button>
               <button
                 onClick={() => setIsSettingsOpen(true)}
@@ -1483,6 +1491,15 @@ function App() {
             </div>
           </div>
         </header>
+        {isMobile && (
+          <FileChips
+            files={diffData.files}
+            comments={normalizedThreads}
+            reviewedFiles={viewedFiles}
+            selectedFileIndex={cursor?.fileIndex ?? null}
+            onScrollToFile={scrollFileIntoDiffContainer}
+          />
+        )}
         {revisionOptions && (
           <RevisionDetailModal
             key={isRevisionModalOpen ? getDiffSelectionKey(selectedRevision) : 'closed'}
@@ -1496,12 +1513,12 @@ function App() {
           />
         )}
 
-        {isMobile && isFileTreeOpen && (
+        {isMobile && isFileDrawerOpen && (
           <button
             type="button"
             aria-label="Close file tree"
             className="fixed inset-0 bg-black/40 z-30"
-            onClick={() => setIsFileTreeOpen(false)}
+            onClick={() => setIsFileDrawerOpen(false)}
           />
         )}
 
@@ -1525,7 +1542,7 @@ function App() {
                 maxWidth: isMobile ? 'none' : '600px',
                 height: '100%',
                 transform: isMobile
-                  ? isFileTreeOpen
+                  ? isFileDrawerOpen
                     ? 'translateX(0)'
                     : 'translateX(100%)'
                   : undefined,
