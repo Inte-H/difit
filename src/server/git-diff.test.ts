@@ -1615,6 +1615,28 @@ index abc123..def456 100644
       expect(gitRaw).not.toHaveBeenCalled();
     });
 
+    it('does not hand an option-like target to git', async () => {
+      const gitRevparse = (parser as any).git.revparse;
+
+      expect(
+        await parser.listThreadFixups({ targetCommitish: '--all', baseCommitish: 'HEAD' }),
+      ).toEqual([]);
+      expect(gitRevparse).not.toHaveBeenCalled();
+    });
+
+    it('matches the trailer key in any case and keeps signatures out of the log', async () => {
+      const gitRevparse = (parser as any).git.revparse;
+      const gitRaw = (parser as any).git.raw;
+      gitRevparse.mockResolvedValueOnce('t\n').mockResolvedValueOnce('h\n');
+      gitRaw.mockResolvedValue('');
+
+      await parser.listThreadFixups({ targetCommitish: 'feature', baseCommitish: 'main' });
+
+      expect(gitRaw).toHaveBeenCalledWith(
+        expect.arrayContaining(['--regexp-ignore-case', '--no-show-signature']),
+      );
+    });
+
     it('maps trailer-carrying commits between target and HEAD to their thread ids and diffs', async () => {
       const gitRevparse = (parser as any).git.revparse;
       const gitRaw = (parser as any).git.raw;

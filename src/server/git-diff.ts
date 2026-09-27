@@ -2,7 +2,12 @@ import { createHash } from 'crypto';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { isAbsolute, resolve, sep } from 'path';
 
-import { validateDiffArguments, shortHash, createCommitRangeString } from '../cli/utils.js';
+import {
+  validateCommitish,
+  validateDiffArguments,
+  shortHash,
+  createCommitRangeString,
+} from '../cli/utils.js';
 import {
   type DiffChunk,
   type DiffFile,
@@ -631,11 +636,13 @@ export class GitDiffParser {
 
   async listThreadFixups(selection: DiffSelection): Promise<ThreadFixup[]> {
     const { targetCommitish } = selection;
-    if (!isCommitTarget(targetCommitish)) {
+    if (!isCommitTarget(targetCommitish) || !validateCommitish(targetCommitish)) {
       return [];
     }
 
-    const targetHash = (await this.git.revparse([targetCommitish])).trim();
+    const targetHash = (
+      await this.git.revparse(['--verify', `${targetCommitish}^{commit}`])
+    ).trim();
     const headHash = (await this.git.revparse(['HEAD'])).trim();
     if (targetHash === headHash) {
       return [];
@@ -646,6 +653,9 @@ export class GitDiffParser {
     const raw = await this.git.raw([
       'log',
       '--reverse',
+      '--no-show-signature',
+      // Trailer keys are matched without regard to case, so the grep must match the same way.
+      '--regexp-ignore-case',
       `--grep=^${REVIEW_THREAD_TRAILER}: `,
       `--format=%H${FIELD}%s${FIELD}%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)${RECORD}`,
       `${targetHash}..HEAD`,
