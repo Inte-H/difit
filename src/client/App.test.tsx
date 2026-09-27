@@ -1164,6 +1164,203 @@ describe('App Component - Revision-aware refetching', () => {
   });
 });
 
+describe('App Component - Returning from the review a comment was made on', () => {
+  const reviewAt = (commit: string): DiffResponse => ({
+    ...mockDiffResponse,
+    baseCommitish: `${commit}^`,
+    targetCommitish: commit,
+    requestedBaseCommitish: `${commit}^`,
+    requestedTargetCommitish: commit,
+    files: [
+      {
+        path: 'test.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+        chunks: [
+          {
+            header: '@@ -1,1 +1,1 @@',
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [
+              { type: 'normal', content: 'const a = 1;', oldLineNumber: 1, newLineNumber: 1 },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const diffTargets = () =>
+    vi
+      .mocked(global.fetch)
+      .mock.calls.map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/diff'))
+      .map((url) => new URLSearchParams(url.split('?')[1]).get('target'));
+
+  const originalReviewEntry = {
+    difitReviewTarget: { baseCommitish: 'abc1234^', targetCommitish: 'abc1234' },
+  };
+  let serverTarget = 'abc1234';
+
+  const loadedBy = (type: string) =>
+    vi
+      .spyOn(performance, 'getEntriesByType')
+      .mockReturnValue([{ type } as unknown as PerformanceEntry]);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState(null, '');
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    serverTarget = 'abc1234';
+    mockDecisions = [];
+    mockComments = [
+      {
+        ...createMockThread({ id: 'old', filePath: 'test.ts', line: 1, body: 'Old remark' }),
+        codeSnapshot: { content: 'const a = 0;', commit: 'def5678' },
+      },
+    ];
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      if (url.startsWith('/api/fixups')) {
+        return Promise.resolve({ ok: true, json: async () => ({ fixups: [] }) } as Response);
+      }
+      const target = url.startsWith('/api/diff')
+        ? new URLSearchParams(url.split('?')[1]).get('target')
+        : null;
+      return Promise.resolve({
+        ok: true,
+        json: async () => reviewAt(target ?? serverTarget),
+        blob: async () => ({ size: 1024 }),
+      } as Response);
+    });
+  });
+
+  it('adds a browser history entry when jumping to the older review', async () => {
+    renderApp();
+    const lengthBefore = window.history.length;
+
+    fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+
+    await waitFor(() => expect(diffTargets()).toContain('def5678'));
+    expect(window.history.length).toBe(lengthBefore + 1);
+  });
+
+  it('switches back to the original review on Back and forward again on Forward', async () => {
+    renderApp();
+
+    fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('def5678'));
+
+    act(() => window.history.back());
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('abc1234'));
+    expect(diffTargets()).toEqual([null, 'def5678', 'abc1234']);
+    await waitFor(() =>
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual([
+        'abc1234^',
+        'abc1234',
+      ]),
+    );
+
+    act(() => window.history.forward());
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('def5678'));
+  });
+
+  it("shows the original review's chips again after Back without recording decisions", async () => {
+    const oldThread = mockComments[0]!;
+    const fixedThread: DiffCommentThread = {
+      ...createMockThread({ id: 'fixed', filePath: 'test.ts', line: 1, body: 'Fixed remark' }),
+      codeSnapshot: { content: 'const a = 1;', commit: 'abc1234' },
+    };
+    const storedByTarget: Record<
+      string,
+      Pick<ReturnType<typeof useDiffComments>, 'threads' | 'decisions'>
+    > = {
+      abc1234: {
+        threads: [oldThread, fixedThread],
+        decisions: [
+          { threadId: 'fixed', kind: 'approved', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+        ],
+      },
+      def5678: {
+        threads: [oldThread],
+        decisions: [
+          { threadId: 'old', kind: 'rejected', fixupSha: 'bbbb', at: '2026-01-01T00:00:00Z' },
+        ],
+      },
+    };
+    const recordDecision = vi.fn();
+    const undoApproval = vi.fn();
+    const defaultComments = vi.mocked(useDiffComments).getMockImplementation()!;
+    vi.mocked(useDiffComments).mockImplementation((...args) => ({
+      ...defaultComments(...args),
+      ...(storedByTarget[args[1] ?? ''] ?? { threads: [], decisions: [] }),
+      recordDecision,
+      undoApproval,
+    }));
+    const chips = () =>
+      screen
+        .queryAllByTestId('review-state-chip')
+        .map((chip) => chip.textContent)
+        .sort();
+
+    try {
+      renderApp();
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+
+      fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+      await waitFor(() => expect(chips()).toEqual(['다시 수정 중']));
+
+      act(() => window.history.back());
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+      expect(recordDecision).not.toHaveBeenCalled();
+      expect(undoApproval).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(useDiffComments).mockImplementation(defaultComments);
+    }
+  });
+
+  it('reopens the review the history entry recorded when Back loads the page afresh', async () => {
+    serverTarget = 'def5678';
+    window.history.replaceState(originalReviewEntry, '');
+    loadedBy('back_forward');
+
+    renderApp();
+
+    await waitFor(() => expect(diffTargets()).toEqual(['abc1234']));
+    await waitFor(() =>
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual([
+        'abc1234^',
+        'abc1234',
+      ]),
+    );
+  });
+
+  it('leaves the review to the server on a plain reload', async () => {
+    serverTarget = 'def5678';
+    window.history.replaceState(originalReviewEntry, '');
+    loadedBy('reload');
+
+    renderApp();
+
+    await waitFor(() =>
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual([
+        'def5678^',
+        'def5678',
+      ]),
+    );
+    expect(diffTargets()).toEqual([null]);
+  });
+});
+
 describe('App Component - Sidebar persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();

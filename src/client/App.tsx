@@ -45,6 +45,10 @@ import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
 import { useFileWatch } from './hooks/useFileWatch';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLazyDiffRendering } from './hooks/useLazyDiffRendering';
+import {
+  reviewTargetRestoredByHistory,
+  useReviewTargetHistory,
+} from './hooks/useReviewTargetHistory';
 import { useViewedFiles } from './hooks/useViewedFiles';
 import { useThreadFixups } from './hooks/useThreadFixups';
 import { useViewport } from './hooks/useViewport';
@@ -154,12 +158,13 @@ function App() {
 
   // Revision selector state
   const [revisionOptions, setRevisionOptions] = useState<RevisionsResponse | null>(null);
+  const [restoredReviewTarget] = useState(reviewTargetRestoredByHistory);
   const [selectedRevision, setSelectedRevision] = useState<DiffSelection>(
-    createDiffSelection('', ''),
+    restoredReviewTarget ?? createDiffSelection('', ''),
   );
   const [resolvedBaseRevision, setResolvedBaseRevision] = useState<string>('');
   const [resolvedTargetRevision, setResolvedTargetRevision] = useState<string>('');
-  const hasUserSelectedRevisionRef = useRef(false);
+  const hasUserSelectedRevisionRef = useRef(restoredReviewTarget !== null);
   const currentRequestedBaseModeRef = useRef(selectedRevision.baseMode);
   currentRequestedBaseModeRef.current = diffData?.requestedBaseMode ?? selectedRevision.baseMode;
   const selectedRevisionRef = useRef(selectedRevision);
@@ -924,11 +929,17 @@ function App() {
     [fetchDiffData, selectedRevision],
   );
 
+  const recordReviewJump = useReviewTargetHistory(
+    (selection) => void handleRevisionChange(selection),
+  );
   const openReviewAt = useCallback(
     (commit: string) => {
-      void handleRevisionChange(selectionAtCommit(selectedRevision, commit));
+      const nextSelection = selectionAtCommit(selectedRevision, commit);
+      if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
+      recordReviewJump(selectedRevision, nextSelection);
+      void handleRevisionChange(nextSelection);
     },
-    [handleRevisionChange, selectedRevision],
+    [handleRevisionChange, recordReviewJump, selectedRevision],
   );
   const fixupOverlay = useMemo<FixupOverlayState>(
     () => ({
