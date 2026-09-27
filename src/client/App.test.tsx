@@ -1462,3 +1462,29 @@ describe('App Component - Mobile layout', () => {
     expect(screen.queryByRole('navigation', { name: 'Changed files' })).not.toBeInTheDocument();
   });
 });
+
+describe('App Component - Fixup review colors', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockConfirm.mockReturnValue(false);
+  });
+
+  it('scopes the fixup review palette to a review pinned to a hash', async () => {
+    mockFetch(pinnedDiffResponse);
+
+    const { container } = renderApp();
+
+    await screen.findByRole('button', { name: /toggle file tree panel/i });
+    expect(container.querySelector('[data-fixup-review]')).not.toBeNull();
+  });
+
+  it('keeps the original palette for a review that follows HEAD', async () => {
+    mockFetch(mockDiffResponse);
+
+    const { container } = renderApp();
+
+    await screen.findByRole('button', { name: /toggle file tree panel/i });
+    expect(container.querySelector('[data-fixup-review]')).toBeNull();
+  });
+});

@@ -269,7 +269,7 @@ export function CommentThreadCard({
           ? thread.isOutdated
             ? 'border-github-border border-l-github-danger'
             : 'border-github-border border-l-github-text-muted'
-          : 'border-yellow-600/50 border-l-yellow-400'
+          : 'border-yellow-600/50 border-l-yellow-400 fixup-review:border-github-border fixup-review:border-l-github-text-muted'
       } ${onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
       onClick={onClick}
     >

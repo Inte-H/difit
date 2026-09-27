@@ -1294,7 +1294,11 @@ function App() {
 
   return (
     <WordHighlightProvider>
-      <div className="h-screen flex flex-col" onClickCapture={handleGlobalClick}>
+      <div
+        className="h-screen flex flex-col"
+        data-fixup-review={targetCommit ? '' : undefined}
+        onClickCapture={handleGlobalClick}
+      >
         <header
           className={`bg-github-bg-secondary border-b border-github-border flex ${
             isMobile ? 'flex-col' : 'flex-row items-center'
@@ -1442,17 +1446,17 @@ function App() {
                   }}
                 >
                   <div
-                    className="absolute top-0 right-0 h-full transition-all duration-300 ease-out"
+                    className={`absolute top-0 right-0 h-full transition-all duration-300 ease-out ${(() => {
+                      const remainingPercent =
+                        ((diffData.files.length - viewedFiles.size) / diffData.files.length) * 100;
+                      if (remainingPercent > 50) return 'bg-github-accent'; // green
+                      if (remainingPercent > 20) {
+                        return 'bg-github-warning fixup-review:bg-github-text-muted'; // yellow
+                      }
+                      return 'bg-github-danger'; // red
+                    })()}`}
                     style={{
                       width: `${((diffData.files.length - viewedFiles.size) / diffData.files.length) * 100}%`,
-                      backgroundColor: (() => {
-                        const remainingPercent =
-                          ((diffData.files.length - viewedFiles.size) / diffData.files.length) *
-                          100;
-                        if (remainingPercent > 50) return 'var(--color-github-accent)'; // green
-                        if (remainingPercent > 20) return 'var(--color-github-warning)'; // yellow
-                        return 'var(--color-github-danger)'; // red
-                      })(),
                     }}
                   />
                 </div>
