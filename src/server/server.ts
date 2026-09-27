@@ -858,9 +858,12 @@ export async function startServer(
     try {
       const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
       const session = getOrCreateCommentSession(selection);
-      const incoming = normalizeReviewDecisions(
-        typeof req.body === 'string' ? JSON.parse(req.body) : req.body,
-      );
+      const body: unknown = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const incoming = normalizeReviewDecisions(body);
+      if (!Array.isArray(body) || incoming.length !== body.length) {
+        res.status(400).json({ error: 'Expected an array of review decisions' });
+        return;
+      }
       const changed = updateCommentSession(
         selection,
         session.threads,

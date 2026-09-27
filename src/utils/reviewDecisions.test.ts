@@ -234,4 +234,11 @@ describe('normalizeReviewDecisions', () => {
     ).toHaveLength(1);
     expect(normalizeReviewDecisions(undefined)).toEqual([]);
   });
+
+  it('keeps only the fields a decision has and drops a mistyped optional field', () => {
+    expect(
+      normalizeReviewDecisions([{ ...decision('approved', 'aaaa'), patchId: 'p', extra: 'x' }]),
+    ).toEqual([{ ...decision('approved', 'aaaa'), patchId: 'p' }]);
+    expect(normalizeReviewDecisions([{ ...decision('folded', 'aaaa'), targetSha: 1 }])).toEqual([]);
+  });
 });

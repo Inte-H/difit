@@ -247,7 +247,7 @@ curl -X POST "http://localhost:<port>/api/decisions" \
   -d '[{"threadId":"<threadId>","kind":"folded","fixupSha":"<옛 fixup SHA>","targetSha":"<접힌 뒤 커밋 SHA>","at":"2026-09-23T10:00:00Z"}]'
 ```
 
-응답이 `{"success":true,"changed":true,...}`면 받은 것이다. 같은 기록을 다시 보내도 중복으로 쌓이지 않는다.
+응답이 `{"success":true,"changed":true,...}`면 받은 것이다. 같은 기록을 다시 보내도 중복으로 쌓이지 않는다. 본문이 배열이 아니거나 필드가 빠진 기록이 하나라도 있으면 아무것도 기록하지 않고 400으로 답한다.
 
 ### 에이전트용: 접은 뒤의 커밋으로 지적 옮기기
 

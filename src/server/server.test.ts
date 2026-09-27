@@ -872,6 +872,24 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('test.js:L50 [접힘]\nFolded');
     });
 
+    it('POST /api/decisions rejects a body that is not a list of decisions', async () => {
+      const post = (body: unknown) =>
+        fetch(`http://localhost:${port}/api/decisions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+      const valid = { threadId: 't1', kind: 'folded', fixupSha: 'a', at: '2026-01-01' };
+
+      expect((await post({ decisions: [valid] })).status).toBe(400);
+      expect((await post([valid, { threadId: 't1', kind: 'folded' }])).status).toBe(400);
+
+      const { decisions } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json`)
+      ).json()) as { decisions: unknown[] };
+      expect(decisions).toEqual([]);
+    });
+
     it('GET /api/comments-output adds no review state for a working-tree review', async () => {
       const query = '?base=HEAD&target=working';
       await fetch(`http://localhost:${port}/api/comments${query}`, {
