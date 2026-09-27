@@ -43,6 +43,37 @@ function patchIdOf(sha: string, files: ThreadFixup['files']): string {
   return changedLines > 0 ? hash.digest('hex') : sha;
 }
 
+const FIXUP_LOG_FORMAT = `--format=%x00%H%x00%P%x00%s%x00%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)%x00`;
+// Every line of a patch starts with a diff marker or keyword, so a NUL at the start of a line can
+// only open one of our headers, even when a file diffed as text holds NUL bytes. Lines are split on
+// \n alone: the `m` flag would also start a line after \r, U+2028 or U+2029 inside file content.
+const FIXUP_LOG_HEADER = /(?<=^|\n)\0([0-9a-f]+)\0([0-9a-f ]*)\0([^\0]*)\0([^\0]*)\0(?=\n|$)/g;
+
+interface FixupLogEntry {
+  sha: string;
+  isMerge: boolean;
+  subject: string;
+  threadIds: string[];
+  diff: string;
+}
+
+function parseFixupLog(raw: string): FixupLogEntry[] {
+  const headers = [...raw.matchAll(FIXUP_LOG_HEADER)];
+  return headers.map((header, index) => {
+    const [, sha, parents, subject, trailerValues] = header;
+    return {
+      sha,
+      isMerge: parents.includes(' '),
+      subject,
+      threadIds: trailerValues
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+      diff: raw.slice(header.index + header[0].length, headers[index + 1]?.index ?? raw.length),
+    };
+  });
+}
+
 export class GitDiffParser {
   private git: SimpleGit;
   private repoPath: string;
@@ -649,46 +680,66 @@ export class GitDiffParser {
       return [];
     }
 
-    const RECORD = '';
-    const FIELD = '';
-    const raw = await this.git.raw([
-      'log',
-      '--reverse',
-      '--no-show-signature',
-      // Trailer keys are matched without regard to case, so the grep must match the same way.
-      '--regexp-ignore-case',
-      `--grep=^${REVIEW_THREAD_TRAILER}: `,
-      `--format=%H${FIELD}%s${FIELD}%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)${RECORD}`,
-      `${targetHash}..HEAD`,
-    ]);
+    const entries = parseFixupLog(
+      await this.git.raw([
+        'log',
+        '--reverse',
+        '--no-show-signature',
+        // Trailer keys are matched without regard to case, so the grep must match the same way.
+        '--regexp-ignore-case',
+        `--grep=^${REVIEW_THREAD_TRAILER}: `,
+        '-p',
+        '--no-ext-diff',
+        '--color=never',
+        FIXUP_LOG_FORMAT,
+        `${targetHash}..HEAD`,
+      ]),
+    ).filter((entry) => entry.threadIds.length > 0);
 
-    const fixups: ThreadFixup[] = [];
-    for (const record of raw.split(RECORD)) {
-      const [sha, subject, trailerValues] = record.trim().split(FIELD);
-      if (!sha || !trailerValues) continue;
-      const threadIds = trailerValues
-        .split(',')
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0);
-      if (threadIds.length === 0) continue;
+    // `log -p` prints no diff for a merge, and `-m` on its own skips a parent whose diff is empty, so
+    // merges are read again against their first parent only. The config keeps `-m` to that parent on
+    // git versions where it follows log.diffMerges.
+    const merges = entries.filter((entry) => entry.isMerge);
+    if (merges.length > 0) {
+      const mergeDiffs = new Map(
+        parseFixupLog(
+          await this.git.raw([
+            '-c',
+            'log.diffMerges=first-parent',
+            'log',
+            '--no-walk=unsorted',
+            '--no-show-signature',
+            '-p',
+            '-m',
+            '--first-parent',
+            '--no-ext-diff',
+            '--color=never',
+            FIXUP_LOG_FORMAT,
+            ...merges.map((entry) => entry.sha),
+          ]),
+        ).map((entry) => [entry.sha, entry.diff]),
+      );
+      for (const entry of merges) {
+        entry.diff = mergeDiffs.get(entry.sha) ?? '';
+      }
+    }
 
-      const diffRaw = await this.git.diff([`${sha}^`, sha, '--no-ext-diff', '--color=never']);
-      const files = this.parseUnifiedDiff(diffRaw).map(({ path, oldPath, status, chunks }) => ({
+    return entries.map(({ sha, subject, threadIds, diff }) => {
+      const files = this.parseUnifiedDiff(diff).map(({ path, oldPath, status, chunks }) => ({
         path,
         oldPath,
         status,
         chunks,
       }));
-      fixups.push({
+      return {
         sha,
         shortSha: shortHash(sha),
         patchId: patchIdOf(sha, files),
-        subject: subject ?? '',
+        subject,
         threadIds,
         files,
-      });
-    }
-    return fixups;
+      };
+    });
   }
 
   parseStdinDiff(diffContent: string): DiffResponse {

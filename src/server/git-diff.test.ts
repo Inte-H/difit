@@ -1600,6 +1600,9 @@ index abc123..def456 100644
   });
 
   describe('listThreadFixups', () => {
+    const fixupLogEntry = (sha: string, subject: string, trailerValues: string, diff = '') =>
+      `\0${sha}\0cafe\0${subject}\0${trailerValues}\0\n${diff ? `\n${diff}\n` : ''}`;
+
     it('returns nothing for working-tree targets or when the target is already HEAD', async () => {
       const gitRevparse = (parser as any).git.revparse;
       const gitRaw = (parser as any).git.raw;
@@ -1646,20 +1649,21 @@ index abc123..def456 100644
 
       gitRevparse.mockResolvedValueOnce(`${targetSha}\n`).mockResolvedValueOnce('ffff\n');
       gitRaw.mockResolvedValue(
-        `${fixupSha}\u001ffixup! change b\u001ft1,t2\u001e\n` +
-          `deadbeef\u001fno trailer\u001f\u001e\n`,
-      );
-      gitDiff.mockResolvedValue(
-        [
-          'diff --git a/f.txt b/f.txt',
-          'index abc123..def456 100644',
-          '--- a/f.txt',
-          '+++ b/f.txt',
-          '@@ -1,2 +1,3 @@',
-          ' a',
-          '+// why',
-          ' b',
-        ].join('\n'),
+        fixupLogEntry(
+          fixupSha,
+          'fixup! change b',
+          't1,t2',
+          [
+            'diff --git a/f.txt b/f.txt',
+            'index abc123..def456 100644',
+            '--- a/f.txt',
+            '+++ b/f.txt',
+            '@@ -1,2 +1,3 @@',
+            ' a',
+            '+// why',
+            ' b',
+          ].join('\n'),
+        ) + fixupLogEntry('deadbeef', 'no trailer', ''),
       );
 
       const fixups = await parser.listThreadFixups({
@@ -1672,15 +1676,14 @@ index abc123..def456 100644
           'log',
           '--reverse',
           '--grep=^Review-Thread: ',
+          '-p',
+          '--no-ext-diff',
+          '--color=never',
           `${targetSha}..HEAD`,
         ]),
       );
-      expect(gitDiff).toHaveBeenCalledWith([
-        `${fixupSha}^`,
-        fixupSha,
-        '--no-ext-diff',
-        '--color=never',
-      ]);
+      expect(gitRaw).toHaveBeenCalledTimes(1);
+      expect(gitDiff).not.toHaveBeenCalled();
       expect(fixups).toHaveLength(1);
       expect(fixups[0]).toMatchObject({
         sha: fixupSha,
@@ -1699,7 +1702,6 @@ index abc123..def456 100644
     it('gives fixups the same patch id only when line numbers alone differ', async () => {
       const gitRevparse = (parser as any).git.revparse;
       const gitRaw = (parser as any).git.raw;
-      const gitDiff = (parser as any).git.diff;
       const patch = (start: number, added: string, context = 'a') =>
         [
           'diff --git a/f.txt b/f.txt',
@@ -1712,17 +1714,17 @@ index abc123..def456 100644
 
       gitRevparse.mockResolvedValueOnce('t\n').mockResolvedValueOnce('h\n');
       gitRaw.mockResolvedValue(
-        ['1', '2', '3', '4', '5', '6']
-          .map((sha) => `${sha}\u001ffixup! x\u001ft${sha}\u001e\n`)
+        [
+          patch(1, 'const x = 1;'),
+          patch(9, 'const x = 1;'),
+          patch(1, '  const x = 1;'),
+          patch(20, 'const x = 1;', 'b'),
+          '',
+          '',
+        ]
+          .map((diff, index) => fixupLogEntry(`${index + 1}`, 'fixup! x', `t${index + 1}`, diff))
           .join(''),
       );
-      gitDiff
-        .mockResolvedValueOnce(patch(1, 'const x = 1;'))
-        .mockResolvedValueOnce(patch(9, 'const x = 1;'))
-        .mockResolvedValueOnce(patch(1, '  const x = 1;'))
-        .mockResolvedValueOnce(patch(20, 'const x = 1;', 'b'))
-        .mockResolvedValueOnce('')
-        .mockResolvedValueOnce('');
 
       const [first, moved, reindented, elsewhere, empty, otherEmpty] =
         await parser.listThreadFixups({
