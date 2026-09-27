@@ -23,6 +23,16 @@ export function createDiffSelection(
   };
 }
 
+// Reopening a single-commit review at another commit diffs that commit against its own parent.
+export function selectionAtCommit(current: DiffSelection, commit: string): DiffSelection {
+  const reviewsOneCommit = current.baseCommitish === `${current.targetCommitish}^`;
+  return createDiffSelection(
+    reviewsOneCommit ? `${commit}^` : current.baseCommitish,
+    commit,
+    current.baseMode,
+  );
+}
+
 export function diffSelectionsEqual(
   left: DiffSelection | null | undefined,
   right: DiffSelection | null | undefined,

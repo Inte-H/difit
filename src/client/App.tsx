@@ -20,6 +20,7 @@ import {
   getDiffSelectionKey,
   isCommitTarget,
   normalizeBaseMode,
+  selectionAtCommit,
 } from '../utils/diffSelection';
 import { mergeReviewDecisions, selectOpenThreads } from '../utils/reviewDecisions';
 
@@ -923,9 +924,7 @@ function App() {
 
   const openReviewAt = useCallback(
     (commit: string) => {
-      void handleRevisionChange(
-        createDiffSelection(selectedRevision.baseCommitish, commit, selectedRevision.baseMode),
-      );
+      void handleRevisionChange(selectionAtCommit(selectedRevision, commit));
     },
     [handleRevisionChange, selectedRevision],
   );

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isSameCommit } from './diffSelection';
+import { isSameCommit, selectionAtCommit } from './diffSelection';
 
 describe('isSameCommit', () => {
   const full = 'b7c2e10a9f' + '0'.repeat(30);
@@ -17,5 +17,22 @@ describe('isSameCommit', () => {
   it('compares non-hash refs exactly', () => {
     expect(isSameCommit('main', 'main')).toBe(true);
     expect(isSameCommit('main', 'mainline')).toBe(false);
+  });
+});
+
+describe('selectionAtCommit', () => {
+  it('reviews the commit against its own parent when the current review covers one commit', () => {
+    expect(
+      selectionAtCommit({ baseCommitish: 'b7c2e10^', targetCommitish: 'b7c2e10' }, '6e4f6d5'),
+    ).toEqual({ baseCommitish: '6e4f6d5^', targetCommitish: '6e4f6d5' });
+  });
+
+  it('keeps the base of a review that spans a range', () => {
+    expect(
+      selectionAtCommit(
+        { baseCommitish: 'main', targetCommitish: 'feature', baseMode: 'merge-base' },
+        '6e4f6d5',
+      ),
+    ).toEqual({ baseCommitish: 'main', targetCommitish: '6e4f6d5', baseMode: 'merge-base' });
   });
 });
