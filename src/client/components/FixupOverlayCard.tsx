@@ -45,7 +45,7 @@ function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProp
             {chunks.map((chunk, chunkIndex) =>
               chunk.lines.map((line, lineIndex) => (
                 <tr key={`${chunkIndex}-${lineIndex}`} className={getOverlayLineClass(line)}>
-                  <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted select-none align-top">
+                  <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted select-none align-top">
                     {line.newLineNumber ?? line.oldLineNumber ?? ''}
                   </td>
                   <td className="p-0 w-full align-top [&_span:first-child]:!bg-transparent">
