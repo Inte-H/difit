@@ -52,7 +52,7 @@ import {
   createDiffSelection,
   diffSelectionsEqual,
   getDiffSelectionKey,
-  isCommitTarget,
+  isCommitHash,
 } from '../utils/diffSelection.js';
 
 interface ServerOptions {
@@ -209,6 +209,15 @@ export async function startServer(
     initialSelection,
     Boolean(options.stdinDiff),
   );
+  // A target named by hash stays put while fixups pile up after it; HEAD or a branch moves with
+  // them, so only such reviews carry review states.
+  const pinnedCommentSessionKeys = new Set<string>();
+  const rememberPinnedReview = (requested: DiffSelection, resolved: DiffSelection) => {
+    if (isCommitHash(requested.targetCommitish)) {
+      pinnedCommentSessionKeys.add(createCommentSessionKey(resolved));
+    }
+  };
+  rememberPinnedReview(initialSelection, currentCommentSelection);
 
   function parseRepositoryRelativePath(filepath: unknown):
     | { ok: true; path: string }
@@ -352,6 +361,7 @@ export async function startServer(
       requestedSelection,
       Boolean(options.stdinDiff),
     );
+    rememberPinnedReview(requestedSelection, currentCommentSelection);
 
     const baseCommitish =
       responseDiffData.baseCommitish ?? (options.stdinDiff ? 'stdin' : undefined);
@@ -883,7 +893,9 @@ export async function startServer(
   async function threadReviewStatesFor(
     selection: DiffSelection,
   ): Promise<Map<string, ThreadReviewState> | undefined> {
-    if (options.stdinDiff || !isCommitTarget(selection.targetCommitish)) return undefined;
+    if (options.stdinDiff || !pinnedCommentSessionKeys.has(createCommentSessionKey(selection))) {
+      return undefined;
+    }
     const session = getOrCreateCommentSession(selection);
     try {
       const fixups = await parser.listThreadFixups(selection);

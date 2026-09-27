@@ -18,7 +18,7 @@ import {
   createDiffSelection,
   diffSelectionsEqual,
   getDiffSelectionKey,
-  isCommitTarget,
+  isCommitHash,
   normalizeBaseMode,
   selectionAtCommit,
 } from '../utils/diffSelection';
@@ -248,10 +248,12 @@ function App() {
     },
     [commentSessionQueryString],
   );
+  // Only a review pinned to a hash shows fixups; HEAD or a branch moves along with them.
   const targetCommit = useMemo(() => {
     const target = resolvedSelection?.targetCommitish;
-    return target && isCommitTarget(target) ? target : null;
-  }, [resolvedSelection]);
+    const requested = diffData?.requestedTargetCommitish;
+    return target && requested && isCommitHash(requested) ? target : null;
+  }, [diffData?.requestedTargetCommitish, resolvedSelection]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
   const { fixupsByThread, loaded: fixupsLoaded } = useThreadFixups(
     diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,

@@ -198,6 +198,14 @@ const mockDiffResponse: DiffResponse = {
   isEmpty: false,
 };
 
+const pinnedDiffResponse: DiffResponse = {
+  ...mockDiffResponse,
+  baseCommitish: 'abc1234^',
+  targetCommitish: 'abc1234',
+  requestedBaseCommitish: 'abc1234^',
+  requestedTargetCommitish: 'abc1234',
+};
+
 describe('App Component - Clear Comments Functionality', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -283,6 +291,19 @@ describe('App Component - Clear Comments Functionality', () => {
       expect(writeText).not.toHaveBeenCalled();
     });
 
+    it('should not read fixups for a review that follows HEAD', async () => {
+      mockComments = [
+        createMockThread({ id: 'plain', filePath: 'test.ts', line: 10, body: 'Plain review' }),
+      ];
+
+      renderApp();
+
+      await screen.findByText('Copy All Prompt (1)');
+      expect(
+        vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).startsWith('/api/fixups')),
+      ).toBe(false);
+    });
+
     it('should not copy before the fixup list says which threads are answered', async () => {
       mockComments = [
         createMockThread({ id: 'answered', filePath: 'test.ts', line: 10, body: 'Answered' }),
@@ -294,7 +315,7 @@ describe('App Component - Clear Comments Functionality', () => {
         }
         return Promise.resolve({
           ok: true,
-          json: async () => mockDiffResponse,
+          json: async () => pinnedDiffResponse,
           blob: async () => ({ size: 1024 }),
         } as Response);
       });

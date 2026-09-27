@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isSameCommit, selectionAtCommit } from './diffSelection';
+import { isCommitHash, isSameCommit, selectionAtCommit } from './diffSelection';
 
 describe('isSameCommit', () => {
   const full = 'b7c2e10a9f' + '0'.repeat(30);
@@ -34,5 +34,15 @@ describe('selectionAtCommit', () => {
         '6e4f6d5',
       ),
     ).toEqual({ baseCommitish: 'main', targetCommitish: '6e4f6d5', baseMode: 'merge-base' });
+  });
+});
+
+describe('isCommitHash', () => {
+  it('accepts abbreviated and full hashes and rejects refs', () => {
+    expect(isCommitHash('b7c2e10')).toBe(true);
+    expect(isCommitHash('b7c2e10a9f' + '0'.repeat(30))).toBe(true);
+    expect(isCommitHash('HEAD')).toBe(false);
+    expect(isCommitHash('main')).toBe(false);
+    expect(isCommitHash('b7c2e10^')).toBe(false);
   });
 });

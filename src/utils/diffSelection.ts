@@ -62,6 +62,10 @@ export function isCommitTarget(targetCommitish: string): boolean {
 
 const HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
 
+export function isCommitHash(commitish: string): boolean {
+  return HASH_PATTERN.test(commitish);
+}
+
 // Hashes of different lengths name the same commit when the shorter is a prefix of the longer.
 export function isSameCommit(a: string, b: string): boolean {
   if (!HASH_PATTERN.test(a) || !HASH_PATTERN.test(b)) return a === b;

@@ -815,12 +815,13 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('Comments from review session');
       expect(output).toContain('test.js:L10 (old)');
       expect(output).toContain('First comment');
-      expect(output).toContain('test.js:L20 [수정 중]\nSecond comment');
+      expect(output).toContain('test.js:L20\nSecond comment');
       expect(output).toContain('Second comment');
       expect(output).toContain('Total comments: 2');
     });
 
     it('GET /api/comments-output marks each thread with its review state', async () => {
+      await fetch(`http://localhost:${port}/api/diff?base=abc1234%5E&target=abc1234`);
       const comments = [
         { file: 'test.js', line: 10, body: 'No answer yet' },
         { file: 'test.js', line: 20, body: 'Answered' },
