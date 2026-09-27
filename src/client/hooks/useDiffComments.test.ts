@@ -257,6 +257,37 @@ const next = true;
       expect(result.current.decisions).toEqual([]);
     });
 
+    it.each([undefined, { resetAppliedCommentImportIds: true }])(
+      'drops the decisions along with the threads when all comments are cleared (%o)',
+      (options) => {
+        const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+        act(() => {
+          result.current.recordDecision('t1', 'rejected', 'a'.repeat(40));
+        });
+
+        act(() => {
+          result.current.clearAllComments(options);
+        });
+
+        expect(result.current.decisions).toEqual([]);
+        expect(mockDiffContextData?.decisions).toEqual([]);
+      },
+    );
+
+    it('forgets the previous review’s decisions when there is no review to show', () => {
+      const { result, rerender } = renderHook(
+        ({ target }) => useDiffComments('main', target, 'abc123'),
+        { initialProps: { target: 'review-a' as string | undefined } },
+      );
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40));
+      });
+
+      rerender({ target: undefined });
+
+      expect(result.current.decisions).toEqual([]);
+    });
+
     it('records an undo instead of deleting the approval', () => {
       const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
 

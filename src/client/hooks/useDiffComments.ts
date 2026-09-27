@@ -42,7 +42,6 @@ interface UseDiffCommentsReturn {
   threads: DiffCommentThread[];
   decisions: ReviewDecision[];
   replaceThreads: (threads: DiffCommentThread[]) => void;
-  replaceDecisions: (decisions: ReviewDecision[]) => void;
   mergeDecisions: (decisions: ReviewDecision[]) => void;
   recordDecision: (
     threadId: string,
@@ -154,6 +153,8 @@ export function useDiffComments(
   useEffect(() => {
     if (!baseCommitish || !targetCommitish) {
       setThreads([]);
+      decisionsRef.current = { reviewKey, list: [] };
+      setDecisions([]);
       setHasLoadedComments(false);
       return;
     }
@@ -241,13 +242,6 @@ export function useDiffComments(
       repositoryId,
       baseMode,
     ],
-  );
-
-  const replaceDecisions = useCallback(
-    (newDecisions: ReviewDecision[]) => {
-      saveDecisions(newDecisions);
-    },
-    [saveDecisions],
   );
 
   const mergeDecisions = useCallback(
@@ -431,7 +425,8 @@ export function useDiffComments(
 
   const clearAllComments = useCallback(() => {
     saveThreads([]);
-  }, [saveThreads]);
+    saveDecisions([]);
+  }, [saveDecisions, saveThreads]);
 
   const clearAllCommentsWithOptions = useCallback(
     (options?: { resetAppliedCommentImportIds?: boolean }) => {
@@ -449,6 +444,7 @@ export function useDiffComments(
         ...existingData,
         threads: [],
         appliedCommentImportIds: [],
+        decisions: [],
       };
 
       storageService.saveDiffContextData(
@@ -461,6 +457,8 @@ export function useDiffComments(
         baseMode,
       );
       setThreads([]);
+      decisionsRef.current = { reviewKey, list: [] };
+      setDecisions([]);
     },
     [
       baseCommitish,
@@ -471,6 +469,7 @@ export function useDiffComments(
       currentCommitHash,
       loadDiffContextData,
       repositoryId,
+      reviewKey,
       baseMode,
     ],
   );
@@ -556,7 +555,6 @@ export function useDiffComments(
     threads,
     decisions,
     replaceThreads,
-    replaceDecisions,
     mergeDecisions,
     recordDecision,
     undoApproval,
