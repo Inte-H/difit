@@ -191,7 +191,7 @@ export interface DiffContextStorage {
   decisions?: ReviewDecision[];
 }
 
-type ReviewDecisionKind = 'rejected' | 'approved' | 'unapproved' | 'folded';
+export type ReviewDecisionKind = 'rejected' | 'approved' | 'unapproved' | 'folded';
 
 // Threads carry no resolved state; a thread's screen state is derived from these
 // records plus the fixup commits found by trailer.
@@ -232,7 +232,7 @@ export interface FixupsResponse {
 }
 
 // The saved snapshot is gone from the file, or occurs in more than one place.
-type AnchorStaleReason = 'missing' | 'ambiguous';
+export type AnchorStaleReason = 'missing' | 'ambiguous';
 
 export interface CommentThread {
   id: string;

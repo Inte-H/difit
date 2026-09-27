@@ -253,7 +253,12 @@ export const FileList = memo(function FileList({
       case 'deleted':
         return <FileX size={16} className="text-github-danger" />;
       case 'renamed':
-        return <FilePen size={16} className="text-github-warning" />;
+        return (
+          <FilePen
+            size={16}
+            className="text-github-warning fixup-review:text-github-text-secondary"
+          />
+        );
       default:
         return <FileDiff size={16} className="text-github-text-secondary" />;
     }
@@ -435,7 +440,7 @@ export const FileList = memo(function FileList({
             {node.name}
           </span>
           {commentCount > 0 && (
-            <span className="text-github-warning text-sm font-medium ml-auto flex items-center gap-1">
+            <span className="text-github-warning fixup-review:text-github-text-secondary text-sm font-medium ml-auto flex items-center gap-1">
               <MessageSquare size={14} />
               {commentCount}
             </span>

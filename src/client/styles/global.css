@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant fixup-review (&:where([data-fixup-review] *));
+
 @theme {
   --color-github-bg-primary: #0d1117;
   --color-github-bg-secondary: #161b22;
@@ -98,6 +100,11 @@ body,
     border-color 0.3s ease;
 }
 
+:root {
+  --keyboard-cursor-bg: rgba(255, 253, 84, 0.2);
+  --keyboard-cursor-border: rgba(255, 253, 84, 0.4);
+}
+
 /* Keyboard navigation cursor styles for unified mode (tr level) */
 tr.keyboard-cursor td {
   position: relative;
@@ -108,7 +115,7 @@ tr.keyboard-cursor td::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-color: rgba(255, 253, 84, 0.2);
+  background-color: var(--keyboard-cursor-bg);
   pointer-events: none;
   z-index: 1;
 }
@@ -116,24 +123,24 @@ tr.keyboard-cursor td::before {
 /* Add border to the first cell only (unified mode) */
 tr.keyboard-cursor td:first-child::before {
   box-shadow:
-    inset 1px 0 0 0 rgba(255, 253, 84, 0.4),
-    inset 0 1px 0 0 rgba(255, 253, 84, 0.4),
-    inset 0 -1px 0 0 rgba(255, 253, 84, 0.4);
+    inset 1px 0 0 0 var(--keyboard-cursor-border),
+    inset 0 1px 0 0 var(--keyboard-cursor-border),
+    inset 0 -1px 0 0 var(--keyboard-cursor-border);
 }
 
 /* Add border to the last cell only (unified mode) */
 tr.keyboard-cursor td:last-child::before {
   box-shadow:
-    inset -1px 0 0 0 rgba(255, 253, 84, 0.4),
-    inset 0 1px 0 0 rgba(255, 253, 84, 0.4),
-    inset 0 -1px 0 0 rgba(255, 253, 84, 0.4);
+    inset -1px 0 0 0 var(--keyboard-cursor-border),
+    inset 0 1px 0 0 var(--keyboard-cursor-border),
+    inset 0 -1px 0 0 var(--keyboard-cursor-border);
 }
 
 /* Add border to middle cells (unified mode) */
 tr.keyboard-cursor td:not(:first-child):not(:last-child)::before {
   box-shadow:
-    inset 0 1px 0 0 rgba(255, 253, 84, 0.4),
-    inset 0 -1px 0 0 rgba(255, 253, 84, 0.4);
+    inset 0 1px 0 0 var(--keyboard-cursor-border),
+    inset 0 -1px 0 0 var(--keyboard-cursor-border);
 }
 
 /* Focused-file indicator for keyboard navigation: highlights the header of
@@ -158,8 +165,8 @@ td.keyboard-cursor::before {
   content: "";
   position: absolute;
   inset: 0;
-  background-color: rgba(255, 253, 84, 0.2);
-  box-shadow: inset 0 0 0 1px rgba(255, 253, 84, 0.4);
+  background-color: var(--keyboard-cursor-bg);
+  box-shadow: inset 0 0 0 1px var(--keyboard-cursor-border);
   pointer-events: none;
   z-index: 1;
 }
@@ -275,4 +282,21 @@ tr.drag-selected-last td::after {
 [data-color-vision="deuteranopia"][data-theme="light"] {
   --word-diff-added-bg: rgba(9, 105, 218, 0.3);
   --word-diff-removed-bg: rgba(191, 135, 0, 0.3);
+}
+
+/* In a review pinned to a commit, yellow marks only the fixup lines overlaid under a
+   thread, so every other yellow accent falls back to the theme's neutral colors. */
+[data-fixup-review] {
+  --color-yellow-btn-bg: var(--color-editor-btn-bg);
+  --color-yellow-btn-border: var(--color-editor-btn-border);
+  --color-yellow-btn-text: var(--color-editor-btn-text);
+  --color-yellow-btn-hover-bg: var(--color-editor-btn-hover-bg);
+  --color-yellow-btn-hover-border: var(--color-editor-btn-hover-border);
+  --color-yellow-path-bg: var(--color-github-bg-primary);
+  --color-yellow-path-text: var(--color-github-text-secondary);
+  --color-diff-selected-bg: color-mix(in srgb, var(--color-github-text-secondary) 15%, transparent);
+  --color-diff-selected-border: var(--color-github-text-secondary);
+  --word-highlight-color: color-mix(in srgb, var(--color-github-text-secondary) 30%, transparent);
+  --keyboard-cursor-bg: color-mix(in srgb, var(--color-github-text-secondary) 20%, transparent);
+  --keyboard-cursor-border: color-mix(in srgb, var(--color-github-text-secondary) 40%, transparent);
 }

@@ -16,6 +16,9 @@ export function useFileWatch(
   onCommentsChanged?: () => Promise<void>,
 ): FileWatchHook {
   const eventSourceRef = useRef<EventSource | null>(null);
+  // Read through a ref so a new callback identity never closes and reopens the connection,
+  // which would drop events sent while reconnecting.
+  const onCommentsChangedRef = useRef(onCommentsChanged);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
@@ -83,9 +86,7 @@ export function useFileWatch(
               break;
 
             case 'commentsChanged':
-              if (onCommentsChanged) {
-                void onCommentsChanged();
-              }
+              void onCommentsChangedRef.current?.();
               break;
           }
         } catch (parseError) {
@@ -131,7 +132,7 @@ export function useFileWatch(
       console.error('Failed to connect to file watch service:', connectionError);
       setError('Failed to connect to file watch service');
     }
-  }, [maxReconnectAttempts, onCommentsChanged, reconnectDelay]);
+  }, [maxReconnectAttempts, reconnectDelay]);
 
   const handleReload = useCallback(async () => {
     if (watchState.isReloading) {
@@ -185,6 +186,15 @@ export function useFileWatch(
 
     return cleanup;
   }, [connectToWatch]);
+
+  useEffect(() => {
+    onCommentsChangedRef.current = onCommentsChanged;
+    // Only a closed connection is reopened here, so one that ran out of retries still recovers.
+    if (!eventSourceRef.current) {
+      cleanup();
+      connectToWatch();
+    }
+  }, [onCommentsChanged, connectToWatch]);
 
   // Cleanup on unmount
   useEffect(() => {

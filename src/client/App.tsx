@@ -6,6 +6,7 @@ import {
   type DiffResponse,
   type DiffSelection,
   type DiffViewMode,
+  type ReviewDecision,
   type DiffSide,
   type LineNumber,
   type CommentThread,
@@ -17,11 +18,14 @@ import {
   createDiffSelection,
   diffSelectionsEqual,
   getDiffSelectionKey,
+  isCommitHash,
   normalizeBaseMode,
+  selectionAtCommit,
 } from '../utils/diffSelection';
+import { mergeReviewDecisions, selectOpenThreads } from '../utils/reviewDecisions';
 
 import { Checkbox } from './components/Checkbox';
-import { CommentsDropdown } from './components/CommentsDropdown';
+import { CommentsDropdown, type CopyAllNotice } from './components/CommentsDropdown';
 import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
@@ -33,6 +37,7 @@ import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
+import { recordWithPatchId, type FixupOverlayState } from './contexts/FixupOverlayContext';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
@@ -40,7 +45,12 @@ import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
 import { useFileWatch } from './hooks/useFileWatch';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useLazyDiffRendering } from './hooks/useLazyDiffRendering';
+import {
+  reviewTargetRestoredByHistory,
+  useReviewTargetHistory,
+} from './hooks/useReviewTargetHistory';
 import { useViewedFiles } from './hooks/useViewedFiles';
+import { useThreadFixups } from './hooks/useThreadFixups';
 import { useViewport } from './hooks/useViewport';
 import { fetchClientSettings, saveClientSettings } from './services/userSettings';
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
@@ -53,7 +63,7 @@ import {
   buildMergedChunksState,
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
-import { buildFileLineIndex, isThreadOutdated } from './utils/outdatedComments';
+import { buildFileLineIndex, locateThread } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
 const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
@@ -133,7 +143,7 @@ function App() {
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isCopiedAll, setIsCopiedAll] = useState(false);
+  const [copyAllNotice, setCopyAllNotice] = useState<CopyAllNotice | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
@@ -148,12 +158,13 @@ function App() {
 
   // Revision selector state
   const [revisionOptions, setRevisionOptions] = useState<RevisionsResponse | null>(null);
+  const [restoredReviewTarget] = useState(reviewTargetRestoredByHistory);
   const [selectedRevision, setSelectedRevision] = useState<DiffSelection>(
-    createDiffSelection('', ''),
+    restoredReviewTarget ?? createDiffSelection('', ''),
   );
   const [resolvedBaseRevision, setResolvedBaseRevision] = useState<string>('');
   const [resolvedTargetRevision, setResolvedTargetRevision] = useState<string>('');
-  const hasUserSelectedRevisionRef = useRef(false);
+  const hasUserSelectedRevisionRef = useRef(restoredReviewTarget !== null);
   const currentRequestedBaseModeRef = useRef(selectedRevision.baseMode);
   currentRequestedBaseModeRef.current = diffData?.requestedBaseMode ?? selectedRevision.baseMode;
   const selectedRevisionRef = useRef(selectedRevision);
@@ -186,7 +197,11 @@ function App() {
   const {
     hasLoadedComments,
     threads,
+    decisions,
     replaceThreads,
+    mergeDecisions,
+    recordDecision,
+    undoApproval,
     addThread,
     replyToThread,
     removeThread,
@@ -203,6 +218,8 @@ function App() {
     diffData?.repositoryId, // Repository identifier for storage isolation
     resolvedSelection?.baseMode,
   );
+  const decisionsRef = useRef(decisions);
+  decisionsRef.current = decisions;
 
   const showMobileCommentsBar = isMobile && threads.length > 0;
   const commentsContextKey = useMemo(() => {
@@ -236,6 +253,21 @@ function App() {
     },
     [commentSessionQueryString],
   );
+  // Only a review pinned to a hash shows fixups; HEAD or a branch moves along with them.
+  const targetCommit = useMemo(() => {
+    const target = resolvedSelection?.targetCommitish;
+    const requested = diffData?.requestedTargetCommitish;
+    return target && requested && isCommitHash(requested) ? target : null;
+  }, [diffData?.requestedTargetCommitish, resolvedSelection]);
+  const [showFixupOverlay, setShowFixupOverlay] = useState(true);
+  const { fixupsByThread, loaded: fixupsLoaded } = useThreadFixups(
+    diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,
+    diffDataVersion,
+  );
+  const openThreads = useMemo(
+    () => selectOpenThreads(threads, fixupsByThread, decisions),
+    [threads, fixupsByThread, decisions],
+  );
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
     commentsContextKey !== null && commentsContextKey === bootstrappedCommentsKey;
@@ -251,7 +283,10 @@ function App() {
     }
   }, [bootstrappedCommentsKey, commentsContextKey]);
 
-  const fetchServerThreads = useCallback(async (): Promise<DiffCommentThread[]> => {
+  const fetchServerComments = useCallback(async (): Promise<{
+    threads: DiffCommentThread[];
+    decisions: ReviewDecision[];
+  }> => {
     const response = await fetch(getCommentApiUrl('/api/comments-json'));
     if (!response.ok) {
       throw new Error(`Failed to fetch comments: ${response.status} ${response.statusText}`);
@@ -260,20 +295,26 @@ function App() {
     const payload = (await response.json()) as {
       version?: number;
       threads?: DiffCommentThread[];
+      decisions?: ReviewDecision[];
     };
     if (typeof payload.version === 'number') {
       serverCommentVersionRef.current = payload.version;
     }
-    return Array.isArray(payload.threads) ? payload.threads : [];
-  }, [getCommentApiUrl]);
+    const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
+    if (decisions.length > 0) {
+      mergeDecisions(decisions);
+    }
+    return { threads: Array.isArray(payload.threads) ? payload.threads : [], decisions };
+  }, [getCommentApiUrl, mergeDecisions]);
 
   const syncThreadsToServer = useCallback(
-    async (nextThreads: DiffCommentThread[]) => {
+    async (nextThreads: DiffCommentThread[], nextDecisions?: ReviewDecision[]) => {
       const response = await fetch(getCommentApiUrl('/api/comments'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           threads: nextThreads,
+          decisions: nextDecisions,
           baseVersion: serverCommentVersionRef.current ?? undefined,
         }),
       });
@@ -285,6 +326,7 @@ function App() {
         version?: number;
         merged?: boolean;
         threads?: DiffCommentThread[];
+        decisions?: ReviewDecision[];
       };
       if (typeof result.version === 'number') {
         serverCommentVersionRef.current = result.version;
@@ -293,9 +335,12 @@ function App() {
       if (result.merged && Array.isArray(result.threads)) {
         skipNextCommentSyncRef.current = true;
         replaceThreads(result.threads);
+        if (Array.isArray(result.decisions)) {
+          mergeDecisions(result.decisions);
+        }
       }
     },
-    [getCommentApiUrl, replaceThreads],
+    [getCommentApiUrl, mergeDecisions, replaceThreads],
   );
 
   // Viewed files management
@@ -516,18 +561,15 @@ function App() {
       threads.map((thread) => ({
         id: thread.id,
         file: thread.filePath,
-        line:
-          typeof thread.position.line === 'number'
-            ? thread.position.line
-            : ([thread.position.line.start, thread.position.line.end] as [number, number]),
+        ...locateThread(thread, fileLineIndexByPath.get(thread.filePath), targetCommit),
         side: thread.position.side,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
         codeContent: thread.codeSnapshot?.content,
-        isOutdated: isThreadOutdated(thread, fileLineIndexByPath.get(thread.filePath)),
+        anchorCommit: thread.codeSnapshot?.commit,
         messages: thread.messages,
       })),
-    [threads, fileLineIndexByPath],
+    [threads, fileLineIndexByPath, targetCommit],
   );
   const showAuthorBadges = useMemo(
     () => hasMultipleCommentAuthors(normalizedThreads.flatMap((thread) => thread.messages)),
@@ -558,7 +600,7 @@ function App() {
   }, []);
   const handleCommentsChanged = useCallback(async () => {
     try {
-      const serverThreads = await fetchServerThreads();
+      const { threads: serverThreads } = await fetchServerComments();
       skipNextCommentSyncRef.current = true;
       replaceThreads(serverThreads);
       if (commentsContextKey) {
@@ -567,7 +609,7 @@ function App() {
     } catch (commentsError) {
       console.error('Failed to refresh comments from server:', commentsError);
     }
-  }, [commentsContextKey, fetchServerThreads, replaceThreads]);
+  }, [commentsContextKey, fetchServerComments, replaceThreads]);
 
   // File watch for reload functionality - initialize with callback
   const { shouldReload, reload, watchState } = useFileWatch(
@@ -887,6 +929,39 @@ function App() {
     [fetchDiffData, selectedRevision],
   );
 
+  const recordReviewJump = useReviewTargetHistory(
+    (selection) => void handleRevisionChange(selection),
+  );
+  const openReviewAt = useCallback(
+    (commit: string) => {
+      const nextSelection = selectionAtCommit(selectedRevision, commit);
+      if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
+      recordReviewJump(selectedRevision, nextSelection);
+      void handleRevisionChange(nextSelection);
+    },
+    [handleRevisionChange, recordReviewJump, selectedRevision],
+  );
+  const fixupOverlay = useMemo<FixupOverlayState>(
+    () => ({
+      enabled: showFixupOverlay,
+      fixupsByThread,
+      decisions,
+      targetCommit,
+      recordDecision: recordWithPatchId(recordDecision, fixupsByThread),
+      undoApproval,
+      openReviewAt,
+    }),
+    [
+      showFixupOverlay,
+      fixupsByThread,
+      decisions,
+      targetCommit,
+      recordDecision,
+      undoApproval,
+      openReviewAt,
+    ],
+  );
+
   // Clear comments and viewed files on initial load if requested via CLI flag
   const hasCleanedRef = useRef(false);
   useEffect(() => {
@@ -922,10 +997,11 @@ function App() {
 
     const bootstrapComments = async () => {
       try {
-        const serverThreads = await fetchServerThreads();
+        const { threads: serverThreads, decisions: serverDecisions } = await fetchServerComments();
         const nextThreads = shouldReplaceFromServer
           ? serverThreads
           : mergeCommentThreads(serverThreads, threads).threads;
+        const nextDecisions = mergeReviewDecisions(serverDecisions, decisionsRef.current);
         if (cancelled) {
           return;
         }
@@ -935,9 +1011,11 @@ function App() {
 
         if (
           !shouldReplaceFromServer &&
-          JSON.stringify(serverThreads) !== JSON.stringify(nextThreads)
+          (JSON.stringify(serverThreads) !== JSON.stringify(nextThreads) ||
+            JSON.stringify(mergeReviewDecisions(serverDecisions, [])) !==
+              JSON.stringify(nextDecisions))
         ) {
-          await syncThreadsToServer(nextThreads);
+          await syncThreadsToServer(nextThreads, nextDecisions);
         }
       } catch (commentsError) {
         if (!cancelled) {
@@ -964,7 +1042,7 @@ function App() {
   }, [
     bootstrappedCommentsKey,
     commentsContextKey,
-    fetchServerThreads,
+    fetchServerComments,
     hasLoadedComments,
     replaceThreads,
     syncThreadsToServer,
@@ -998,6 +1076,7 @@ function App() {
 
     const data = JSON.stringify({
       threads,
+      decisions,
       baseVersion: serverCommentVersionRef.current ?? undefined,
     });
     const commentsApiUrl = getCommentApiUrl('/api/comments');
@@ -1017,14 +1096,14 @@ function App() {
       };
     }
 
-    syncThreadsToServer(threads).catch((syncError) => {
+    syncThreadsToServer(threads, decisions).catch((syncError) => {
       console.error('Failed to sync comments:', syncError);
     });
 
     return () => {
       window.removeEventListener('beforeunload', sendCommentsBeforeUnload);
     };
-  }, [getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
+  }, [decisions, getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
 
   // Establish SSE connection for tab close detection
   useEffect(() => {
@@ -1071,18 +1150,30 @@ function App() {
     [addThread],
   );
 
+  const showCopyAllNotice = (notice: CopyAllNotice) => {
+    setCopyAllNotice(notice);
+    setTimeout(() => setCopyAllNotice(null), 2000);
+  };
+
   const handleCopyAllComments = async () => {
+    if (!fixupsLoaded) return;
+    if (openThreads.length === 0) {
+      showCopyAllNotice('empty');
+      return;
+    }
     try {
-      const prompt = generateAllCommentsPrompt({
-        requestedBaseCommitish: diffData?.requestedBaseCommitish,
-        requestedTargetCommitish: diffData?.requestedTargetCommitish,
-        baseMode: normalizeBaseMode(diffData?.requestedBaseMode),
-        resolvedBaseCommitish: diffData?.baseCommitish,
-        resolvedTargetCommitish: diffData?.targetCommitish,
-      });
+      const prompt = generateAllCommentsPrompt(
+        {
+          requestedBaseCommitish: diffData?.requestedBaseCommitish,
+          requestedTargetCommitish: diffData?.requestedTargetCommitish,
+          baseMode: normalizeBaseMode(diffData?.requestedBaseMode),
+          resolvedBaseCommitish: diffData?.baseCommitish,
+          resolvedTargetCommitish: diffData?.targetCommitish,
+        },
+        openThreads,
+      );
       await copyTextToClipboard(prompt);
-      setIsCopiedAll(true);
-      setTimeout(() => setIsCopiedAll(false), 2000);
+      showCopyAllNotice('copied');
     } catch (error) {
       console.error('Failed to copy all comments prompt:', error);
     }
@@ -1199,7 +1290,11 @@ function App() {
 
   return (
     <WordHighlightProvider>
-      <div className="h-screen flex flex-col" onClickCapture={handleGlobalClick}>
+      <div
+        className="h-screen flex flex-col"
+        data-fixup-review={targetCommit ? '' : undefined}
+        onClickCapture={handleGlobalClick}
+      >
         <header
           className={`bg-github-bg-secondary border-b border-github-border flex ${
             isMobile ? 'flex-col' : 'flex-row items-center'
@@ -1292,6 +1387,18 @@ function App() {
                 label="Ignore Whitespace"
                 title={ignoreWhitespace ? 'Show whitespace changes' : 'Ignore whitespace changes'}
               />
+              {fixupsByThread.size > 0 && (
+                <Checkbox
+                  checked={showFixupOverlay}
+                  onChange={setShowFixupOverlay}
+                  label="수정을 겹쳐 보기"
+                  title={
+                    showFixupOverlay
+                      ? '원래 diff만 보기'
+                      : '지적에 대한 수정을 코드 줄 아래에 겹쳐 보기'
+                  }
+                />
+              )}
               {/* File Watch Reload Button */}
               <ReloadButton
                 shouldReload={shouldReload}
@@ -1309,7 +1416,8 @@ function App() {
               {!isMobile && threads.length > 0 && (
                 <CommentsDropdown
                   commentsCount={threads.length}
-                  isCopiedAll={isCopiedAll}
+                  openCount={fixupsLoaded ? openThreads.length : null}
+                  copyAllNotice={copyAllNotice}
                   onCopyAll={handleCopyAllComments}
                   onDeleteAll={clearAllComments}
                   onViewAll={() => setIsCommentsListOpen(true)}
@@ -1330,17 +1438,17 @@ function App() {
                   }}
                 >
                   <div
-                    className="absolute top-0 right-0 h-full transition-all duration-300 ease-out"
+                    className={`absolute top-0 right-0 h-full transition-all duration-300 ease-out ${(() => {
+                      const remainingPercent =
+                        ((diffData.files.length - viewedFiles.size) / diffData.files.length) * 100;
+                      if (remainingPercent > 50) return 'bg-github-accent'; // green
+                      if (remainingPercent > 20) {
+                        return 'bg-github-warning fixup-review:bg-github-text-muted'; // yellow
+                      }
+                      return 'bg-github-danger'; // red
+                    })()}`}
                     style={{
                       width: `${((diffData.files.length - viewedFiles.size) / diffData.files.length) * 100}%`,
-                      backgroundColor: (() => {
-                        const remainingPercent =
-                          ((diffData.files.length - viewedFiles.size) / diffData.files.length) *
-                          100;
-                        if (remainingPercent > 50) return 'var(--color-github-accent)'; // green
-                        if (remainingPercent > 20) return 'var(--color-github-warning)'; // yellow
-                        return 'var(--color-github-danger)'; // red
-                      })(),
                     }}
                   />
                 </div>
@@ -1534,6 +1642,7 @@ function App() {
                       prefetchFileContent={prefetchFileContent}
                       isExpandLoading={isExpandLoading}
                       diffVersion={diffDataVersion}
+                      fixupOverlay={fixupOverlay}
                     />
                   ) : (
                     <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
@@ -1566,7 +1675,8 @@ function App() {
           <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
             <CommentsDropdown
               commentsCount={threads.length}
-              isCopiedAll={isCopiedAll}
+              openCount={fixupsLoaded ? openThreads.length : null}
+              copyAllNotice={copyAllNotice}
               onCopyAll={handleCopyAllComments}
               onDeleteAll={clearAllComments}
               onViewAll={() => setIsCommentsListOpen(true)}

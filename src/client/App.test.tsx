@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
 
 import { mockFetch } from '../../vitest.setup';
-import type { DiffCommentThread, DiffResponse } from '../types/diff';
+import type { DiffCommentThread, DiffResponse, ReviewDecision } from '../types/diff';
 import type { ClientWatchState } from '../types/watch';
 import { DiffMode } from '../types/watch';
 
@@ -24,6 +24,7 @@ vi.mock('./hooks/useDiffComments', () => ({
     hasLoadedComments: true,
     comments: [],
     threads: mockComments,
+    decisions: mockDecisions,
     replaceThreads: mockReplaceThreads,
     addComment: vi.fn(),
     addThread: vi.fn(),
@@ -121,6 +122,7 @@ Object.defineProperty(window, 'EventSource', {
 });
 
 let mockComments: DiffCommentThread[] = [];
+let mockDecisions: ReviewDecision[] = [];
 const mockReplaceThreads = vi.fn();
 const mockClearAllComments = vi.fn();
 const mockApplyCommentImports = vi.fn(() => []);
@@ -196,10 +198,19 @@ const mockDiffResponse: DiffResponse = {
   isEmpty: false,
 };
 
+const pinnedDiffResponse: DiffResponse = {
+  ...mockDiffResponse,
+  baseCommitish: 'abc1234^',
+  targetCommitish: 'abc1234',
+  requestedBaseCommitish: 'abc1234^',
+  requestedTargetCommitish: 'abc1234',
+};
+
 describe('App Component - Clear Comments Functionality', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockComments = [];
+    mockDecisions = [];
     mockApplyCommentImports.mockReset();
     mockApplyCommentImports.mockReturnValue([]);
     mockConfirm.mockReturnValue(false);
@@ -225,14 +236,96 @@ describe('App Component - Clear Comments Functionality', () => {
       fireEvent.click(await screen.findByText(/Copy All Prompt/));
 
       await waitFor(() => {
-        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith({
-          requestedBaseCommitish: 'main',
-          requestedTargetCommitish: 'feature/docs-update',
-          baseMode: 'merge-base',
-          resolvedBaseCommitish: 'abcdef1',
-          resolvedTargetCommitish: '1234567',
-        });
+        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith(
+          {
+            requestedBaseCommitish: 'main',
+            requestedTargetCommitish: 'feature/docs-update',
+            baseMode: 'merge-base',
+            resolvedBaseCommitish: 'abcdef1',
+            resolvedTargetCommitish: '1234567',
+          },
+          mockComments,
+        );
       });
+    });
+
+    it('should leave settled threads out and copy only the open ones', async () => {
+      mockComments = [
+        createMockThread({ id: 'open', filePath: 'test.ts', line: 10, body: 'Still open' }),
+        createMockThread({ id: 'approved', filePath: 'test.ts', line: 20, body: 'Approved' }),
+      ];
+      mockDecisions = [
+        { threadId: 'approved', kind: 'approved', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ];
+
+      renderApp();
+
+      fireEvent.click(await screen.findByText('Copy All Prompt (1)'));
+
+      await waitFor(() => {
+        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith(expect.anything(), [
+          mockComments[0],
+        ]);
+      });
+    });
+
+    it('should say there is nothing open and write nothing when every thread is settled', async () => {
+      mockComments = [
+        createMockThread({ id: 'approved', filePath: 'test.ts', line: 20, body: 'Approved' }),
+      ];
+      mockDecisions = [
+        { threadId: 'approved', kind: 'approved', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ];
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText },
+      });
+
+      renderApp();
+
+      fireEvent.click(await screen.findByText(/Copy All Prompt/));
+
+      expect(await screen.findByText('No open comments')).toBeInTheDocument();
+      expect(mockGenerateAllCommentsPrompt).not.toHaveBeenCalled();
+      expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it('should not read fixups for a review that follows HEAD', async () => {
+      mockComments = [
+        createMockThread({ id: 'plain', filePath: 'test.ts', line: 10, body: 'Plain review' }),
+      ];
+
+      renderApp();
+
+      await screen.findByText('Copy All Prompt (1)');
+      expect(
+        vi.mocked(global.fetch).mock.calls.some(([url]) => String(url).startsWith('/api/fixups')),
+      ).toBe(false);
+    });
+
+    it('should not copy before the fixup list says which threads are answered', async () => {
+      mockComments = [
+        createMockThread({ id: 'answered', filePath: 'test.ts', line: 10, body: 'Answered' }),
+      ];
+      vi.mocked(global.fetch).mockImplementation((input) => {
+        if (String(input).startsWith('/api/fixups')) return new Promise(() => {});
+        if (String(input) === '/api/revisions') {
+          return Promise.resolve({ ok: true, json: async () => null } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => pinnedDiffResponse,
+          blob: async () => ({ size: 1024 }),
+        } as Response);
+      });
+
+      renderApp();
+
+      const button = await screen.findByText('Checking fixups…');
+      fireEvent.click(button);
+
+      expect(mockGenerateAllCommentsPrompt).not.toHaveBeenCalled();
     });
   });
 
@@ -426,6 +519,60 @@ describe('App Component - Clear Comments Functionality', () => {
       );
     });
 
+    it('pushes locally recorded decisions to a server session that has none', async () => {
+      const thread = createMockThread({
+        id: 'thread-1',
+        filePath: 'test.ts',
+        line: 10,
+        body: 'Local comment',
+      });
+      mockComments = [thread];
+      mockDecisions = [
+        { threadId: 'thread-1', kind: 'rejected', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ];
+
+      vi.mocked(global.fetch).mockImplementation((input) => {
+        const url = String(input);
+
+        if (url.startsWith('/api/comments-json')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ threads: [thread], decisions: [] }),
+          } as Response);
+        }
+
+        if (url.startsWith('/api/comments')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ success: true }),
+          } as Response);
+        }
+
+        if (url === '/api/revisions') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => null,
+          } as Response);
+        }
+
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockDiffResponse,
+          blob: async () => ({ size: 1024 }),
+        } as Response);
+      });
+
+      renderApp();
+
+      await waitFor(() => {
+        const posts = vi
+          .mocked(global.fetch)
+          .mock.calls.filter(([url]) => String(url).startsWith('/api/comments?'));
+        const [, request] = posts[0] as [string, RequestInit];
+        expect(JSON.parse(String(request.body)).decisions).toEqual(mockDecisions);
+      });
+    });
+
     it('preserves server-provided comments after clearing local comments on startup', async () => {
       mockComments = [
         createMockThread({
@@ -589,6 +736,7 @@ describe('App Component - Comment sync', () => {
             ],
           }),
         ],
+        decisions: [],
       });
     });
 
@@ -608,7 +756,7 @@ describe('App Component - Comment sync', () => {
       const [url, request] = commentCalls[1] as [string, RequestInit];
       expect(url).toBe('/api/comments?base=HEAD%5E&target=HEAD');
       expect(request.method).toBe('POST');
-      expect(JSON.parse(String(request.body))).toEqual({ threads: [] });
+      expect(JSON.parse(String(request.body))).toEqual({ threads: [], decisions: [] });
     });
   });
 
@@ -630,7 +778,7 @@ describe('App Component - Comment sync', () => {
 
     expect(navigator.sendBeacon).toHaveBeenCalledWith(
       '/api/comments?base=HEAD%5E&target=HEAD',
-      JSON.stringify({ threads: [] }),
+      JSON.stringify({ threads: [], decisions: [] }),
     );
     addEventListenerSpy.mockRestore();
   });
@@ -718,8 +866,10 @@ describe('App Component - Diff Mode Persistence', () => {
     fireEvent.click(refreshButton);
 
     await waitFor(() => {
-      // 4 calls: initial /api/diff, /api/revisions, initial /api/comments sync, and refresh /api/diff
-      expect(mockGlobalFetch).toHaveBeenCalledTimes(4);
+      const diffCalls = mockGlobalFetch.mock.calls.filter(
+        ([url]) => typeof url === 'string' && url.startsWith('/api/diff'),
+      );
+      expect(diffCalls).toHaveLength(2);
     });
 
     await waitFor(() => {
@@ -1013,6 +1163,203 @@ describe('App Component - Revision-aware refetching', () => {
   });
 });
 
+describe('App Component - Returning from the review a comment was made on', () => {
+  const reviewAt = (commit: string): DiffResponse => ({
+    ...mockDiffResponse,
+    baseCommitish: `${commit}^`,
+    targetCommitish: commit,
+    requestedBaseCommitish: `${commit}^`,
+    requestedTargetCommitish: commit,
+    files: [
+      {
+        path: 'test.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+        chunks: [
+          {
+            header: '@@ -1,1 +1,1 @@',
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [
+              { type: 'normal', content: 'const a = 1;', oldLineNumber: 1, newLineNumber: 1 },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  const diffTargets = () =>
+    vi
+      .mocked(global.fetch)
+      .mock.calls.map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/diff'))
+      .map((url) => new URLSearchParams(url.split('?')[1]).get('target'));
+
+  const originalReviewEntry = {
+    difitReviewTarget: { baseCommitish: 'abc1234^', targetCommitish: 'abc1234' },
+  };
+  let serverTarget = 'abc1234';
+
+  const loadedBy = (type: string) =>
+    vi
+      .spyOn(performance, 'getEntriesByType')
+      .mockReturnValue([{ type } as unknown as PerformanceEntry]);
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.replaceState(null, '');
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    serverTarget = 'abc1234';
+    mockDecisions = [];
+    mockComments = [
+      {
+        ...createMockThread({ id: 'old', filePath: 'test.ts', line: 1, body: 'Old remark' }),
+        codeSnapshot: { content: 'const a = 0;', commit: 'def5678' },
+      },
+    ];
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      if (url.startsWith('/api/fixups')) {
+        return Promise.resolve({ ok: true, json: async () => ({ fixups: [] }) } as Response);
+      }
+      const target = url.startsWith('/api/diff')
+        ? new URLSearchParams(url.split('?')[1]).get('target')
+        : null;
+      return Promise.resolve({
+        ok: true,
+        json: async () => reviewAt(target ?? serverTarget),
+        blob: async () => ({ size: 1024 }),
+      } as Response);
+    });
+  });
+
+  it('adds a browser history entry when jumping to the older review', async () => {
+    renderApp();
+    const lengthBefore = window.history.length;
+
+    fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+
+    await waitFor(() => expect(diffTargets()).toContain('def5678'));
+    expect(window.history.length).toBe(lengthBefore + 1);
+  });
+
+  it('switches back to the original review on Back and forward again on Forward', async () => {
+    renderApp();
+
+    fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('def5678'));
+
+    act(() => window.history.back());
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('abc1234'));
+    expect(diffTargets()).toEqual([null, 'def5678', 'abc1234']);
+    await waitFor(() =>
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual([
+        'abc1234^',
+        'abc1234',
+      ]),
+    );
+
+    act(() => window.history.forward());
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('def5678'));
+  });
+
+  it("shows the original review's chips again after Back without recording decisions", async () => {
+    const oldThread = mockComments[0]!;
+    const fixedThread: DiffCommentThread = {
+      ...createMockThread({ id: 'fixed', filePath: 'test.ts', line: 1, body: 'Fixed remark' }),
+      codeSnapshot: { content: 'const a = 1;', commit: 'abc1234' },
+    };
+    const storedByTarget: Record<
+      string,
+      Pick<ReturnType<typeof useDiffComments>, 'threads' | 'decisions'>
+    > = {
+      abc1234: {
+        threads: [oldThread, fixedThread],
+        decisions: [
+          { threadId: 'fixed', kind: 'approved', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+        ],
+      },
+      def5678: {
+        threads: [oldThread],
+        decisions: [
+          { threadId: 'old', kind: 'rejected', fixupSha: 'bbbb', at: '2026-01-01T00:00:00Z' },
+        ],
+      },
+    };
+    const recordDecision = vi.fn();
+    const undoApproval = vi.fn();
+    const defaultComments = vi.mocked(useDiffComments).getMockImplementation()!;
+    vi.mocked(useDiffComments).mockImplementation((...args) => ({
+      ...defaultComments(...args),
+      ...(storedByTarget[args[1] ?? ''] ?? { threads: [], decisions: [] }),
+      recordDecision,
+      undoApproval,
+    }));
+    const chips = () =>
+      screen
+        .queryAllByTestId('review-state-chip')
+        .map((chip) => chip.textContent)
+        .sort();
+
+    try {
+      renderApp();
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+
+      fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+      await waitFor(() => expect(chips()).toEqual(['다시 수정 중']));
+
+      act(() => window.history.back());
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+      expect(recordDecision).not.toHaveBeenCalled();
+      expect(undoApproval).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(useDiffComments).mockImplementation(defaultComments);
+    }
+  });
+
+  it('reopens the review the history entry recorded when Back loads the page afresh', async () => {
+    serverTarget = 'def5678';
+    window.history.replaceState(originalReviewEntry, '');
+    loadedBy('back_forward');
+
+    renderApp();
+
+    await waitFor(() => expect(diffTargets()).toEqual(['abc1234']));
+    await waitFor(() =>
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual([
+        'abc1234^',
+        'abc1234',
+      ]),
+    );
+  });
+
+  it('leaves the review to the server on a plain reload', async () => {
+    serverTarget = 'def5678';
+    window.history.replaceState(originalReviewEntry, '');
+    loadedBy('reload');
+
+    renderApp();
+
+    await waitFor(() =>
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual([
+        'def5678^',
+        'def5678',
+      ]),
+    );
+    expect(diffTargets()).toEqual([null]);
+  });
+});
+
 describe('App Component - Sidebar persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -1076,5 +1423,31 @@ describe('App Component - Mobile sidebar auto-close', () => {
     await waitFor(() => {
       expect(toggleButton).toHaveAttribute('aria-expanded', 'false');
     });
+  });
+});
+
+describe('App Component - Fixup review colors', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockConfirm.mockReturnValue(false);
+  });
+
+  it('scopes the fixup review palette to a review pinned to a hash', async () => {
+    mockFetch(pinnedDiffResponse);
+
+    const { container } = renderApp();
+
+    await screen.findByRole('button', { name: /toggle file tree panel/i });
+    expect(container.querySelector('[data-fixup-review]')).not.toBeNull();
+  });
+
+  it('keeps the original palette for a review that follows HEAD', async () => {
+    mockFetch(mockDiffResponse);
+
+    const { container } = renderApp();
+
+    await screen.findByRole('button', { name: /toggle file tree panel/i });
+    expect(container.querySelector('[data-fixup-review]')).toBeNull();
   });
 });

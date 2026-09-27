@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 import {
   type BaseMode,
@@ -8,6 +8,8 @@ import {
   type DiffCommentThread,
   type DiffSide,
   type LegacyDiffComment,
+  type ReviewDecision,
+  type ReviewDecisionKind,
 } from '../../types/diff';
 import {
   type CommentPromptDiffContext,
@@ -16,6 +18,8 @@ import {
 } from '../../utils/commentFormatting';
 import { createId } from '../../utils/createId';
 import { mergeCommentImports } from '../../utils/commentImports';
+import { isCommitTarget } from '../../utils/diffSelection';
+import { mergeReviewDecisions } from '../../utils/reviewDecisions';
 import { storageService } from '../services/StorageService';
 import { getLanguageFromPath } from '../utils/diffUtils';
 
@@ -36,7 +40,16 @@ interface UseDiffCommentsReturn {
   hasLoadedComments: boolean;
   comments: LegacyDiffComment[];
   threads: DiffCommentThread[];
+  decisions: ReviewDecision[];
   replaceThreads: (threads: DiffCommentThread[]) => void;
+  mergeDecisions: (decisions: ReviewDecision[]) => void;
+  recordDecision: (
+    threadId: string,
+    kind: ReviewDecisionKind,
+    fixupSha: string,
+    patchId?: string,
+  ) => void;
+  undoApproval: (threadId: string) => void;
   addComment: (params: AddThreadParams) => LegacyDiffComment;
   addThread: (params: AddThreadParams) => DiffCommentThread;
   removeComment: (commentId: string) => void;
@@ -49,7 +62,10 @@ interface UseDiffCommentsReturn {
   applyCommentImports: (imports: CommentImport[], importId: string) => string[];
   generatePrompt: (commentId: string) => string;
   generateThreadPrompt: (threadId: string) => string;
-  generateAllCommentsPrompt: (context?: CommentPromptDiffContext) => string;
+  generateAllCommentsPrompt: (
+    context?: CommentPromptDiffContext,
+    only?: DiffCommentThread[],
+  ) => string;
 }
 
 function normalizeThread(thread: DiffCommentThread): CommentThread {
@@ -93,6 +109,10 @@ export function useDiffComments(
   baseMode?: BaseMode,
 ): UseDiffCommentsReturn {
   const [threads, setThreads] = useState<DiffCommentThread[]>([]);
+  const [decisions, setDecisions] = useState<ReviewDecision[]>([]);
+  const reviewKey = [repositoryId, baseMode, baseCommitish, targetCommitish].join('|');
+  // Decisions of the review currently loaded; callbacks of a review switched away from write nothing.
+  const decisionsRef = useRef({ reviewKey, list: decisions });
   const [hasLoadedComments, setHasLoadedComments] = useState(false);
 
   const loadDiffContextData = useCallback(() => {
@@ -126,18 +146,22 @@ export function useDiffComments(
       threads: [],
       viewedFiles: [],
       appliedCommentImportIds: [],
+      decisions: [],
     };
   }, [baseCommitish, targetCommitish, baseMode]);
 
   useEffect(() => {
     if (!baseCommitish || !targetCommitish) {
       setThreads([]);
+      decisionsRef.current = { reviewKey, list: [] };
+      setDecisions([]);
       setHasLoadedComments(false);
       return;
     }
 
+    const loadedData = loadDiffContextData();
     const loadedThreads =
-      loadDiffContextData()?.threads ||
+      loadedData?.threads ||
       storageService.getCommentThreads(
         baseCommitish,
         targetCommitish,
@@ -147,6 +171,8 @@ export function useDiffComments(
         baseMode,
       );
     setThreads(loadedThreads);
+    decisionsRef.current = { reviewKey, list: loadedData?.decisions ?? [] };
+    setDecisions(decisionsRef.current.list);
     setHasLoadedComments(true);
   }, [
     baseCommitish,
@@ -156,6 +182,7 @@ export function useDiffComments(
     repositoryId,
     baseMode,
     loadDiffContextData,
+    reviewKey,
   ]);
 
   const saveThreads = useCallback(
@@ -184,10 +211,78 @@ export function useDiffComments(
     [saveThreads],
   );
 
+  const saveDecisions = useCallback(
+    (newDecisions: ReviewDecision[]) => {
+      if (!baseCommitish || !targetCommitish) return;
+      if (decisionsRef.current.reviewKey !== reviewKey) return;
+
+      const existingData = loadDiffContextData() || createEmptyDiffContext();
+      if (!existingData) return;
+
+      storageService.saveDiffContextData(
+        baseCommitish,
+        targetCommitish,
+        { ...existingData, decisions: newDecisions },
+        currentCommitHash,
+        branchToHash,
+        repositoryId,
+        baseMode,
+      );
+      decisionsRef.current = { reviewKey, list: newDecisions };
+      setDecisions(newDecisions);
+    },
+    [
+      reviewKey,
+      baseCommitish,
+      targetCommitish,
+      branchToHash,
+      createEmptyDiffContext,
+      currentCommitHash,
+      loadDiffContextData,
+      repositoryId,
+      baseMode,
+    ],
+  );
+
+  const mergeDecisions = useCallback(
+    (incoming: ReviewDecision[]) => {
+      const current = decisionsRef.current.list;
+      const merged = mergeReviewDecisions(current, incoming);
+      if (JSON.stringify(merged) === JSON.stringify(current)) return;
+      saveDecisions(merged);
+    },
+    [saveDecisions],
+  );
+
+  const recordDecision = useCallback(
+    (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) => {
+      saveDecisions(
+        mergeReviewDecisions(decisionsRef.current.list, [
+          { threadId, kind, fixupSha, patchId, at: new Date().toISOString() },
+        ]),
+      );
+    },
+    [saveDecisions],
+  );
+
+  const undoApproval = useCallback(
+    (threadId: string) => {
+      const approvals = decisionsRef.current.list.filter(
+        (decision) => decision.threadId === threadId && decision.kind === 'approved',
+      );
+      const approval = approvals[approvals.length - 1];
+      if (!approval) return;
+      recordDecision(threadId, 'unapproved', approval.fixupSha, approval.patchId);
+    },
+    [recordDecision],
+  );
+
   const addThread = useCallback(
     (params: AddThreadParams): DiffCommentThread => {
       const now = new Date().toISOString();
       const threadId = createId();
+      const commit =
+        targetCommitish && isCommitTarget(targetCommitish) ? targetCommitish : undefined;
       const newThread: DiffCommentThread = {
         id: threadId,
         filePath: params.filePath,
@@ -197,9 +292,12 @@ export function useDiffComments(
           side: params.side,
           line: params.line,
         },
-        codeSnapshot: params.codeSnapshot || {
-          content: '',
-          language: getLanguageFromPath(params.filePath),
+        codeSnapshot: {
+          ...(params.codeSnapshot ?? {
+            content: '',
+            language: getLanguageFromPath(params.filePath),
+          }),
+          commit,
         },
         messages: [
           {
@@ -216,7 +314,7 @@ export function useDiffComments(
       saveThreads(newThreads);
       return newThread;
     },
-    [saveThreads, threads],
+    [saveThreads, threads, targetCommitish],
   );
 
   const addComment = useCallback(
@@ -330,7 +428,8 @@ export function useDiffComments(
 
   const clearAllComments = useCallback(() => {
     saveThreads([]);
-  }, [saveThreads]);
+    saveDecisions([]);
+  }, [saveDecisions, saveThreads]);
 
   const clearAllCommentsWithOptions = useCallback(
     (options?: { resetAppliedCommentImportIds?: boolean }) => {
@@ -348,6 +447,7 @@ export function useDiffComments(
         ...existingData,
         threads: [],
         appliedCommentImportIds: [],
+        decisions: [],
       };
 
       storageService.saveDiffContextData(
@@ -360,6 +460,8 @@ export function useDiffComments(
         baseMode,
       );
       setThreads([]);
+      decisionsRef.current = { reviewKey, list: [] };
+      setDecisions([]);
     },
     [
       baseCommitish,
@@ -370,6 +472,7 @@ export function useDiffComments(
       currentCommitHash,
       loadDiffContextData,
       repositoryId,
+      reviewKey,
       baseMode,
     ],
   );
@@ -439,8 +542,8 @@ export function useDiffComments(
   );
 
   const generateAllCommentsPrompt = useCallback(
-    (context?: CommentPromptDiffContext): string => {
-      return formatAllCommentThreadsPrompt(threads.map(normalizeThread), context);
+    (context?: CommentPromptDiffContext, only: DiffCommentThread[] = threads): string => {
+      return formatAllCommentThreadsPrompt(only.map(normalizeThread), context);
     },
     [threads],
   );
@@ -453,7 +556,11 @@ export function useDiffComments(
     hasLoadedComments,
     comments,
     threads,
+    decisions,
     replaceThreads,
+    mergeDecisions,
+    recordDecision,
+    undoApproval,
     addComment,
     addThread,
     removeComment,

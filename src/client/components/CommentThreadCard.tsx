@@ -1,7 +1,14 @@
 import { Check, ChevronDown, ChevronRight, Copy, Edit2, MessageSquare, Trash2 } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 
-import { type CommentThread, type DiffCommentMessage } from '../../types/diff';
+import {
+  type AnchorStaleReason,
+  type CommentThread,
+  type DiffCommentMessage,
+} from '../../types/diff';
+import { isSameCommit } from '../../utils/diffSelection';
+import { reviewStateLabel } from '../../utils/reviewDecisions';
+import type { ThreadReviewControls } from '../contexts/FixupOverlayContext';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -187,8 +194,14 @@ function ThreadMessageItem({
   );
 }
 
+const OUTDATED_REASON_TITLE: Record<AnchorStaleReason, string> = {
+  missing: '지적한 줄이 지금 파일에 없어 수정을 겹쳐 그리지 않습니다',
+  ambiguous: '같은 내용의 줄이 여러 곳이라 자리를 정할 수 없어 수정을 겹쳐 그리지 않습니다',
+};
+
 interface CommentThreadCardProps {
   thread: CommentThread;
+  review?: ThreadReviewControls;
   showAuthorBadges?: boolean;
   confirmRootAction?: boolean;
   onGeneratePrompt: (thread: CommentThread) => string;
@@ -202,6 +215,7 @@ interface CommentThreadCardProps {
 
 export function CommentThreadCard({
   thread,
+  review,
   showAuthorBadges = false,
   confirmRootAction = true,
   onGeneratePrompt,
@@ -236,15 +250,27 @@ export function CommentThreadCard({
     }
   };
 
+  const anchorCommit =
+    review &&
+    thread.isOutdated &&
+    thread.anchorCommit &&
+    !(review.targetCommit && isSameCommit(thread.anchorCommit, review.targetCommit))
+      ? thread.anchorCommit
+      : null;
+
   const rootMessage = thread.messages[0];
   if (!rootMessage) return null;
 
   return (
     <div
       id={`comment-thread-${thread.id}`}
-      className={`rounded-md border border-yellow-600/50 border-l-4 border-l-yellow-400 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
-        onClick ? 'cursor-pointer hover:shadow-md' : ''
-      }`}
+      className={`rounded-md border border-l-4 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
+        review
+          ? thread.isOutdated
+            ? 'border-github-border border-l-github-danger'
+            : 'border-github-border border-l-github-text-muted'
+          : 'border-yellow-600/50 border-l-yellow-400 fixup-review:border-github-border fixup-review:border-l-github-text-muted'
+      } ${onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
       onClick={onClick}
     >
       <div className={`flex items-center justify-between gap-3 ${isCollapsed ? '' : 'mb-3'}`}>
@@ -268,13 +294,29 @@ export function CommentThreadCard({
           >
             {thread.file}:{lineLabel}
           </span>
+          {review && (
+            <span
+              data-testid="review-state-chip"
+              className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-border px-2 text-[10px] font-medium text-github-text-secondary"
+            >
+              {reviewStateLabel(review.state)}
+            </span>
+          )}
           {thread.isOutdated && (
             <span
-              className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-text-muted px-2 text-[10px] font-medium text-github-text-muted"
-              title="Code has changed since this comment was made"
+              className={`inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[10px] font-medium ${
+                review
+                  ? 'border-github-danger text-github-danger'
+                  : 'border-github-text-muted text-github-text-muted'
+              }`}
+              title={
+                review && thread.outdatedReason
+                  ? OUTDATED_REASON_TITLE[thread.outdatedReason]
+                  : 'Code has changed since this comment was made'
+              }
               aria-label="Outdated comment"
             >
-              Outdated
+              {review ? '낡음' : 'Outdated'}
             </span>
           )}
           {isCollapsed && (
@@ -349,6 +391,52 @@ export function CommentThreadCard({
               />
             </div>
           ))}
+
+          {review && (review.state === 'awaiting-approval' || review.state === 'approved') && (
+            <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+              {review.state === 'awaiting-approval' && review.fixupSha && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => review.onDecide(thread.id, 'approved', review.fixupSha ?? '')}
+                    className="min-h-10 flex-1 rounded border border-github-accent bg-github-accent/20 px-3 text-sm font-medium text-github-text-primary"
+                  >
+                    승인
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
+                    className="min-h-10 flex-1 rounded border border-github-danger bg-github-danger/20 px-3 text-sm font-medium text-github-text-primary"
+                  >
+                    거절
+                  </button>
+                </>
+              )}
+              {review.state === 'approved' && (
+                <button
+                  type="button"
+                  onClick={() => review.onUndoApproval(thread.id)}
+                  className="min-h-10 flex-1 rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-secondary"
+                >
+                  승인 취소
+                </button>
+              )}
+            </div>
+          )}
+
+          {review && anchorCommit && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                review.onOpenReviewAt(anchorCommit);
+              }}
+              className="min-h-10 w-full rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-primary"
+              title={`${anchorCommit} 커밋을 대상으로 리뷰를 다시 엽니다`}
+            >
+              이 지적을 달던 시점으로
+            </button>
+          )}
 
           <div
             className="ml-4 border-l border-github-border pl-3"
