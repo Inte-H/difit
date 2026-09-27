@@ -223,6 +223,12 @@ SHA로 고정한 리뷰는 파일 변경을 감시하지 않는다. 에이전트
    git commit -a --fixup=<리뷰 대상 SHA> --trailer "Review-Thread: <threadId>"
    ```
 
+   git이 오래돼 `--trailer`를 모르면 트레일러 줄을 메시지로 직접 넣는다. `fixup!` 제목 아래에 빈 줄을 두고 붙으므로 화면이 똑같이 읽는다.
+
+   ```sh
+   git commit -a --fixup=<리뷰 대상 SHA> -m "Review-Thread: <threadId>"
+   ```
+
    - 지적 하나에 fixup 커밋 하나만 둔다. 같은 지적에 fixup이 둘이면 화면이 어느 쪽을 판정할지 정하지 못한다.
    - 판정 전에 같은 지적을 또 고쳤다면 새 커밋을 만들지 말고 앞의 fixup 커밋에 합친다. 그 커밋이 맨 위면 `git commit -a --amend --no-edit`, 아니면 `git rebase -i`에서 그 커밋을 `edit`한다.
    - 지적 여러 개를 고쳤으면 지적마다 fixup 커밋을 따로 만든다.
