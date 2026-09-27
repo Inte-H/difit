@@ -253,7 +253,7 @@ function App() {
     return target && isCommitTarget(target) ? target : null;
   }, [resolvedSelection]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
-  const fixupsByThread = useThreadFixups(
+  const { fixupsByThread, loaded: fixupsLoaded } = useThreadFixups(
     diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,
     diffDataVersion,
   );
@@ -1143,6 +1143,7 @@ function App() {
   };
 
   const handleCopyAllComments = async () => {
+    if (!fixupsLoaded) return;
     if (openThreads.length === 0) {
       showCopyAllNotice('empty');
       return;
@@ -1398,7 +1399,7 @@ function App() {
               {!isMobile && threads.length > 0 && (
                 <CommentsDropdown
                   commentsCount={threads.length}
-                  openCount={openThreads.length}
+                  openCount={fixupsLoaded ? openThreads.length : null}
                   copyAllNotice={copyAllNotice}
                   onCopyAll={handleCopyAllComments}
                   onDeleteAll={clearAllComments}
@@ -1657,7 +1658,7 @@ function App() {
           <div className="fixed bottom-0 left-0 right-0 z-20 bg-github-bg-secondary border-t border-github-border px-4 py-2 flex justify-end">
             <CommentsDropdown
               commentsCount={threads.length}
-              openCount={openThreads.length}
+              openCount={fixupsLoaded ? openThreads.length : null}
               copyAllNotice={copyAllNotice}
               onCopyAll={handleCopyAllComments}
               onDeleteAll={clearAllComments}

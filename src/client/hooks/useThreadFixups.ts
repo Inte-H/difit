@@ -14,15 +14,17 @@ const sameFixups = (a: ThreadFixup[], b: ThreadFixup[]) =>
       fixup.threadIds.join() === b[index]?.threadIds.join(),
   );
 
+interface ThreadFixups {
+  fixupsByThread: Map<string, ThreadFixup[]>;
+  // False until the list for the current URL has been read at least once.
+  loaded: boolean;
+}
+
 // Also re-reads the list whenever the page comes back into view.
-export function useThreadFixups(
-  fixupsApiUrl: string | null,
-  refreshKey: number,
-): Map<string, ThreadFixup[]> {
-  const [fixups, setFixups] = useState<ThreadFixup[]>([]);
+export function useThreadFixups(fixupsApiUrl: string | null, refreshKey: number): ThreadFixups {
+  const [list, setList] = useState<{ url: string; fixups: ThreadFixup[] } | null>(null);
   const [returnCount, setReturnCount] = useState(0);
   const lastReturnAtRef = useRef(0);
-  const loadedUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     const handleReturn = () => {
@@ -42,8 +44,7 @@ export function useThreadFixups(
 
   useEffect(() => {
     if (!fixupsApiUrl) {
-      loadedUrlRef.current = null;
-      setFixups([]);
+      setList(null);
       return;
     }
 
@@ -56,17 +57,17 @@ export function useThreadFixups(
         }
         const payload = (await response.json()) as FixupsResponse;
         if (!cancelled) {
-          loadedUrlRef.current = fixupsApiUrl;
           const next = Array.isArray(payload.fixups) ? payload.fixups : [];
-          setFixups((current) => (sameFixups(current, next) ? current : next));
+          setList((current) =>
+            current?.url === fixupsApiUrl && sameFixups(current.fixups, next)
+              ? current
+              : { url: fixupsApiUrl, fixups: next },
+          );
         }
       })
       .catch((error) => {
-        console.error('Error fetching fixups:', error);
         // A failed refresh of the same review keeps the last list.
-        if (!cancelled && loadedUrlRef.current !== fixupsApiUrl) {
-          setFixups([]);
-        }
+        console.error('Error fetching fixups:', error);
       });
 
     return () => {
@@ -74,9 +75,11 @@ export function useThreadFixups(
     };
   }, [fixupsApiUrl, refreshKey, returnCount]);
 
-  return useMemo(() => {
+  const loaded = fixupsApiUrl === null || list?.url === fixupsApiUrl;
+  const fixups = loaded ? list?.fixups : undefined;
+  const fixupsByThread = useMemo(() => {
     const map = new Map<string, ThreadFixup[]>();
-    fixups.forEach((fixup) => {
+    fixups?.forEach((fixup) => {
       fixup.threadIds.forEach((threadId) => {
         const entry = map.get(threadId);
         if (entry) {
@@ -88,4 +91,6 @@ export function useThreadFixups(
     });
     return map;
   }, [fixups]);
+
+  return { fixupsByThread, loaded };
 }

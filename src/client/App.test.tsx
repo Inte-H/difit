@@ -282,6 +282,30 @@ describe('App Component - Clear Comments Functionality', () => {
       expect(mockGenerateAllCommentsPrompt).not.toHaveBeenCalled();
       expect(writeText).not.toHaveBeenCalled();
     });
+
+    it('should not copy before the fixup list says which threads are answered', async () => {
+      mockComments = [
+        createMockThread({ id: 'answered', filePath: 'test.ts', line: 10, body: 'Answered' }),
+      ];
+      vi.mocked(global.fetch).mockImplementation((input) => {
+        if (String(input).startsWith('/api/fixups')) return new Promise(() => {});
+        if (String(input) === '/api/revisions') {
+          return Promise.resolve({ ok: true, json: async () => null } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockDiffResponse,
+          blob: async () => ({ size: 1024 }),
+        } as Response);
+      });
+
+      renderApp();
+
+      const button = await screen.findByText('Checking fixups…');
+      fireEvent.click(button);
+
+      expect(mockGenerateAllCommentsPrompt).not.toHaveBeenCalled();
+    });
   });
 
   describe('Cleanup All Prompt Button', () => {
