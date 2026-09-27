@@ -91,7 +91,10 @@ describe('locateThread', () => {
   });
 
   it('is outdated when the snapshot occurs more than once', () => {
-    const thread = buildThread({ position: { side: 'new', line: 10 } });
+    const thread = buildThread({
+      position: { side: 'new', line: 10 },
+      codeSnapshot: { content: 'const value = 1;', commit: '7654321' },
+    });
     const index = buildFileLineIndex(
       buildFile([newLine(10, 'const value = 1;'), newLine(20, 'const value = 1;')]),
     );
@@ -127,6 +130,19 @@ describe('locateThread', () => {
     const index = buildFileLineIndex(buildFile([newLine(5, 'const other = 99;')]));
 
     expect(locateThread(thread, index, TARGET)).toEqual({ line: 10, isOutdated: false });
+  });
+
+  it('trusts the stored line of a thread saved without the commit it was made on', () => {
+    const thread = buildThread({
+      position: { side: 'new', line: 20 },
+      codeSnapshot: { content: '}' },
+    });
+
+    const repeated = buildFileLineIndex(buildFile([newLine(10, '}'), newLine(20, '}')]));
+    expect(locateThread(thread, repeated, TARGET)).toEqual({ line: 20, isOutdated: false });
+
+    const collapsed = buildFileLineIndex(buildFile([newLine(5, 'const other = 99;')]));
+    expect(locateThread(thread, collapsed, TARGET)).toEqual({ line: 20, isOutdated: false });
   });
 
   describe('without a target commit', () => {

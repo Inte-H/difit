@@ -54,11 +54,13 @@ export function locateThread(
       : { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
   }
 
+  // Storage and the server session are keyed by the target, so a thread without its commit was
+  // made on this one.
   const anchorCommit = thread.codeSnapshot?.commit;
   const relocation = relocateAnchor(
     anchor,
     lines,
-    anchorCommit !== undefined && isSameCommit(anchorCommit, targetCommit),
+    anchorCommit === undefined || isSameCommit(anchorCommit, targetCommit),
   );
   if (relocation.kind === 'stale') {
     return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };
