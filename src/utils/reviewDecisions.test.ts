@@ -117,6 +117,27 @@ describe('deriveThreadReviewState', () => {
     ).toBe('folded');
   });
 
+  it('asks for approval again when a fixup other than the approved one is waiting', () => {
+    const approved = [decision('approved', 'aaaa')];
+
+    expect(deriveThreadReviewState('t1', [fixup('bbbb')], approved)).toBe('awaiting-approval');
+    expect(pendingFixupFor('t1', [fixup('bbbb')], approved)?.sha).toBe('bbbb');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa'), fixup('bbbb')], approved)).toBe(
+      'awaiting-approval',
+    );
+  });
+
+  it('keeps an approval after a rebase rewrites the approved fixup’s sha', () => {
+    const rewritten = { ...fixup('b'.repeat(40)), patchId: 'same-change' };
+    const approved = [{ ...decision('approved', 'a'.repeat(40)), patchId: 'same-change' }];
+
+    expect(deriveThreadReviewState('t1', [rewritten], approved)).toBe('approved');
+  });
+
+  it('keeps an approval while the approved fixup is folded and before the fold record lands', () => {
+    expect(deriveThreadReviewState('t1', [], [decision('approved', 'aaaa')])).toBe('approved');
+  });
+
   it('ignores other threads’ decisions', () => {
     expect(
       deriveThreadReviewState(

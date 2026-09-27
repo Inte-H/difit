@@ -52,16 +52,19 @@ export function normalizeReviewDecisions(value: unknown): ReviewDecision[] {
   });
 }
 
+function matcherFor(decisions: ReviewDecision[]): (fixup: ThreadFixup) => boolean {
+  const shas = new Set(decisions.map((decision) => decision.fixupSha));
+  const patchIds = new Set(decisions.flatMap((decision) => decision.patchId ?? []));
+  return (fixup) => shas.has(fixup.sha) || patchIds.has(fixup.patchId);
+}
+
 function rejectionCheckFor(
   threadId: string,
   decisions: ReviewDecision[],
 ): (fixup: ThreadFixup) => boolean {
-  const rejections = decisions.filter(
-    (decision) => decision.threadId === threadId && decision.kind === 'rejected',
+  return matcherFor(
+    decisions.filter((decision) => decision.threadId === threadId && decision.kind === 'rejected'),
   );
-  const shas = new Set(rejections.map((decision) => decision.fixupSha));
-  const patchIds = new Set(rejections.flatMap((decision) => decision.patchId ?? []));
-  return (fixup) => shas.has(fixup.sha) || patchIds.has(fixup.patchId);
 }
 
 function latestApprovalOrUndo(own: ReviewDecision[]): ReviewDecision | undefined {
@@ -80,10 +83,13 @@ export function deriveThreadReviewState(
 ): ThreadReviewState {
   const own = decisions.filter((decision) => decision.threadId === threadId);
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
-  if (latestApprovalOrUndo(own)?.kind === 'approved') return 'approved';
 
   const isRejected = rejectionCheckFor(threadId, decisions);
-  if (fixups.some((fixup) => !isRejected(fixup))) return 'awaiting-approval';
+  const unrejected = fixups.filter((fixup) => !isRejected(fixup));
+  const approval = latestApprovalOrUndo(own);
+  // With no fixup left, the approved one is being folded and the fold record has not landed yet.
+  if (approval?.kind === 'approved' && unrejected.every(matcherFor([approval]))) return 'approved';
+  if (unrejected.length > 0) return 'awaiting-approval';
   return own.some((decision) => decision.kind === 'rejected') ? 'rejected' : 'awaiting-fix';
 }
 
