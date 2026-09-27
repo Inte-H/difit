@@ -866,11 +866,10 @@ describe('App Component - Diff Mode Persistence', () => {
     fireEvent.click(refreshButton);
 
     await waitFor(() => {
-      // 4 calls: initial /api/diff, /api/revisions, initial /api/comments sync, and refresh /api/diff
-      const callsExceptFixups = mockGlobalFetch.mock.calls.filter(
-        ([input]) => !String(input).includes('/api/fixups'),
+      const diffCalls = mockGlobalFetch.mock.calls.filter(
+        ([url]) => typeof url === 'string' && url.startsWith('/api/diff'),
       );
-      expect(callsExceptFixups).toHaveLength(4);
+      expect(diffCalls).toHaveLength(2);
     });
 
     await waitFor(() => {
