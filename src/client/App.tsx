@@ -21,7 +21,7 @@ import {
   isCommitTarget,
   normalizeBaseMode,
 } from '../utils/diffSelection';
-import { selectOpenThreads } from '../utils/reviewDecisions';
+import { mergeReviewDecisions, selectOpenThreads } from '../utils/reviewDecisions';
 
 import { Checkbox } from './components/Checkbox';
 import { CommentsDropdown, type CopyAllNotice } from './components/CommentsDropdown';
@@ -212,6 +212,8 @@ function App() {
     diffData?.repositoryId, // Repository identifier for storage isolation
     resolvedSelection?.baseMode,
   );
+  const decisionsRef = useRef(decisions);
+  decisionsRef.current = decisions;
 
   const showMobileCommentsBar = isMobile && threads.length > 0;
   const commentsContextKey = useMemo(() => {
@@ -273,7 +275,10 @@ function App() {
     }
   }, [bootstrappedCommentsKey, commentsContextKey]);
 
-  const fetchServerThreads = useCallback(async (): Promise<DiffCommentThread[]> => {
+  const fetchServerComments = useCallback(async (): Promise<{
+    threads: DiffCommentThread[];
+    decisions: ReviewDecision[];
+  }> => {
     const response = await fetch(getCommentApiUrl('/api/comments-json'));
     if (!response.ok) {
       throw new Error(`Failed to fetch comments: ${response.status} ${response.statusText}`);
@@ -287,10 +292,11 @@ function App() {
     if (typeof payload.version === 'number') {
       serverCommentVersionRef.current = payload.version;
     }
-    if (Array.isArray(payload.decisions) && payload.decisions.length > 0) {
-      mergeDecisions(payload.decisions);
+    const decisions = Array.isArray(payload.decisions) ? payload.decisions : [];
+    if (decisions.length > 0) {
+      mergeDecisions(decisions);
     }
-    return Array.isArray(payload.threads) ? payload.threads : [];
+    return { threads: Array.isArray(payload.threads) ? payload.threads : [], decisions };
   }, [getCommentApiUrl, mergeDecisions]);
 
   const syncThreadsToServer = useCallback(
@@ -586,7 +592,7 @@ function App() {
   }, []);
   const handleCommentsChanged = useCallback(async () => {
     try {
-      const serverThreads = await fetchServerThreads();
+      const { threads: serverThreads } = await fetchServerComments();
       skipNextCommentSyncRef.current = true;
       replaceThreads(serverThreads);
       if (commentsContextKey) {
@@ -595,7 +601,7 @@ function App() {
     } catch (commentsError) {
       console.error('Failed to refresh comments from server:', commentsError);
     }
-  }, [commentsContextKey, fetchServerThreads, replaceThreads]);
+  }, [commentsContextKey, fetchServerComments, replaceThreads]);
 
   // File watch for reload functionality - initialize with callback
   const { shouldReload, reload, watchState } = useFileWatch(
@@ -979,10 +985,11 @@ function App() {
 
     const bootstrapComments = async () => {
       try {
-        const serverThreads = await fetchServerThreads();
+        const { threads: serverThreads, decisions: serverDecisions } = await fetchServerComments();
         const nextThreads = shouldReplaceFromServer
           ? serverThreads
           : mergeCommentThreads(serverThreads, threads).threads;
+        const nextDecisions = mergeReviewDecisions(serverDecisions, decisionsRef.current);
         if (cancelled) {
           return;
         }
@@ -992,9 +999,11 @@ function App() {
 
         if (
           !shouldReplaceFromServer &&
-          JSON.stringify(serverThreads) !== JSON.stringify(nextThreads)
+          (JSON.stringify(serverThreads) !== JSON.stringify(nextThreads) ||
+            JSON.stringify(mergeReviewDecisions(serverDecisions, [])) !==
+              JSON.stringify(nextDecisions))
         ) {
-          await syncThreadsToServer(nextThreads);
+          await syncThreadsToServer(nextThreads, nextDecisions);
         }
       } catch (commentsError) {
         if (!cancelled) {
@@ -1021,7 +1030,7 @@ function App() {
   }, [
     bootstrappedCommentsKey,
     commentsContextKey,
-    fetchServerThreads,
+    fetchServerComments,
     hasLoadedComments,
     replaceThreads,
     syncThreadsToServer,

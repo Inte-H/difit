@@ -474,6 +474,60 @@ describe('App Component - Clear Comments Functionality', () => {
       );
     });
 
+    it('pushes locally recorded decisions to a server session that has none', async () => {
+      const thread = createMockThread({
+        id: 'thread-1',
+        filePath: 'test.ts',
+        line: 10,
+        body: 'Local comment',
+      });
+      mockComments = [thread];
+      mockDecisions = [
+        { threadId: 'thread-1', kind: 'rejected', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ];
+
+      vi.mocked(global.fetch).mockImplementation((input) => {
+        const url = String(input);
+
+        if (url.startsWith('/api/comments-json')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ threads: [thread], decisions: [] }),
+          } as Response);
+        }
+
+        if (url.startsWith('/api/comments')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ success: true }),
+          } as Response);
+        }
+
+        if (url === '/api/revisions') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => null,
+          } as Response);
+        }
+
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockDiffResponse,
+          blob: async () => ({ size: 1024 }),
+        } as Response);
+      });
+
+      renderApp();
+
+      await waitFor(() => {
+        const posts = vi
+          .mocked(global.fetch)
+          .mock.calls.filter(([url]) => String(url).startsWith('/api/comments?'));
+        const [, request] = posts[0] as [string, RequestInit];
+        expect(JSON.parse(String(request.body)).decisions).toEqual(mockDecisions);
+      });
+    });
+
     it('preserves server-provided comments after clearing local comments on startup', async () => {
       mockComments = [
         createMockThread({
@@ -637,6 +691,7 @@ describe('App Component - Comment sync', () => {
             ],
           }),
         ],
+        decisions: [],
       });
     });
 
