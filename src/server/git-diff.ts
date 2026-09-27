@@ -26,7 +26,8 @@ import {
 import { isGeneratedFile } from './generated-file-check.js';
 
 // Hashes every diff line with its surrounding context but not the line numbers, so a rebase keeps
-// the id. A fixup with no changed text lines (empty or binary-only) keeps its own sha.
+// the id unless it also changes those context lines. The context tells apart the same line added in
+// two places. A fixup with no changed text lines (empty or binary-only) keeps its own sha.
 function patchIdOf(sha: string, files: ThreadFixup['files']): string {
   const hash = createHash('sha1');
   let changedLines = 0;

@@ -218,7 +218,8 @@ export const REVIEW_THREAD_TRAILER = 'Review-Thread';
 export interface ThreadFixup {
   sha: string;
   shortSha: string;
-  // Same for two commits that add and remove the same lines in the same files.
+  // Same for two commits that make the same changes next to the same unchanged lines in the same
+  // files, wherever the line numbers fall.
   patchId: string;
   subject: string;
   threadIds: string[];

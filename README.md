@@ -227,7 +227,7 @@ SHA로 고정한 리뷰는 파일 변경을 감시하지 않는다. 에이전트
    - 판정 전에 같은 지적을 또 고쳤다면 새 커밋을 만들지 말고 앞의 fixup 커밋에 합친다. 그 커밋이 맨 위면 `git commit -a --amend --no-edit`, 아니면 `git rebase -i`에서 그 커밋을 `edit`한다.
    - 지적 여러 개를 고쳤으면 지적마다 fixup 커밋을 따로 만든다.
 
-3. 리뷰어가 거절하면 `comment get --format json`의 `decisions`에 `"kind": "rejected"`와 그 fixup의 SHA가 남는다. 거절된 fixup 커밋은 버리고(`git rebase -i`에서 `drop`) 새로 고쳐 다시 만든다.
+3. 리뷰어가 거절하면 `comment get --format json`의 `decisions`에 `"kind": "rejected"`와 그 fixup의 SHA가 남는다. 거절된 fixup 커밋은 버리고(`git rebase -i`에서 `drop`) 새로 고쳐 다시 만든다. 버리기 전에 rebase로 그 fixup 바로 옆 줄이 바뀌면 거절 표시가 풀릴 수 있으니, 거절된 fixup부터 버린다.
 
 ### 에이전트용: 승인된 수정 접기와 기록 올리기
 
