@@ -511,7 +511,7 @@ export const DiffChunk = memo(function DiffChunk({
 
                 {lineThreads.map((thread) => {
                   const layout = getCommentLayout(line);
-                  const review = threadReviewControls(overlay, thread.id);
+                  const review = threadReviewControls(overlay, thread);
                   return (
                     <React.Fragment key={thread.id}>
                       <FixupOverlayRow

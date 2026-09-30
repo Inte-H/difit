@@ -14,6 +14,9 @@ import type { CommentImport } from '../types/diff.js';
 const { fetch } = await import('undici');
 globalThis.fetch = fetch as any;
 const parserInstances = vi.hoisted(() => [] as any[]);
+const commitDirectEdit = vi.hoisted(() => vi.fn());
+
+vi.mock('./direct-edit.js', () => ({ commitDirectEdit }));
 
 // Helper function to get available port
 async function getAvailablePort(preferredPort: number): Promise<number> {
@@ -87,6 +90,12 @@ vi.mock('./git-diff.js', () => {
     });
     clearResolvedCommitCache = vi.fn();
     listThreadFixups = vi.fn().mockResolvedValue([]);
+    readThreadFixup = vi.fn(
+      async (sha: string) =>
+        ((await this.listThreadFixups()) as Array<{ sha: string }>).find(
+          (fixup) => fixup.sha === sha,
+        ) ?? null,
+    );
     getRevisionOptions = vi.fn().mockResolvedValue({
       branches: [{ name: 'main', current: true }],
       commits: [{ hash: 'abc1234', shortHash: 'abc1234', message: 'Test commit' }],
@@ -1774,6 +1783,335 @@ describe('Server Integration Tests', () => {
       const response2 = await fetch(`http://localhost:${port}/api/diff?ignoreWhitespace=true`);
       const data2 = (await response2.json()) as any;
       expect(data2.clearComments).toBe(true);
+    });
+  });
+  describe('Direct edit API', () => {
+    const FIXUP_SHA = 'f'.repeat(40);
+    const PINNED = '?base=def4567&target=abc1234';
+
+    async function startPinned(options: { host?: string | undefined } = {}) {
+      const result = await startServer({
+        selection: { targetCommitish: 'abc1234', baseCommitish: 'abc1234^' },
+        preferredPort: 9130,
+        ...options,
+      });
+      servers.push(result.server);
+      await fetch(`http://localhost:${result.port}/api/diff`);
+      return result.port;
+    }
+
+    const editBody = (overrides: Record<string, unknown> = {}) => ({
+      filePath: 'test.js',
+      startLine: 3,
+      endLine: 4,
+      original: ['// one', '// two'],
+      replacement: [],
+      ...overrides,
+    });
+
+    const postEdit = (port: number, body: unknown, query = PINNED) =>
+      fetch(`http://localhost:${port}/api/direct-edit${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    const answeredBy = (sha: string, threadId: string) => ({
+      sha,
+      shortSha: sha.slice(0, 7),
+      patchId: `patch-${sha}`,
+      subject: 'fixup! Test commit',
+      threadIds: [threadId],
+      files: [],
+    });
+
+    beforeEach(() => {
+      commitDirectEdit.mockReset();
+      commitDirectEdit.mockImplementation(async (_repo, _range, edit) => {
+        parserInstances
+          .at(-1)
+          ?.listThreadFixups.mockResolvedValue([answeredBy(FIXUP_SHA, edit.threadId)]);
+        return { ok: true, sha: FIXUP_SHA, fixupTarget: 'a'.repeat(40) };
+      });
+    });
+
+    it('accepts an edit spanning a hunk far larger than the default body limit', async () => {
+      const port = await startPinned();
+      const lines = Array.from({ length: 20_000 }, (_, index) => `// line ${index}`);
+
+      const response = await postEdit(
+        port,
+        editBody({ startLine: 1, endLine: lines.length, original: lines }),
+      );
+
+      expect(response.status).toBe(200);
+    });
+
+    it('opens an approved thread for an edit on lines with no comment', async () => {
+      const port = await startPinned();
+
+      const response = await postEdit(port, editBody());
+      const data = (await response.json()) as any;
+
+      expect(response.status).toBe(200);
+      expect(commitDirectEdit).toHaveBeenCalledWith(
+        expect.any(String),
+        { base: 'def4567', target: 'abc1234' },
+        expect.objectContaining({
+          filePath: 'test.js',
+          startLine: 3,
+          endLine: 4,
+          original: ['// one', '// two'],
+          replacement: [],
+          threadId: data.threadId,
+        }),
+      );
+      const { threads, decisions } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as any;
+      expect(threads).toHaveLength(1);
+      expect(threads[0]).toMatchObject({
+        id: data.threadId,
+        filePath: 'test.js',
+        position: { side: 'new', line: { start: 3, end: 4 } },
+        codeSnapshot: { content: '// one\n// two', commit: 'abc1234' },
+        messages: [{ author: 'reviewer-edit' }],
+      });
+      expect(decisions).toEqual([
+        expect.objectContaining({
+          threadId: data.threadId,
+          kind: 'approved',
+          fixupSha: FIXUP_SHA,
+          patchId: `patch-${FIXUP_SHA}`,
+        }),
+      ]);
+      const output = await (
+        await fetch(`http://localhost:${port}/api/comments-output${PINNED}`)
+      ).text();
+      expect(output).toContain('test.js:L3-L4 [승인됨]');
+    });
+
+    it('answers an existing comment with the edit and approves it', async () => {
+      const port = await startPinned();
+      await fetch(`http://localhost:${port}/api/comments${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: [{ id: 'c1', file: 'test.js', line: 3, body: 'Drop' }] }),
+      });
+
+      const response = await postEdit(port, editBody({ threadId: 'c1' }));
+
+      expect(response.status).toBe(200);
+      const { threads, decisions } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as any;
+      expect(threads).toHaveLength(1);
+      expect(threads[0].messages.map((message: any) => message.author)).toEqual([
+        undefined,
+        'reviewer-edit',
+      ]);
+      expect(decisions).toEqual([
+        expect.objectContaining({ threadId: 'c1', kind: 'approved', fixupSha: FIXUP_SHA }),
+      ]);
+    });
+
+    it('refuses to answer a comment that already has a fixup waiting', async () => {
+      const port = await startPinned();
+      await fetch(`http://localhost:${port}/api/comments${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: [{ id: 'c1', file: 'test.js', line: 3, body: 'Drop' }] }),
+      });
+      parserInstances
+        .at(-1)
+        ?.listThreadFixups.mockResolvedValue([answeredBy('b'.repeat(40), 'c1')]);
+
+      const response = await postEdit(port, editBody({ threadId: 'c1' }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: 'thread-has-fixup' });
+      expect(commitDirectEdit).not.toHaveBeenCalled();
+    });
+
+    it('answers a comment whose fixup was rejected', async () => {
+      const port = await startPinned();
+      await fetch(`http://localhost:${port}/api/comments${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: [{ id: 'c1', file: 'test.js', line: 3, body: 'Drop' }] }),
+      });
+      parserInstances
+        .at(-1)
+        ?.listThreadFixups.mockResolvedValue([answeredBy('b'.repeat(40), 'c1')]);
+      await fetch(`http://localhost:${port}/api/decisions${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          { threadId: 'c1', kind: 'rejected', fixupSha: 'b'.repeat(40), at: '2026-01-01' },
+        ]),
+      });
+
+      expect((await postEdit(port, editBody({ threadId: 'c1' }))).status).toBe(200);
+    });
+
+    it('does not reopen a thread that an earlier edit opened', async () => {
+      const port = await startPinned();
+      const { threadId } = (await (await postEdit(port, editBody())).json()) as any;
+      await fetch(`http://localhost:${port}/api/decisions${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          { threadId, kind: 'rejected', fixupSha: FIXUP_SHA, at: '2099-01-01' },
+        ]),
+      });
+
+      const response = await postEdit(port, editBody({ threadId }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ reason: 'thread-opened-by-edit' });
+    });
+
+    it('passes a refusal from git through and records nothing', async () => {
+      const port = await startPinned();
+      commitDirectEdit.mockResolvedValue({
+        ok: false,
+        reason: 'commit-failed',
+        output: 'lint says no',
+      });
+
+      const response = await postEdit(port, editBody());
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: expect.any(String),
+        reason: 'commit-failed',
+        output: 'lint says no',
+      });
+      const { threads, decisions } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as any;
+      expect(threads).toEqual([]);
+      expect(decisions).toEqual([]);
+    });
+
+    it('refuses a request addressed to another host name', async () => {
+      const port = await startPinned();
+      const { request } = await import('http');
+
+      const status = await new Promise<number | undefined>((resolvePromise, reject) => {
+        const req = request(
+          {
+            host: '127.0.0.1',
+            port,
+            path: `/api/direct-edit${PINNED}`,
+            method: 'POST',
+            headers: { Host: `rebound.example:${port}`, 'Content-Type': 'application/json' },
+          },
+          (res) => {
+            res.resume();
+            resolvePromise(res.statusCode);
+          },
+        );
+        req.on('error', reject);
+        req.end(JSON.stringify(editBody()));
+      });
+
+      expect(status).toBe(403);
+      expect(commitDirectEdit).not.toHaveBeenCalled();
+    });
+
+    it('accepts only a JSON body', async () => {
+      const port = await startPinned();
+
+      const response = await fetch(`http://localhost:${port}/api/direct-edit${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain' },
+        body: JSON.stringify(editBody()),
+      });
+
+      expect(response.status).toBe(415);
+      expect(commitDirectEdit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a missing file path', { filePath: undefined }],
+      ['a path outside the repository', { filePath: '../x.js' }],
+      ['a reversed range', { startLine: 4, endLine: 3 }],
+      ['original lines that do not cover the range', { original: ['// one'] }],
+      ['replacement that is not text lines', { replacement: [1] }],
+      ['an unknown thread', { threadId: 'nope' }],
+    ])('rejects %s', async (_label, overrides) => {
+      const port = await startPinned();
+
+      const response = await postEdit(port, editBody(overrides));
+
+      expect([400, 404]).toContain(response.status);
+      expect(commitDirectEdit).not.toHaveBeenCalled();
+    });
+
+    it('is off for a review of a branch name or HEAD', async () => {
+      const result = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9130,
+      });
+      servers.push(result.server);
+      const diff = (await (await fetch(`http://localhost:${result.port}/api/diff`)).json()) as any;
+
+      const response = await postEdit(result.port, editBody(), '');
+
+      expect(diff.directEditAvailable).toBe(false);
+      expect(response.status).toBe(403);
+      expect(commitDirectEdit).not.toHaveBeenCalled();
+    });
+
+    it.each([[undefined], ['']])('is on for a review pinned to a hash (host %j)', async (host) => {
+      const port = await startPinned({ host });
+      const diff = (await (await fetch(`http://localhost:${port}/api/diff`)).json()) as any;
+      expect(diff.directEditAvailable).toBe(true);
+    });
+
+    it('is off when the server listens beyond localhost', async () => {
+      const port = await startPinned({ host: '0.0.0.0' });
+      const diff = (await (await fetch(`http://localhost:${port}/api/diff`)).json()) as any;
+
+      const response = await postEdit(port, editBody());
+
+      expect(diff.directEditAvailable).toBe(false);
+      expect(response.status).toBe(403);
+      expect(commitDirectEdit).not.toHaveBeenCalled();
+    });
+
+    it('keeps the default body limit when the server listens beyond localhost', async () => {
+      const port = await startPinned({ host: '0.0.0.0' });
+      const lines = Array.from({ length: 20_000 }, (_, index) => `// line ${index}`);
+
+      const response = await postEdit(
+        port,
+        editBody({ startLine: 1, endLine: lines.length, original: lines }),
+      );
+
+      expect(response.status).toBe(413);
+    });
+
+    it('runs one edit at a time', async () => {
+      const port = await startPinned();
+      let running = 0;
+      let overlapped = false;
+      commitDirectEdit.mockImplementation(async (_repo, _range, edit) => {
+        running += 1;
+        overlapped ||= running > 1;
+        await new Promise((resolvePromise) => setTimeout(resolvePromise, 20));
+        running -= 1;
+        return { ok: true, sha: `${edit.threadId}`.padEnd(40, '0'), fixupTarget: 'a'.repeat(40) };
+      });
+
+      const responses = await Promise.all([
+        postEdit(port, editBody()),
+        postEdit(port, editBody({ startLine: 7, endLine: 7, original: ['x'] })),
+      ]);
+
+      expect(responses.map((response) => response.status)).toEqual([200, 200]);
+      expect(overlapped).toBe(false);
     });
   });
 });

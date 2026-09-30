@@ -724,22 +724,41 @@ export class GitDiffParser {
       }
     }
 
-    return entries.map(({ sha, subject, threadIds, diff }) => {
-      const files = this.parseUnifiedDiff(diff).map(({ path, oldPath, status, chunks }) => ({
-        path,
-        oldPath,
-        status,
-        chunks,
-      }));
-      return {
+    return entries.map((entry) => this.toThreadFixup(entry));
+  }
+
+  // A commit that is not a merge, read the way listThreadFixups reads it.
+  async readThreadFixup(sha: string): Promise<ThreadFixup | null> {
+    const [entry] = parseFixupLog(
+      await this.git.raw([
+        'log',
+        '-1',
+        '--no-show-signature',
+        '-p',
+        '--no-ext-diff',
+        '--color=never',
+        FIXUP_LOG_FORMAT,
         sha,
-        shortSha: shortHash(sha),
-        patchId: patchIdOf(sha, files),
-        subject,
-        threadIds,
-        files,
-      };
-    });
+      ]),
+    );
+    return entry ? this.toThreadFixup(entry) : null;
+  }
+
+  private toThreadFixup({ sha, subject, threadIds, diff }: FixupLogEntry): ThreadFixup {
+    const files = this.parseUnifiedDiff(diff).map(({ path, oldPath, status, chunks }) => ({
+      path,
+      oldPath,
+      status,
+      chunks,
+    }));
+    return {
+      sha,
+      shortSha: shortHash(sha),
+      patchId: patchIdOf(sha, files),
+      subject,
+      threadIds,
+      files,
+    };
   }
 
   parseStdinDiff(diffContent: string): DiffResponse {

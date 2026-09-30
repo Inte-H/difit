@@ -13,6 +13,10 @@ const repos: string[] = [];
 
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'difit-fixups-home-'));
+  // A test run started from a commit hook would otherwise point every git call at that commit.
+  process.env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  );
   Object.assign(process.env, {
     HOME: home,
     XDG_CONFIG_HOME: home,
@@ -250,6 +254,24 @@ describe('listThreadFixups against a real repository', () => {
     expect(many.fixups).toHaveLength(15);
     expect(many.calls).toEqual(few.calls);
     expect(many.calls.length).toBeLessThanOrEqual(4);
+  });
+
+  it('reads one fixup the same as the list does', async () => {
+    const repo = createRepo();
+    commit(repo, 'base', { 'f.txt': lines(5, 'f') });
+    const target = git(repo, 'rev-parse', 'HEAD');
+    commit(repo, 'first\n\nReview-Thread: t1', { 'f.txt': lines(5, 'f') + 'f6\n' });
+    const second = commit(repo, 'second\n\nReview-Thread: t2', {
+      'f.txt': lines(5, 'f').replace('f2\n', 'f2 fixed\n') + 'f6\n',
+    });
+
+    const parser = new GitDiffParser(repo);
+    const listed = await parser.listThreadFixups({
+      targetCommitish: target,
+      baseCommitish: target,
+    });
+
+    expect(await parser.readThreadFixup(second)).toEqual(listed.find((f) => f.sha === second));
   });
 
   it('reads fixups that are not merges with a single git log', async () => {

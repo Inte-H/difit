@@ -54,6 +54,7 @@ export interface DiffResponse {
   ignoreWhitespace?: boolean;
   isEmpty?: boolean;
   openInEditorAvailable?: boolean;
+  directEditAvailable?: boolean;
   baseCommitish?: string;
   targetCommitish?: string;
   requestedBaseCommitish?: string;
@@ -210,10 +211,14 @@ export type ThreadReviewState =
   | 'awaiting-approval'
   | 'approved'
   | 'folded'
-  | 'rejected';
+  | 'rejected'
+  // A thread the reviewer opened by editing, whose edit was then rejected; nobody fixes it again.
+  | 'withdrawn';
 
 // A commit carrying a `Review-Thread: <threadId>` trailer is the agent's answer to that thread.
 export const REVIEW_THREAD_TRAILER = 'Review-Thread';
+
+export const REVIEWER_EDIT_AUTHOR = 'reviewer-edit';
 
 export interface ThreadFixup {
   sha: string;
@@ -225,6 +230,46 @@ export interface ThreadFixup {
   threadIds: string[];
   files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks'>>;
 }
+
+export interface DirectEditRequest {
+  filePath: string;
+  // 1-based and inclusive, on the new side of the reviewed diff.
+  startLine: number;
+  endLine: number;
+  original: string[];
+  replacement: string[];
+  threadId?: string;
+}
+
+export type DirectEditRejection =
+  | 'stale-view'
+  | 'target-not-in-head'
+  | 'detached-head'
+  | 'not-a-file'
+  | 'binary'
+  | 'not-utf8'
+  | 'missing-at-head'
+  | 'dirty-file'
+  | 'operation-in-progress'
+  | 'mixed-commits'
+  | 'conflict'
+  | 'fold-conflict'
+  | 'no-change'
+  | 'head-moved'
+  | 'commit-failed'
+  | 'thread-has-fixup'
+  | 'thread-opened-by-edit';
+
+export type DirectEditResponse =
+  | {
+      success: true;
+      sha: string;
+      threadId: string;
+      version: number;
+      threads: DiffCommentThread[];
+      decisions: ReviewDecision[];
+    }
+  | { error: string; reason?: DirectEditRejection; output?: string };
 
 export interface FixupsResponse {
   // Commits between the reviewed target and HEAD that carry the trailer, oldest first.
