@@ -218,6 +218,8 @@ export type ThreadReviewState =
 // A commit carrying a `Review-Thread: <threadId>` trailer is the agent's answer to that thread.
 export const REVIEW_THREAD_TRAILER = 'Review-Thread';
 
+export const AUTOSQUASH_PREFIX = /^(?:fixup|squash|amend)! /;
+
 export const REVIEWER_EDIT_AUTHOR = 'reviewer-edit';
 
 export interface ThreadFixup {
@@ -271,9 +273,18 @@ export type DirectEditResponse =
     }
   | { error: string; reason?: DirectEditRejection; output?: string };
 
+// Where the ref the review was opened by now points, once commits other than fixups follow the target.
+export interface NewerTarget {
+  ref: string;
+  commit: string;
+  // Counts only the commits that are not fixups.
+  commitCount: number;
+}
+
 export interface FixupsResponse {
   // Commits between the reviewed target and HEAD that carry the trailer, oldest first.
   fixups: ThreadFixup[];
+  newerTarget?: NewerTarget;
 }
 
 // The saved snapshot is gone from the file, or occurs in more than one place.

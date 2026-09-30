@@ -76,6 +76,7 @@ interface ServerOptions {
   diffMode?: DiffMode;
   repoPath?: string;
   contextLines?: number;
+  followedRef?: string;
 }
 
 const GENERATED_STATUS_CACHE_TTL_MS = 60_000;
@@ -914,9 +915,19 @@ export async function startServer(options: ServerOptions): Promise<{
       return;
     }
     const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    const { followedRef } = options;
     try {
-      const fixups = await parser.listThreadFixups(selection);
-      res.json({ fixups } satisfies FixupsResponse);
+      const [fixups, newerTarget] = await Promise.all([
+        parser.listThreadFixups(selection),
+        followedRef
+          ? parser.findNewerTarget(
+              selection.targetCommitish,
+              followedRef,
+              initialSelection.targetCommitish,
+            )
+          : null,
+      ]);
+      res.json({ fixups, ...(newerTarget ? { newerTarget } : {}) } satisfies FixupsResponse);
     } catch (error) {
       console.error('Error listing fixups:', error);
       res.status(500).json({

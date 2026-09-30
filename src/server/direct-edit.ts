@@ -4,7 +4,11 @@ import { existsSync, promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
-import { type DirectEditRejection, REVIEW_THREAD_TRAILER } from '../types/diff.js';
+import {
+  AUTOSQUASH_PREFIX,
+  type DirectEditRejection,
+  REVIEW_THREAD_TRAILER,
+} from '../types/diff.js';
 
 export interface DirectEdit {
   filePath: string;
@@ -296,14 +300,12 @@ interface TodoCommit {
   subject: string;
 }
 
-const SQUASH_PREFIX = /^(?:fixup|squash|amend)! /;
-
 // Resolves a fixup, squash or amend subject the way `rebase --autosquash` does: an exact subject
 // first, then a commit id, then a subject prefix.
 function squashTarget(earlier: TodoCommit[], subject: string): TodoCommit | undefined {
-  if (!SQUASH_PREFIX.test(subject)) return undefined;
+  if (!AUTOSQUASH_PREFIX.test(subject)) return undefined;
   let named = subject;
-  while (SQUASH_PREFIX.test(named)) named = named.replace(SQUASH_PREFIX, '');
+  while (AUTOSQUASH_PREFIX.test(named)) named = named.replace(AUTOSQUASH_PREFIX, '');
   return (
     earlier.find((commit) => commit.subject === named) ??
     (/^[0-9a-f]{4,64}$/.test(named)

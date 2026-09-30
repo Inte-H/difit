@@ -36,6 +36,7 @@ import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
 import { Logo } from './components/Logo';
+import { NewerTargetButton } from './components/NewerTargetButton';
 import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -273,7 +274,11 @@ function App() {
   }, [diffData?.requestedTargetCommitish, resolvedSelection]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
   const [directEditCount, setDirectEditCount] = useState(0);
-  const { fixupsByThread, loaded: fixupsLoaded } = useThreadFixups(
+  const {
+    fixupsByThread,
+    newerTarget,
+    loaded: fixupsLoaded,
+  } = useThreadFixups(
     diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,
     diffDataVersion + directEditCount,
   );
@@ -1458,6 +1463,11 @@ function App() {
                   }
                 />
               )}
+              <NewerTargetButton
+                newerTarget={newerTarget}
+                onReopen={openReviewAt}
+                compact={isMobile}
+              />
               {/* File Watch Reload Button */}
               <ReloadButton
                 shouldReload={shouldReload}

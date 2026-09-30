@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { execFileSync } from 'child_process';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 
 import {
   detectStdinSource,
   parseCommentOptions,
+  pinSelection,
   shortHash,
   shouldReadStdin,
   validateCommitish,
@@ -447,6 +452,92 @@ describe('CLI Utils', () => {
     it('should handle short hashes', () => {
       expect(shortHash('abc')).toBe('abc');
       expect(shortHash('')).toBe('');
+    });
+  });
+
+  describe('pinSelection', () => {
+    const savedEnv = { ...process.env };
+    let repo: string;
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+
+    beforeAll(() => {
+      // A test run started from a commit hook would otherwise point every git call at that commit.
+      process.env = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+      );
+      Object.assign(process.env, {
+        GIT_CONFIG_NOSYSTEM: '1',
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_AUTHOR_NAME: 'difit',
+        GIT_AUTHOR_EMAIL: 'difit@example.com',
+        GIT_COMMITTER_NAME: 'difit',
+        GIT_COMMITTER_EMAIL: 'difit@example.com',
+      });
+      repo = mkdtempSync(join(tmpdir(), 'difit-pin-'));
+      git('init', '-q');
+      git('checkout', '-q', '-b', 'main');
+      git('commit', '-q', '--allow-empty', '-m', 'first');
+      git('commit', '-q', '--allow-empty', '-m', 'second');
+    });
+
+    afterAll(() => {
+      process.env = savedEnv;
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it('pins a single-commit review by name and follows the branch HEAD is on', () => {
+      const head = git('rev-parse', 'HEAD');
+
+      expect(pinSelection({ baseCommitish: 'HEAD^', targetCommitish: 'HEAD' }, repo)).toEqual({
+        selection: { baseCommitish: `${head}^`, targetCommitish: head },
+        followedRef: 'refs/heads/main',
+      });
+    });
+
+    it('pins the base it is compared with, keeping the merge-base mode', () => {
+      const [first, head] = [git('rev-parse', 'HEAD~1'), git('rev-parse', 'HEAD')];
+
+      expect(
+        pinSelection(
+          { baseCommitish: 'HEAD~1', targetCommitish: 'main', baseMode: 'merge-base' },
+          repo,
+        ),
+      ).toEqual({
+        selection: { baseCommitish: first, targetCommitish: head, baseMode: 'merge-base' },
+        followedRef: 'refs/heads/main',
+      });
+    });
+
+    it('follows no name when the target is a hash or a revision expression', () => {
+      const [first, head] = [git('rev-parse', 'HEAD~1'), git('rev-parse', 'HEAD')];
+
+      expect(pinSelection({ baseCommitish: 'HEAD~1', targetCommitish: head }, repo)).toEqual({
+        selection: { baseCommitish: first, targetCommitish: head },
+      });
+      expect(pinSelection({ baseCommitish: 'HEAD~1^', targetCommitish: 'HEAD~1' }, repo)).toEqual({
+        selection: { baseCommitish: `${first}^`, targetCommitish: first },
+      });
+    });
+
+    it('follows no name when HEAD is detached', () => {
+      const head = git('rev-parse', 'HEAD');
+      git('checkout', '-q', '--detach');
+      try {
+        expect(pinSelection({ baseCommitish: 'HEAD^', targetCommitish: 'HEAD' }, repo)).toEqual({
+          selection: { baseCommitish: `${head}^`, targetCommitish: head },
+        });
+      } finally {
+        git('checkout', '-q', 'main');
+      }
+    });
+
+    it.each([
+      { baseCommitish: 'staged', targetCommitish: 'working' },
+      { baseCommitish: 'HEAD', targetCommitish: '.' },
+      { baseCommitish: 'missing^', targetCommitish: 'missing' },
+    ])('leaves $targetCommitish as named', (selection) => {
+      expect(pinSelection(selection, repo)).toEqual({ selection });
     });
   });
 });
