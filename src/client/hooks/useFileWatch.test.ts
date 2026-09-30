@@ -204,6 +204,60 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
     });
+
+    it('keeps the connection when the comments callback changes and calls the latest one', () => {
+      const first = vi.fn(async () => {});
+      const second = vi.fn(async () => {});
+      const { rerender } = renderHook(
+        ({ onCommentsChanged }) => useFileWatch(undefined, onCommentsChanged),
+        {
+          initialProps: { onCommentsChanged: first },
+        },
+      );
+
+      rerender({ onCommentsChanged: second });
+      act(() => {
+        MockEventSource.instances[0]!.dispatchMessage(
+          JSON.stringify({
+            type: 'commentsChanged',
+            version: 2,
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      });
+
+      expect(MockEventSource.instances).toHaveLength(1);
+      expect(MockEventSource.instances[0]!.close).not.toHaveBeenCalled();
+      expect(first).not.toHaveBeenCalled();
+      expect(second).toHaveBeenCalledTimes(1);
+    });
+
+    it('reconnects after giving up when the comments callback changes', () => {
+      vi.useFakeTimers();
+      try {
+        const { result, rerender } = renderHook(
+          ({ onCommentsChanged }) => useFileWatch(undefined, onCommentsChanged),
+          { initialProps: { onCommentsChanged: vi.fn(async () => {}) } },
+        );
+
+        for (let attempt = 0; attempt <= 5; attempt += 1) {
+          const eventSource = MockEventSource.instances.at(-1)!;
+          eventSource.onopen = null;
+          act(() => {
+            eventSource.dispatchError();
+            vi.advanceTimersByTime(3000);
+          });
+        }
+        expect(MockEventSource.instances).toHaveLength(6);
+        expect(result.current.error).toBe('Lost connection to file watch service');
+
+        rerender({ onCommentsChanged: vi.fn(async () => {}) });
+
+        expect(MockEventSource.instances).toHaveLength(7);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   describe('reload functionality', () => {

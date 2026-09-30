@@ -68,7 +68,7 @@ export function CommentForm({
       className={
         embedded
           ? 'bg-transparent'
-          : 'm-2 mx-3 rounded-md border border-yellow-600/50 border-l-4 border-l-yellow-400 bg-github-bg-tertiary p-3'
+          : 'm-2 mx-3 rounded-md border border-yellow-600/50 border-l-4 border-l-yellow-400 fixup-review:border-github-border fixup-review:border-l-github-text-muted bg-github-bg-tertiary p-3'
       }
       onSubmit={handleSubmit}
       onClick={(e) => e.stopPropagation()}

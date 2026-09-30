@@ -2,6 +2,8 @@ import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import type { DiffContextStorage } from '../../types/diff';
+import { storageService } from '../services/StorageService';
+
 import { useDiffComments } from './useDiffComments';
 
 // Mock StorageService
@@ -21,6 +23,7 @@ vi.mock('../services/StorageService', () => ({
           threads,
           viewedFiles: mockDiffContextData?.viewedFiles ?? [],
           appliedCommentImportIds: mockDiffContextData?.appliedCommentImportIds ?? [],
+          decisions: mockDiffContextData?.decisions ?? [],
         };
       },
     ),
@@ -219,6 +222,111 @@ const next = true;
     });
   });
 
+  describe('review decisions', () => {
+    it('keeps a decision recorded while an older merge callback was in flight', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const staleMerge = result.current.mergeDecisions;
+
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40));
+      });
+      act(() => {
+        staleMerge([]);
+      });
+
+      expect(result.current.decisions.map((decision) => decision.threadId)).toEqual(['t1']);
+    });
+
+    it('leaves storage and state alone when merged decisions change nothing', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40));
+      });
+      const before = result.current.decisions;
+      vi.mocked(storageService.saveDiffContextData).mockClear();
+
+      act(() => {
+        result.current.mergeDecisions(structuredClone(before));
+      });
+
+      expect(storageService.saveDiffContextData).not.toHaveBeenCalled();
+      expect(result.current.decisions).toBe(before);
+    });
+
+    it('ignores a merge from a review the page has switched away from', () => {
+      const { result, rerender } = renderHook(
+        ({ target }) => useDiffComments('main', target, 'abc123'),
+        { initialProps: { target: 'review-a' } },
+      );
+      const mergeForReviewA = result.current.mergeDecisions;
+
+      rerender({ target: 'review-b' });
+      act(() => {
+        mergeForReviewA([
+          {
+            threadId: 't1',
+            kind: 'approved',
+            fixupSha: 'a'.repeat(40),
+            at: '2026-01-01T00:00:00Z',
+          },
+        ]);
+      });
+
+      expect(result.current.decisions).toEqual([]);
+    });
+
+    it.each([undefined, { resetAppliedCommentImportIds: true }])(
+      'drops the decisions along with the threads when all comments are cleared (%o)',
+      (options) => {
+        const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+        act(() => {
+          result.current.recordDecision('t1', 'rejected', 'a'.repeat(40));
+        });
+
+        act(() => {
+          result.current.clearAllComments(options);
+        });
+
+        expect(result.current.decisions).toEqual([]);
+        expect(mockDiffContextData?.decisions).toEqual([]);
+      },
+    );
+
+    it('forgets the previous review’s decisions when there is no review to show', () => {
+      const { result, rerender } = renderHook(
+        ({ target }) => useDiffComments('main', target, 'abc123'),
+        { initialProps: { target: 'review-a' as string | undefined } },
+      );
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40));
+      });
+
+      rerender({ target: undefined });
+
+      expect(result.current.decisions).toEqual([]);
+    });
+
+    it('records an undo instead of deleting the approval', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+
+      act(() => {
+        result.current.recordDecision('t1', 'approved', 'a'.repeat(40), 'change-1');
+      });
+      act(() => {
+        result.current.undoApproval('t1');
+      });
+
+      expect(result.current.decisions.map((decision) => decision.kind)).toEqual([
+        'approved',
+        'unapproved',
+      ]);
+      expect(result.current.decisions[1]).toMatchObject({
+        fixupSha: 'a'.repeat(40),
+        patchId: 'change-1',
+      });
+    });
+  });
+
   describe('comment CRUD operations', () => {
     it('should add comment with code snapshot', () => {
       const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
@@ -246,6 +354,22 @@ const next = true;
       expect(comment!.position.line).toBe(15);
       expect(comment!.codeSnapshot?.content).toBe('const x = 42;');
       expect(comment!.codeSnapshot?.language).toBe('typescript');
+      expect(comment!.codeSnapshot?.commit).toBe('feature-branch');
+    });
+
+    it('records no commit on a thread made against the working tree', () => {
+      const { result } = renderHook(() => useDiffComments('main', 'working', 'abc123'));
+
+      act(() => {
+        result.current.addThread({
+          filePath: 'src/utils/test.ts',
+          body: 'Test comment',
+          side: 'new',
+          line: 15,
+        });
+      });
+
+      expect(result.current.threads[0]?.codeSnapshot?.commit).toBeUndefined();
     });
 
     it('should remove comment by id', () => {

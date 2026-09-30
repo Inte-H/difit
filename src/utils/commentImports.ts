@@ -88,10 +88,14 @@ function normalizeCodeSnapshot(value: unknown): DiffCommentCodeSnapshot | undefi
   if (value.language !== undefined && typeof value.language !== 'string') {
     throw new Error('Invalid comment import field: codeSnapshot.language');
   }
+  if (value.commit !== undefined && typeof value.commit !== 'string') {
+    throw new Error('Invalid comment import field: codeSnapshot.commit');
+  }
 
   return {
     content: value.content,
     language: value.language,
+    commit: value.commit,
   };
 }
 
@@ -311,6 +315,7 @@ function cloneCodeSnapshot(
   return {
     content: snapshot.content,
     language: snapshot.language,
+    commit: snapshot.commit,
   };
 }
 
@@ -471,6 +476,7 @@ export function serializeCommentImports(commentImports: CommentImport[]): string
         ? {
             content: commentImport.codeSnapshot.content,
             language: commentImport.codeSnapshot.language,
+            commit: commentImport.codeSnapshot.commit,
           }
         : undefined,
     })),

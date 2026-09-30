@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 
 import {
   type DiffFile,
@@ -8,6 +8,11 @@ import {
   type LineNumber,
 } from '../../types/diff';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
+import {
+  EMPTY_FIXUP_OVERLAY,
+  FixupOverlayProvider,
+  type FixupOverlayState,
+} from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import { type MergedChunk } from '../hooks/useExpandedLines';
 import { useFileLevelTokens } from '../hooks/useFileLevelTokens';
@@ -48,6 +53,7 @@ interface DiffViewerProps {
   cursor?: CursorPosition | null;
   isFocused?: boolean;
   fileIndex?: number;
+  fixupOverlay?: FixupOverlayState;
   mergedChunks: MergedChunk[];
   expandLines: (
     file: DiffFile,
@@ -208,6 +214,7 @@ export const DiffViewer = memo(function DiffViewer({
   prefetchFileContent,
   isExpandLoading,
   diffVersion,
+  fixupOverlay,
 }: DiffViewerProps) {
   const isCollapsed = collapsedFiles.has(file.path);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -332,7 +339,6 @@ export const DiffViewer = memo(function DiffViewer({
     reloadKey: diffVersion,
   });
 
-  const lineNumberWidth = '4em';
   const ViewerComponent = viewer.Component;
   const viewerProps: DiffViewerBodyProps = {
     file,
@@ -363,8 +369,7 @@ export const DiffViewer = memo(function DiffViewer({
   return (
     <div
       ref={containerRef}
-      className="bg-github-bg-primary"
-      style={{ '--line-number-width': lineNumberWidth } as React.CSSProperties}
+      className="bg-github-bg-primary [--line-number-width:4em] max-md:[--line-number-width:30px]"
     >
       <DiffViewerHeader
         file={file}
@@ -379,9 +384,11 @@ export const DiffViewer = memo(function DiffViewer({
 
       {!isCollapsed && (
         <FileLevelTokensProvider value={fileLevelTokens}>
-          <div className="overflow-y-auto">
-            <ViewerComponent {...viewerProps} />
-          </div>
+          <FixupOverlayProvider value={fixupOverlay ?? EMPTY_FIXUP_OVERLAY}>
+            <div className="overflow-y-auto">
+              <ViewerComponent {...viewerProps} />
+            </div>
+          </FixupOverlayProvider>
         </FileLevelTokensProvider>
       )}
     </div>

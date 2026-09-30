@@ -94,6 +94,25 @@ describe('commentImports', () => {
       expect(imports[1]?.type).toBe('reply');
     });
 
+    it('keeps the commit a snapshot was taken from', () => {
+      const imports = parseCommentImportValue(
+        JSON.stringify({
+          type: 'thread',
+          filePath: 'src/example.ts',
+          position: { side: 'new', line: 10 },
+          body: 'Review comment',
+          codeSnapshot: { content: 'const value = 1;', commit: '6e4f6d5' },
+        }),
+      );
+
+      expect(imports[0]?.codeSnapshot).toEqual({
+        content: 'const value = 1;',
+        language: undefined,
+        commit: '6e4f6d5',
+      });
+      expect(mergeCommentImports([], imports).threads[0]?.codeSnapshot?.commit).toBe('6e4f6d5');
+    });
+
     it('rejects malformed json', () => {
       expect(() => parseCommentImportValue('{')).toThrow('Invalid --comment JSON');
     });
@@ -139,7 +158,7 @@ describe('commentImports', () => {
             author: 'AI',
             createdAt: '2024-01-01T00:00:00.000Z',
             updatedAt: '2024-01-01T00:00:00.000Z',
-            codeSnapshot: { content: 'const value = 1;', language: undefined },
+            codeSnapshot: { content: 'const value = 1;', language: undefined, commit: undefined },
           },
         ]),
       );

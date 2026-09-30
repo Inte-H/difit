@@ -1,16 +1,16 @@
-import type { DiffCommentThread, DiffFile } from '../../types/diff';
+import type { AnchorStaleReason, DiffCommentThread, DiffFile, LineNumber } from '../../types/diff';
+import { noVisibleLineContradictsAnchor, relocateAnchor } from '../../utils/anchorRelocation';
+import { isSameCommit } from '../../utils/diffSelection';
 
 export interface FileLineIndex {
   old: Map<number, string>;
   new: Map<number, string>;
 }
 
-function trimTrailingWhitespace(line: string): string {
-  return line.replace(/[ \t]+$/, '');
-}
-
-function splitSnapshot(content: string): string[] {
-  return content.replace(/\r\n/g, '\n').split('\n').map(trimTrailingWhitespace);
+export interface ThreadPlacement {
+  line: LineNumber;
+  isOutdated: boolean;
+  outdatedReason?: AnchorStaleReason;
 }
 
 export function buildFileLineIndex(file: DiffFile): FileLineIndex {
@@ -31,29 +31,39 @@ export function buildFileLineIndex(file: DiffFile): FileLineIndex {
   return { old: oldIndex, new: newIndex };
 }
 
-export function isThreadOutdated(
+const toLineNumber = (line: DiffCommentThread['position']['line']): LineNumber =>
+  typeof line === 'number' ? line : [line.start, line.end];
+
+// A stale thread keeps its stored position. Without a target commit (working tree, index, stdin)
+// the thread is never moved, only checked at its stored line.
+export function locateThread(
   thread: DiffCommentThread,
   index: FileLineIndex | undefined,
-): boolean {
+  targetCommit: string | null,
+): ThreadPlacement {
+  const storedLine = toLineNumber(thread.position.line);
   const snapshot = thread.codeSnapshot?.content;
-  if (snapshot === undefined) return false;
+  if (snapshot === undefined) return { line: storedLine, isOutdated: false };
+  if (!index) return { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
 
-  if (!index) return true;
-
-  const sideIndex = thread.position.side === 'old' ? index.old : index.new;
-  const range =
-    typeof thread.position.line === 'number'
-      ? { start: thread.position.line, end: thread.position.line }
-      : thread.position.line;
-
-  const snapshotLines = splitSnapshot(snapshot);
-
-  for (let i = 0; i <= range.end - range.start; i++) {
-    const current = sideIndex.get(range.start + i);
-    if (current === undefined) continue;
-    const expected = snapshotLines[i] ?? '';
-    if (trimTrailingWhitespace(current) !== expected) return true;
+  const anchor = { line: thread.position.line, content: snapshot };
+  const lines = thread.position.side === 'old' ? index.old : index.new;
+  if (targetCommit === null) {
+    return noVisibleLineContradictsAnchor(anchor, lines)
+      ? { line: storedLine, isOutdated: false }
+      : { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
   }
 
-  return false;
+  // Storage and the server session are keyed by the target, so a thread without its commit was
+  // made on this one.
+  const anchorCommit = thread.codeSnapshot?.commit;
+  const relocation = relocateAnchor(
+    anchor,
+    lines,
+    anchorCommit === undefined || isSameCommit(anchorCommit, targetCommit),
+  );
+  if (relocation.kind === 'stale') {
+    return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };
+  }
+  return { line: toLineNumber(relocation.line), isOutdated: false };
 }

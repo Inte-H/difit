@@ -1,17 +1,78 @@
+import { createHash } from 'crypto';
 import { simpleGit, type SimpleGit } from 'simple-git';
 import { isAbsolute, resolve, sep } from 'path';
 
-import { validateDiffArguments, shortHash, createCommitRangeString } from '../cli/utils.js';
+import {
+  validateCommitish,
+  validateDiffArguments,
+  shortHash,
+  createCommitRangeString,
+} from '../cli/utils.js';
 import {
   type DiffChunk,
   type DiffFile,
   type DiffLine,
   type DiffResponse,
   type DiffSelection,
+  type ThreadFixup,
+  REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
-import { getMergeBaseTargetRef, normalizeBaseMode } from '../utils/diffSelection.js';
+import {
+  getMergeBaseTargetRef,
+  isCommitTarget,
+  normalizeBaseMode,
+} from '../utils/diffSelection.js';
 
 import { isGeneratedFile } from './generated-file-check.js';
+
+// Hashes every diff line with its surrounding context but not the line numbers, so a rebase keeps
+// the id unless it also changes those context lines. The context tells apart the same line added in
+// two places. A fixup with no changed text lines (empty or binary-only) keeps its own sha.
+function patchIdOf(sha: string, files: ThreadFixup['files']): string {
+  const hash = createHash('sha1');
+  let changedLines = 0;
+  for (const file of files) {
+    hash.update(`${file.path}\n`);
+    for (const chunk of file.chunks) {
+      for (const line of chunk.lines) {
+        if (line.type === 'add' || line.type === 'delete') changedLines += 1;
+        hash.update(`${line.type}:${line.content}\n`);
+      }
+    }
+  }
+  return changedLines > 0 ? hash.digest('hex') : sha;
+}
+
+const FIXUP_LOG_FORMAT = `--format=%x00%H%x00%P%x00%s%x00%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)%x00`;
+// Every line of a patch starts with a diff marker or keyword, so a NUL at the start of a line can
+// only open one of our headers, even when a file diffed as text holds NUL bytes. Lines are split on
+// \n alone: the `m` flag would also start a line after \r, U+2028 or U+2029 inside file content.
+const FIXUP_LOG_HEADER = /(?<=^|\n)\0([0-9a-f]+)\0([0-9a-f ]*)\0([^\0]*)\0([^\0]*)\0(?=\n|$)/g;
+
+interface FixupLogEntry {
+  sha: string;
+  isMerge: boolean;
+  subject: string;
+  threadIds: string[];
+  diff: string;
+}
+
+function parseFixupLog(raw: string): FixupLogEntry[] {
+  const headers = [...raw.matchAll(FIXUP_LOG_HEADER)];
+  return headers.map((header, index) => {
+    const [, sha, parents, subject, trailerValues] = header;
+    return {
+      sha,
+      isMerge: parents.includes(' '),
+      subject,
+      threadIds: trailerValues
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0),
+      diff: raw.slice(header.index + header[0].length, headers[index + 1]?.index ?? raw.length),
+    };
+  });
+}
 
 export class GitDiffParser {
   private git: SimpleGit;
@@ -603,6 +664,82 @@ export class GitDiffParser {
     } catch {
       return false;
     }
+  }
+
+  async listThreadFixups(selection: DiffSelection): Promise<ThreadFixup[]> {
+    const { targetCommitish } = selection;
+    if (!isCommitTarget(targetCommitish) || !validateCommitish(targetCommitish)) {
+      return [];
+    }
+
+    const targetHash = (
+      await this.git.revparse(['--verify', `${targetCommitish}^{commit}`])
+    ).trim();
+    const headHash = (await this.git.revparse(['HEAD'])).trim();
+    if (targetHash === headHash) {
+      return [];
+    }
+
+    const entries = parseFixupLog(
+      await this.git.raw([
+        'log',
+        '--reverse',
+        '--no-show-signature',
+        // Trailer keys are matched without regard to case, so the grep must match the same way.
+        '--regexp-ignore-case',
+        `--grep=^${REVIEW_THREAD_TRAILER}: `,
+        '-p',
+        '--no-ext-diff',
+        '--color=never',
+        FIXUP_LOG_FORMAT,
+        `${targetHash}..HEAD`,
+      ]),
+    ).filter((entry) => entry.threadIds.length > 0);
+
+    // `log -p` prints no diff for a merge, and `-m` on its own skips a parent whose diff is empty, so
+    // merges are read again against their first parent only. The config keeps `-m` to that parent on
+    // git versions where it follows log.diffMerges.
+    const merges = entries.filter((entry) => entry.isMerge);
+    if (merges.length > 0) {
+      const mergeDiffs = new Map(
+        parseFixupLog(
+          await this.git.raw([
+            '-c',
+            'log.diffMerges=first-parent',
+            'log',
+            '--no-walk=unsorted',
+            '--no-show-signature',
+            '-p',
+            '-m',
+            '--first-parent',
+            '--no-ext-diff',
+            '--color=never',
+            FIXUP_LOG_FORMAT,
+            ...merges.map((entry) => entry.sha),
+          ]),
+        ).map((entry) => [entry.sha, entry.diff]),
+      );
+      for (const entry of merges) {
+        entry.diff = mergeDiffs.get(entry.sha) ?? '';
+      }
+    }
+
+    return entries.map(({ sha, subject, threadIds, diff }) => {
+      const files = this.parseUnifiedDiff(diff).map(({ path, oldPath, status, chunks }) => ({
+        path,
+        oldPath,
+        status,
+        chunks,
+      }));
+      return {
+        sha,
+        shortSha: shortHash(sha),
+        patchId: patchIdOf(sha, files),
+        subject,
+        threadIds,
+        files,
+      };
+    });
   }
 
   parseStdinDiff(diffContent: string): DiffResponse {

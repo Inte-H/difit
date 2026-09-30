@@ -186,9 +186,12 @@ export class StorageService {
 
       if (!data) return null;
 
-      const parsed = JSON.parse(data) as DiffContextStorage | LegacyDiffContextStorage;
-      if (parsed.version === 2 && 'threads' in parsed) {
-        return parsed;
+      const parsed = JSON.parse(data) as
+        | DiffContextStorage
+        | (Omit<DiffContextStorage, 'version'> & { version: 3 })
+        | LegacyDiffContextStorage;
+      if ((parsed.version === 2 || parsed.version === 3) && 'threads' in parsed) {
+        return { ...parsed, version: 2 };
       }
 
       if (parsed.version === 1 && 'comments' in parsed) {
@@ -201,6 +204,7 @@ export class StorageService {
           threads: parsed.comments.map(migrateLegacyComment),
           viewedFiles: parsed.viewedFiles,
           appliedCommentImportIds: [],
+          decisions: [],
         };
       }
 
@@ -272,6 +276,7 @@ export class StorageService {
         baseMode,
         lastModifiedAt: new Date().toISOString(),
         appliedCommentImportIds: data.appliedCommentImportIds || [],
+        decisions: data.decisions || [],
       };
       localStorage.setItem(key, JSON.stringify(dataToSave));
     } catch (error) {
@@ -359,6 +364,7 @@ export class StorageService {
       threads: [],
       viewedFiles: [],
       appliedCommentImportIds: [],
+      decisions: [],
     };
 
     data.threads = threads;
@@ -448,6 +454,7 @@ export class StorageService {
       threads: [],
       viewedFiles: [],
       appliedCommentImportIds: [],
+      decisions: [],
     };
 
     data.viewedFiles = files;
