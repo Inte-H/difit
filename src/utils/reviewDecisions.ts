@@ -1,4 +1,9 @@
-import type { ReviewDecision, ThreadFixup, ThreadReviewState } from '../types/diff.js';
+import {
+  REVIEWER_EDIT_AUTHOR,
+  type ReviewDecision,
+  type ThreadFixup,
+  type ThreadReviewState,
+} from '../types/diff.js';
 
 const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
   'rejected',
@@ -13,6 +18,7 @@ const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
   approved: '승인됨',
   folded: '접힘',
   rejected: '다시 수정 중',
+  withdrawn: '되돌림',
 };
 
 export function reviewStateLabel(state: ThreadReviewState): string {
@@ -92,10 +98,15 @@ function latestApprovalOrUndo(own: ReviewDecision[]): ReviewDecision | undefined
     );
 }
 
+export function isOpenedByEdit(thread: { messages?: ReadonlyArray<{ author?: string }> }): boolean {
+  return thread.messages?.[0]?.author === REVIEWER_EDIT_AUTHOR;
+}
+
 export function deriveThreadReviewState(
   threadId: string,
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
+  openedByEdit = false,
 ): ThreadReviewState {
   const own = decisions.filter((decision) => decision.threadId === threadId);
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
@@ -103,14 +114,26 @@ export function deriveThreadReviewState(
   const isRejected = rejectionCheckFor(threadId, decisions);
   const unrejected = fixups.filter((fixup) => !isRejected(fixup));
   const approval = latestApprovalOrUndo(own);
+  const approvalStands =
+    approval?.kind === 'approved' &&
+    !own.some(
+      (decision) =>
+        decision.kind === 'rejected' &&
+        decidedAt(decision) >= decidedAt(approval) &&
+        (decision.fixupSha === approval.fixupSha ||
+          (decision.patchId !== undefined && decision.patchId === approval.patchId)),
+    );
   // With no fixup left, the approved one is being folded and the fold record has not landed yet.
-  if (approval?.kind === 'approved' && unrejected.every(matcherFor([approval]))) return 'approved';
+  if (approvalStands && unrejected.every(matcherFor([approval]))) return 'approved';
   if (unrejected.length > 0) return 'awaiting-approval';
-  return own.some((decision) => decision.kind === 'rejected') ? 'rejected' : 'awaiting-fix';
+  if (!own.some((decision) => decision.kind === 'rejected')) return 'awaiting-fix';
+  return openedByEdit ? 'withdrawn' : 'rejected';
 }
 
 // Threads the agent still owes an answer: nothing to judge yet, or the last answer was rejected.
-export function selectOpenThreads<T extends { id: string }>(
+export function selectOpenThreads<
+  T extends { id: string; messages?: ReadonlyArray<{ author?: string }> },
+>(
   threads: T[],
   fixupsByThread: ReadonlyMap<string, ThreadFixup[]>,
   decisions: ReviewDecision[],
@@ -120,6 +143,7 @@ export function selectOpenThreads<T extends { id: string }>(
       thread.id,
       fixupsByThread.get(thread.id) ?? [],
       decisions,
+      isOpenedByEdit(thread),
     );
     return state === 'awaiting-fix' || state === 'rejected';
   });

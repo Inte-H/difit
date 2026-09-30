@@ -7,7 +7,11 @@ import type {
   ThreadFixup,
   ThreadReviewState,
 } from '../../types/diff';
-import { deriveThreadReviewState, pendingFixupFor } from '../../utils/reviewDecisions';
+import {
+  deriveThreadReviewState,
+  isOpenedByEdit,
+  pendingFixupFor,
+} from '../../utils/reviewDecisions';
 
 export interface FixupOverlayState {
   enabled: boolean;
@@ -70,13 +74,13 @@ export function recordWithPatchId(
 
 export function threadReviewControls(
   overlay: FixupOverlayState,
-  threadId: string,
+  thread: CommentThread,
 ): ThreadReviewControls | undefined {
   if (overlay.targetCommit === null) return undefined;
-  const fixups = overlay.fixupsByThread.get(threadId) ?? [];
+  const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
   return {
-    state: deriveThreadReviewState(threadId, fixups, overlay.decisions),
-    fixupSha: pendingFixupFor(threadId, fixups, overlay.decisions)?.sha ?? null,
+    state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, isOpenedByEdit(thread)),
+    fixupSha: pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
     targetCommit: overlay.targetCommit,
     onDecide: overlay.recordDecision,
     onUndoApproval: overlay.undoApproval,

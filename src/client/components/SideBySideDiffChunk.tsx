@@ -796,7 +796,7 @@ export function SideBySideDiffChunk({
                     <td colSpan={4} className="p-0 border-t border-github-border">
                       {allThreads.map((thread) => {
                         const threadSide = thread.side || 'new';
-                        const review = threadReviewControls(overlay, thread.id);
+                        const review = threadReviewControls(overlay, thread);
                         let layout: 'left' | 'right' | 'full';
 
                         if (threadSide === 'old' && sideLine.oldLineNumber) {
