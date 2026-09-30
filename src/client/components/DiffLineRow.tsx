@@ -5,6 +5,7 @@ import { type DiffSegment } from '../utils/wordLevelDiff';
 
 import { CommentButton } from './CommentButton';
 import { DiffCodeLine } from './DiffCodeLine';
+import { EditLineButton } from './EditLineButton';
 import { OpenInEditorButton } from './OpenInEditorButton';
 import type { AppearanceSettings } from './SettingsModal';
 
@@ -20,6 +21,7 @@ interface DiffLineRowProps {
   onMouseMove: () => void;
   onCommentButtonMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onOpenInEditor?: () => void;
+  onEditLine?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   onClick?: (e: React.MouseEvent<HTMLTableRowElement>) => void;
   filename?: string;
@@ -54,6 +56,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
     onMouseMove,
     onCommentButtonMouseDown,
     onOpenInEditor,
+    onEditLine,
     syntaxTheme,
     onClick,
     filename,
@@ -81,6 +84,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
           <span>{line.newLineNumber || ''}</span>
           {showLineActions && (
             <>
+              {onEditLine && <EditLineButton onClick={onEditLine} />}
               {onOpenInEditor && <OpenInEditorButton onClick={onOpenInEditor} />}
               <CommentButton onMouseDown={onCommentButtonMouseDown} />
             </>

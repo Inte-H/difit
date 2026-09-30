@@ -12,6 +12,7 @@ import {
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
 import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
+import { useDirectEditing } from '../hooks/useDirectEditing';
 import {
   computeWordLevelDiff,
   shouldComputeWordDiff,
@@ -21,6 +22,8 @@ import {
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
+import { DirectEditForm } from './DirectEditForm';
+import { EditHunkButton } from './EditLineButton';
 import { FixupOverlayRow } from './FixupOverlayCard';
 import type { AppearanceSettings } from './SettingsModal';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
@@ -96,6 +99,7 @@ export const DiffChunk = memo(function DiffChunk({
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const overlay = useFixupOverlay();
+  const directEditing = useDirectEditing(chunk.lines, threads);
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -414,8 +418,11 @@ export const DiffChunk = memo(function DiffChunk({
     );
   }
 
+  const { editing, editLine, editHunk } = directEditing;
+
   return (
-    <div className="bg-github-bg-primary">
+    <div className="group/hunk relative bg-github-bg-primary">
+      {editHunk && <EditHunkButton onClick={editHunk} />}
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
         <tbody>
           {chunk.lines.map((line, index) => {
@@ -491,6 +498,11 @@ export const DiffChunk = memo(function DiffChunk({
                         }
                       : undefined
                   }
+                  onEditLine={
+                    editLine && line.type !== 'delete' && line.newLineNumber
+                      ? (e) => editLine(line.newLineNumber ?? 0, e.shiftKey)
+                      : undefined
+                  }
                   syntaxTheme={syntaxTheme}
                   filename={filename}
                   diffSegments={wordLevelDiffMap.get(index)}
@@ -541,6 +553,7 @@ export const DiffChunk = memo(function DiffChunk({
                                 onReplyToThread={onReplyToThread}
                                 onRemoveMessage={onRemoveMessage}
                                 onUpdateMessage={onUpdateMessage}
+                                onEditDirectly={directEditing.editThread(thread)}
                                 syntaxTheme={syntaxTheme}
                               />
                             </div>
@@ -550,6 +563,27 @@ export const DiffChunk = memo(function DiffChunk({
                     </React.Fragment>
                   );
                 })}
+
+                {editing &&
+                  directEditing.controls &&
+                  directEditing.targetCommit &&
+                  filename &&
+                  line.type !== 'delete' &&
+                  line.newLineNumber === editing.end && (
+                    <tr className="bg-github-bg-secondary">
+                      <td colSpan={3} className="p-0">
+                        <DirectEditForm
+                          key={`${editing.start}-${editing.end}-${editing.threadId ?? ''}`}
+                          filePath={filename}
+                          range={editing}
+                          targetCommit={directEditing.targetCommit}
+                          threadId={editing.threadId}
+                          controls={directEditing.controls}
+                          onClose={directEditing.close}
+                        />
+                      </td>
+                    </tr>
+                  )}
 
                 {commentingLine &&
                   commentingLine.side === currentLineSide &&

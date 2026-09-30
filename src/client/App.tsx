@@ -6,6 +6,8 @@ import {
   type DiffResponse,
   type DiffSelection,
   type DiffViewMode,
+  type DirectEditRequest,
+  type DirectEditResponse,
   type ReviewDecision,
   type DiffSide,
   type LineNumber,
@@ -38,7 +40,12 @@ import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
-import { recordWithPatchId, type FixupOverlayState } from './contexts/FixupOverlayContext';
+import {
+  type DirectEditControls,
+  type DirectEditFailure,
+  recordWithPatchId,
+  type FixupOverlayState,
+} from './contexts/FixupOverlayContext';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
@@ -64,6 +71,7 @@ import {
   buildMergedChunksState,
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
+import { directEditFailureMessage } from './utils/directEdit';
 import { buildFileLineIndex, locateThread } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
@@ -264,9 +272,10 @@ function App() {
     return target && requested && isCommitHash(requested) ? target : null;
   }, [diffData?.requestedTargetCommitish, resolvedSelection]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
+  const [directEditCount, setDirectEditCount] = useState(0);
   const { fixupsByThread, loaded: fixupsLoaded } = useThreadFixups(
     diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,
-    diffDataVersion,
+    diffDataVersion + directEditCount,
   );
   const openThreads = useMemo(
     () => selectOpenThreads(threads, fixupsByThread, decisions),
@@ -945,6 +954,46 @@ function App() {
     },
     [handleRevisionChange, recordReviewJump, selectedRevision],
   );
+  const submitDirectEdit = useCallback(
+    async (request: DirectEditRequest): Promise<DirectEditFailure | null> => {
+      let response: Response;
+      try {
+        response = await fetch(getCommentApiUrl('/api/direct-edit'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+        });
+      } catch {
+        return { message: 'difit 서버에 연결하지 못했습니다.' };
+      }
+      const payload = (await response.json().catch(() => ({}))) as Partial<
+        Extract<DirectEditResponse, { error: string }>
+      > &
+        Partial<Extract<DirectEditResponse, { success: true }>>;
+      if (!response.ok || !payload.success) {
+        return {
+          message: directEditFailureMessage(
+            payload.reason,
+            payload.error ?? `${response.status} ${response.statusText}`,
+          ),
+          ...(payload.output ? { output: payload.output } : {}),
+        };
+      }
+      if (typeof payload.version === 'number') {
+        serverCommentVersionRef.current = payload.version;
+      }
+      skipNextCommentSyncRef.current = true;
+      replaceThreads(payload.threads ?? []);
+      mergeDecisions(payload.decisions ?? []);
+      setDirectEditCount((count) => count + 1);
+      return null;
+    },
+    [getCommentApiUrl, mergeDecisions, replaceThreads],
+  );
+  const directEdit = useMemo<DirectEditControls | null>(
+    () => (diffData?.directEditAvailable && targetCommit ? { submit: submitDirectEdit } : null),
+    [diffData?.directEditAvailable, targetCommit, submitDirectEdit],
+  );
   const fixupOverlay = useMemo<FixupOverlayState>(
     () => ({
       enabled: showFixupOverlay,
@@ -954,6 +1003,7 @@ function App() {
       recordDecision: recordWithPatchId(recordDecision, fixupsByThread),
       undoApproval,
       openReviewAt,
+      directEdit,
     }),
     [
       showFixupOverlay,
@@ -963,6 +1013,7 @@ function App() {
       recordDecision,
       undoApproval,
       openReviewAt,
+      directEdit,
     ],
   );
 
