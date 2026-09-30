@@ -10,6 +10,7 @@ import {
 } from '../../types/diff';
 import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
+import { useDirectEditing } from '../hooks/useDirectEditing';
 import {
   computeWordLevelDiff,
   shouldComputeWordDiff,
@@ -20,6 +21,8 @@ import { useFileLevelTokensLookup } from '../contexts/FileLevelTokensContext';
 import { CommentButton } from './CommentButton';
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
+import { DirectEditForm } from './DirectEditForm';
+import { EditHunkButton, EditLineButton } from './EditLineButton';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { FixupOverlayRow } from './FixupOverlayCard';
 import { OpenInEditorButton } from './OpenInEditorButton';
@@ -173,6 +176,8 @@ export function SideBySideDiffChunk({
   const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
   const overlay = useFixupOverlay();
+  const directEditing = useDirectEditing(chunk.lines, threads);
+  const { editing, editLine, editHunk } = directEditing;
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -511,7 +516,8 @@ export function SideBySideDiffChunk({
   );
 
   return (
-    <div className="bg-github-bg-primary overflow-hidden">
+    <div className="group/hunk relative bg-github-bg-primary overflow-hidden">
+      {editHunk && <EditHunkButton onClick={editHunk} />}
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
         <tbody>
           {sideBySideLines.map((sideLine, index) => {
@@ -729,6 +735,11 @@ export function SideBySideDiffChunk({
                     {hoveredLine?.side === 'new' &&
                       hoveredLine?.lineNumber === sideLine.newLineNumber && (
                         <>
+                          {editLine && sideLine.newLineNumber !== undefined && (
+                            <EditLineButton
+                              onClick={(e) => editLine(sideLine.newLineNumber ?? 0, e.shiftKey)}
+                            />
+                          )}
                           {onOpenInEditor && filename && sideLine.newLineNumber !== undefined && (
                             <OpenInEditorButton
                               onClick={() => {
@@ -829,6 +840,7 @@ export function SideBySideDiffChunk({
                                   onReplyToThread={onReplyToThread}
                                   onRemoveMessage={onRemoveMessage}
                                   onUpdateMessage={onUpdateMessage}
+                                  onEditDirectly={directEditing.editThread(thread)}
                                   syntaxTheme={syntaxTheme}
                                 />
                               </div>
@@ -839,6 +851,30 @@ export function SideBySideDiffChunk({
                     </td>
                   </tr>
                 )}
+
+                {editing &&
+                  directEditing.controls &&
+                  directEditing.targetCommit &&
+                  filename &&
+                  sideLine.newLineNumber === editing.end && (
+                    <tr className="bg-github-bg-secondary">
+                      <td colSpan={4} className="p-0">
+                        <div className="flex justify-end">
+                          <div className="w-1/2">
+                            <DirectEditForm
+                              key={`${editing.start}-${editing.end}-${editing.threadId ?? ''}`}
+                              filePath={filename}
+                              range={editing}
+                              targetCommit={directEditing.targetCommit}
+                              threadId={editing.threadId}
+                              controls={directEditing.controls}
+                              onClose={directEditing.close}
+                            />
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
 
                 {/* Comment form row */}
                 {commentingLine &&
