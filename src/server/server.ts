@@ -9,6 +9,7 @@ import open from 'open';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+import { REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
 import { type DiffMode } from '../types/watch.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
 import {
@@ -23,13 +24,17 @@ import {
   NONE_EDITOR_ID,
   resolveEditorOption,
 } from '../utils/editorOptions.js';
+import { createId } from '../utils/createId.js';
 import { getFileExtension } from '../utils/fileUtils.js';
 import {
   deriveThreadReviewState,
+  isOpenedByEdit,
   mergeReviewDecisions,
   normalizeReviewDecisions,
+  selectOpenThreads,
 } from '../utils/reviewDecisions.js';
 
+import { commitDirectEdit } from './direct-edit.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
@@ -42,6 +47,9 @@ import {
   type DiffCommentThread,
   type DiffResponse,
   type DiffSelection,
+  type DirectEditRejection,
+  type DirectEditRequest,
+  type DirectEditResponse,
   type FixupsResponse,
   type GeneratedStatusResponse,
   type ReviewDecision,
@@ -71,6 +79,10 @@ interface ServerOptions {
 }
 
 const GENERATED_STATUS_CACHE_TTL_MS = 60_000;
+const DIRECT_EDIT_MESSAGE = '직접 고침';
+const LOOPBACK_ADDRESSES = new Set(['localhost', '127.0.0.1', '::1']);
+// A Host header wraps an IPv6 address in brackets.
+const LOOPBACK_HOST_HEADERS = new Set([...LOOPBACK_ADDRESSES, '[::1]']);
 const MAX_DIFF_CACHE_ENTRIES = 8;
 
 function createDiffCacheKey(selection: DiffSelection, ignoreWhitespace: boolean) {
@@ -131,9 +143,13 @@ function createCommentSessionKey(selection: DiffSelection): string {
   return getDiffSelectionKey(selection);
 }
 
-export async function startServer(
-  options: ServerOptions,
-): Promise<{ port: number; url: string; isEmpty?: boolean; server?: Server }> {
+export async function startServer(options: ServerOptions): Promise<{
+  port: number;
+  url: string;
+  isEmpty?: boolean;
+  server?: Server;
+  settleDirectEdits?: () => Promise<unknown>;
+}> {
   const app = express();
   const repositoryPath = resolve(options.repoPath ?? process.cwd());
   const repositoryId = createHash('sha256').update(repositoryPath).digest('hex');
@@ -159,7 +175,18 @@ export async function startServer(
     return undefined;
   };
 
-  app.use(express.json());
+  // Editing writes commits, so it stays off whenever another machine could reach the server.
+  const listensOnLoopbackOnly = !options.host || LOOPBACK_ADDRESSES.has(options.host);
+  // A direct edit carries a whole hunk, which easily passes the default 100kb.
+  const parseJson = express.json();
+  const parseDirectEditJson = express.json({ limit: '64mb' });
+  app.use((req, res, next) => {
+    const directEdit =
+      req.path === '/api/direct-edit' &&
+      listensOnLoopbackOnly &&
+      LOOPBACK_HOST_HEADERS.has(req.hostname);
+    (directEdit ? parseDirectEditJson : parseJson)(req, res, next);
+  });
   app.use(express.text()); // For sendBeacon text/plain requests
 
   app.use((_req, res, next) => {
@@ -218,6 +245,10 @@ export async function startServer(
     }
   };
   rememberPinnedReview(initialSelection, currentCommentSelection);
+  const canEditDirectly = (selection: DiffSelection) =>
+    !options.stdinDiff &&
+    listensOnLoopbackOnly &&
+    pinnedCommentSessionKeys.has(createCommentSessionKey(selection));
 
   function parseRepositoryRelativePath(filepath: unknown):
     | { ok: true; path: string }
@@ -379,6 +410,7 @@ export async function startServer(
       ...responseDiffData,
       ignoreWhitespace,
       openInEditorAvailable: !options.stdinDiff,
+      directEditAvailable: canEditDirectly(currentCommentSelection),
       baseCommitish,
       targetCommitish,
       requestedBaseCommitish,
@@ -893,6 +925,185 @@ export async function startServer(
     }
   });
 
+  function parseDirectEditRequest(body: unknown): DirectEditRequest | null {
+    if (!body || typeof body !== 'object') return null;
+    const { filePath, startLine, endLine, original, replacement, threadId } = body as Record<
+      string,
+      unknown
+    >;
+    const isLineNumber = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isInteger(value) && value > 0;
+    const isLines = (value: unknown): value is string[] =>
+      Array.isArray(value) && value.every((line) => typeof line === 'string');
+    if (
+      typeof filePath !== 'string' ||
+      !isLineNumber(startLine) ||
+      !isLineNumber(endLine) ||
+      startLine > endLine ||
+      !isLines(original) ||
+      original.length !== endLine - startLine + 1 ||
+      !isLines(replacement) ||
+      (threadId !== undefined && typeof threadId !== 'string')
+    ) {
+      return null;
+    }
+    return { filePath, startLine, endLine, original, replacement, threadId };
+  }
+
+  const refuse = (
+    reason: DirectEditRejection,
+    output?: string,
+  ): { status: number; body: DirectEditResponse } => ({
+    status: 409,
+    body: {
+      error: `Direct edit refused: ${reason}`,
+      reason,
+      ...(output === undefined ? {} : { output }),
+    },
+  });
+
+  async function applyDirectEdit(
+    selection: DiffSelection,
+    request: DirectEditRequest,
+  ): Promise<{ status: number; body: DirectEditResponse }> {
+    const session = getOrCreateCommentSession(selection);
+    const answered =
+      request.threadId === undefined
+        ? undefined
+        : session.threads.find((thread) => thread.id === request.threadId);
+    if (request.threadId !== undefined && !answered) {
+      return { status: 404, body: { error: `Thread not found: ${request.threadId}` } };
+    }
+    if (answered && isOpenedByEdit(answered)) return refuse('thread-opened-by-edit');
+    if (answered) {
+      const fixups = (await parser.listThreadFixups(selection)).filter((fixup) =>
+        fixup.threadIds.includes(answered.id),
+      );
+      const stillOpen = selectOpenThreads(
+        [answered],
+        new Map([[answered.id, fixups]]),
+        session.decisions,
+      );
+      if (stillOpen.length === 0) return refuse('thread-has-fixup');
+    }
+
+    const threadId = answered?.id ?? createId();
+    const result = await commitDirectEdit(
+      repositoryPath,
+      { base: selection.baseCommitish, target: selection.targetCommitish },
+      {
+        filePath: request.filePath,
+        startLine: request.startLine,
+        endLine: request.endLine,
+        original: request.original,
+        replacement: request.replacement,
+        threadId,
+      },
+    );
+    if (!result.ok) return refuse(result.reason, result.output);
+
+    const patchId = (await parser.readThreadFixup(result.sha))?.patchId;
+    const now = new Date().toISOString();
+    const message = {
+      id: answered ? createId() : threadId,
+      body: DIRECT_EDIT_MESSAGE,
+      author: REVIEWER_EDIT_AUTHOR,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const nextThreads: DiffCommentThread[] = answered
+      ? session.threads.map((thread) =>
+          thread.id === threadId
+            ? { ...thread, updatedAt: now, messages: [...thread.messages, message] }
+            : thread,
+        )
+      : [
+          ...session.threads,
+          {
+            id: threadId,
+            filePath: request.filePath,
+            createdAt: now,
+            updatedAt: now,
+            position: {
+              side: 'new',
+              line:
+                request.startLine === request.endLine
+                  ? request.startLine
+                  : { start: request.startLine, end: request.endLine },
+            },
+            codeSnapshot: {
+              content: request.original.join('\n'),
+              commit: selection.targetCommitish,
+            },
+            messages: [message],
+          },
+        ];
+    updateCommentSession(
+      selection,
+      nextThreads,
+      mergeReviewDecisions(session.decisions, [
+        {
+          threadId,
+          kind: 'approved',
+          fixupSha: result.sha,
+          ...(patchId === undefined ? {} : { patchId }),
+          at: now,
+        },
+      ]),
+    );
+    return {
+      status: 200,
+      body: {
+        success: true,
+        sha: result.sha,
+        threadId,
+        version: session.version,
+        threads: session.threads,
+        decisions: session.decisions,
+      },
+    };
+  }
+
+  let directEditQueue: Promise<unknown> = Promise.resolve();
+
+  app.post('/api/direct-edit', async (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    if (!canEditDirectly(selection)) {
+      res.status(403).json({ error: 'Direct edit is not available for this review' });
+      return;
+    }
+    // A page whose host name was rebound to this address still sends its own name as Host.
+    if (!LOOPBACK_HOST_HEADERS.has(req.hostname)) {
+      res.status(403).json({ error: 'Direct edit accepts requests to localhost only' });
+      return;
+    }
+    // Only JSON needs a preflight, so a page on another site cannot post an edit.
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'Expected application/json' });
+      return;
+    }
+    const request = parseDirectEditRequest(req.body);
+    const filepathResult = request ? parseRepositoryRelativePath(request.filePath) : null;
+    if (!request || !filepathResult?.ok) {
+      res.status(400).json({ error: 'Invalid direct edit request' });
+      return;
+    }
+
+    const run = directEditQueue.then(() =>
+      applyDirectEdit(selection, { ...request, filePath: filepathResult.path }),
+    );
+    directEditQueue = run.catch(() => undefined);
+    try {
+      const { status, body } = await run;
+      res.status(status).json(body);
+    } catch (error) {
+      console.error('Error applying direct edit:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to apply direct edit',
+      });
+    }
+  });
+
   async function threadReviewStatesFor(
     selection: DiffSelection,
   ): Promise<Map<string, ThreadReviewState> | undefined> {
@@ -909,6 +1120,7 @@ export async function startServer(
             thread.id,
             fixups.filter((fixup) => fixup.threadIds.includes(thread.id)),
             session.decisions,
+            isOpenedByEdit(thread),
           ),
         ]),
       );
@@ -1116,6 +1328,7 @@ export async function startServer(
           // Stop file watcher
           await fileWatcher.stop();
 
+          await directEditQueue;
           await outputFinalComments();
           process.exit(0);
         }, 100);
@@ -1158,7 +1371,7 @@ export async function startServer(
   );
 
   // Security warning for non-localhost binding
-  if (options.host && options.host !== '127.0.0.1' && options.host !== 'localhost') {
+  if (options.host && !LOOPBACK_ADDRESSES.has(options.host)) {
     console.warn('\n⚠️  WARNING: Server is accessible from external network!');
     console.warn(`   Binding to: ${options.host}:${port}`);
     console.warn('   Make sure this is intended and your network is secure.\n');
@@ -1185,7 +1398,13 @@ export async function startServer(
     }
   }
 
-  return { port, url, isEmpty: initialDiffData.isEmpty || false, server };
+  return {
+    port,
+    url,
+    isEmpty: initialDiffData.isEmpty || false,
+    server,
+    settleDirectEdits: () => directEditQueue,
+  };
 }
 
 async function startServerWithFallback(

@@ -490,3 +490,236 @@ describe('DiffChunk fixup overlay', () => {
     expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
   });
 });
+
+describe('editing the reviewed code directly', () => {
+  const comment = (overrides: Partial<CommentThread> = {}): CommentThread => ({
+    id: 'c1',
+    file: 'src/example.ts',
+    line: 11,
+    side: 'new',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    codeContent: 'const second = 2;',
+    messages: [
+      {
+        id: 'm1',
+        body: 'Drop this',
+        author: 'User',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ],
+    ...overrides,
+  });
+
+  function renderEditable({
+    mode = 'unified',
+    threads = [],
+    overlay = {},
+  }: {
+    mode?: 'unified' | 'split';
+    threads?: CommentThread[];
+    overlay?: Partial<FixupOverlayState>;
+  } = {}) {
+    const submit = vi.fn().mockResolvedValue(null);
+    const value: FixupOverlayState = {
+      ...EMPTY_FIXUP_OVERLAY,
+      targetCommit: 'b7c2e10',
+      directEdit: { submit },
+      ...overlay,
+    };
+    const blob = new TextEncoder().encode(
+      `${'// filler\n'.repeat(9)}const first = 1;\nconst second = 2;\nconst third = 3;\n`,
+    );
+    vi.mocked(global.fetch).mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => blob.slice().buffer,
+    } as Response);
+    const props = {
+      chunk: testChunk,
+      chunkIndex: 0,
+      threads,
+      onAddComment: asyncNoop,
+      onGenerateThreadPrompt: () => '',
+      onRemoveThread: noop,
+      onReplyToThread: asyncNoop,
+      onRemoveMessage: noop,
+      onUpdateMessage: noop,
+      filename: 'src/example.ts',
+    };
+    const view = renderWithProviders(
+      <FixupOverlayProvider value={value}>
+        {mode === 'unified' ? (
+          <DiffChunk {...props} mode="unified" />
+        ) : (
+          <SideBySideDiffChunk {...props} />
+        )}
+      </FixupOverlayProvider>,
+    );
+    const rows = view.container.querySelectorAll('[data-diff-line-row="true"]');
+    const hover = (index: number) =>
+      fireEvent.mouseEnter(mode === 'unified' ? rows[index]! : rows[index]!.children[2]!);
+    return { ...view, submit, hover };
+  }
+
+  const commitEdit = async (text: string) => {
+    fireEvent.change(await screen.findByLabelText('고칠 코드'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+  };
+
+  it('edits one line from its pencil and a range with shift-click', async () => {
+    const { submit, hover } = renderEditable();
+
+    hover(0);
+    fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
+    hover(2);
+    fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }), { shiftKey: true });
+
+    expect(await screen.findByLabelText('고칠 코드')).toHaveValue(
+      ['const first = 1;', 'const second = 2;', 'const third = 3;'].join('\n'),
+    );
+    await commitEdit('const first = 1;');
+    await waitFor(() =>
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filePath: 'src/example.ts',
+          startLine: 10,
+          endLine: 12,
+          replacement: ['const first = 1;'],
+        }),
+      ),
+    );
+    expect(submit.mock.calls[0]?.[0]).not.toHaveProperty('threadId');
+  });
+
+  it('edits the lines of the new side in the split view', async () => {
+    const { submit, hover } = renderEditable({ mode: 'split' });
+
+    hover(1);
+    fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
+    await screen.findByLabelText('고칠 코드');
+    fireEvent.click(screen.getByRole('button', { name: '줄 지우기' }));
+
+    await waitFor(() =>
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({ startLine: 11, endLine: 11, replacement: [] }),
+      ),
+    );
+  });
+
+  it('edits the whole hunk from its button', async () => {
+    renderEditable();
+
+    fireEvent.click(screen.getByRole('button', { name: 'hunk 고치기' }));
+
+    expect(await screen.findByLabelText('고칠 코드')).toHaveValue(
+      ['const first = 1;', 'const second = 2;', 'const third = 3;'].join('\n'),
+    );
+  });
+
+  it('answers the one waiting comment on the edited lines', async () => {
+    const { submit, hover } = renderEditable({ threads: [comment()] });
+
+    hover(1);
+    fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
+    expect(screen.getByText('이 줄의 지적에 대한 답으로 저장합니다')).toBeInTheDocument();
+    await commitEdit('');
+
+    await waitFor(() =>
+      expect(submit).toHaveBeenCalledWith(expect.objectContaining({ threadId: 'c1' })),
+    );
+  });
+
+  it('offers to edit from a waiting comment but not from one an edit opened', async () => {
+    const { rerender } = renderEditable({ threads: [comment()] });
+    fireEvent.click(screen.getByRole('button', { name: '직접 고치기' }));
+    expect(await screen.findByLabelText('고칠 코드')).toHaveValue('const second = 2;');
+
+    rerender(
+      <WordHighlightProvider>
+        <FixupOverlayProvider
+          value={{
+            ...EMPTY_FIXUP_OVERLAY,
+            targetCommit: 'b7c2e10',
+            directEdit: { submit: vi.fn() },
+          }}
+        >
+          <DiffChunk
+            chunk={testChunk}
+            chunkIndex={0}
+            threads={[
+              comment({
+                id: 'e1',
+                messages: [{ ...comment().messages[0]!, author: 'reviewer-edit' }],
+              }),
+            ]}
+            mode="unified"
+            onAddComment={asyncNoop}
+            onGenerateThreadPrompt={() => ''}
+            onRemoveThread={noop}
+            onReplyToThread={asyncNoop}
+            onRemoveMessage={noop}
+            onUpdateMessage={noop}
+            filename="src/example.ts"
+          />
+        </FixupOverlayProvider>
+      </WordHighlightProvider>,
+    );
+    expect(screen.queryByRole('button', { name: '직접 고치기' })).not.toBeInTheDocument();
+  });
+
+  it('reverts an approved edit, replied to or not, by rejecting it', () => {
+    const recordDecision = vi.fn();
+    const answered = comment({
+      messages: [
+        ...comment().messages,
+        {
+          id: 'm2',
+          body: '직접 고침',
+          author: 'reviewer-edit',
+          createdAt: '2026-01-02T00:00:00Z',
+          updatedAt: '2026-01-02T00:00:00Z',
+        },
+        {
+          id: 'm3',
+          body: 'Looks better',
+          author: 'User',
+          createdAt: '2026-01-03T00:00:00Z',
+          updatedAt: '2026-01-03T00:00:00Z',
+        },
+      ],
+    });
+    const fixup: ThreadFixup = {
+      sha: 'e'.repeat(40),
+      shortSha: 'eeeeeee',
+      patchId: 'patch-e',
+      subject: 'fixup! x',
+      threadIds: ['c1'],
+      files: [],
+    };
+    renderEditable({
+      threads: [answered],
+      overlay: {
+        recordDecision,
+        fixupsByThread: new Map([['c1', [fixup]]]),
+        decisions: [
+          { threadId: 'c1', kind: 'approved', fixupSha: fixup.sha, at: '2026-01-02T00:00:00Z' },
+        ],
+      },
+    });
+
+    expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '되돌리기' }));
+
+    expect(recordDecision).toHaveBeenCalledWith('c1', 'rejected', fixup.sha);
+  });
+
+  it('shows no pencil when the review cannot take edits', () => {
+    const { hover } = renderEditable({ overlay: { directEdit: null } });
+
+    hover(0);
+
+    expect(screen.queryByRole('button', { name: '줄 직접 고치기' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'hunk 고치기' })).not.toBeInTheDocument();
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ReviewDecision, ThreadFixup } from '../types/diff';
+import { REVIEWER_EDIT_AUTHOR, type ReviewDecision, type ThreadFixup } from '../types/diff';
 
 import {
   deriveThreadReviewState,
@@ -138,6 +138,22 @@ describe('deriveThreadReviewState', () => {
     expect(deriveThreadReviewState('t1', [], [decision('approved', 'aaaa')])).toBe('approved');
   });
 
+  it('lets a rejection made after the approval of the same fixup win', () => {
+    const approved = decision('approved', 'aaaa', '2026-01-01T00:00:00Z');
+    const rejected = decision('rejected', 'aaaa', '2026-01-02T00:00:00Z');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [approved, rejected])).toBe('rejected');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [approved, rejected], true)).toBe(
+      'withdrawn',
+    );
+  });
+
+  it('closes a thread the reviewer opened by editing once its fixup is rejected', () => {
+    const rejected = [decision('rejected', 'aaaa')];
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], rejected, true)).toBe('withdrawn');
+    expect(deriveThreadReviewState('t1', [], rejected, true)).toBe('withdrawn');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [], true)).toBe('awaiting-approval');
+  });
+
   it('ignores other threads’ decisions', () => {
     expect(
       deriveThreadReviewState(
@@ -156,6 +172,7 @@ describe('reviewStateLabel', () => {
     expect(reviewStateLabel('approved')).toBe('승인됨');
     expect(reviewStateLabel('folded')).toBe('접힘');
     expect(reviewStateLabel('rejected')).toBe('다시 수정 중');
+    expect(reviewStateLabel('withdrawn')).toBe('되돌림');
   });
 
   it('tells a rejected thread apart from one still waiting for its first fixup', () => {
@@ -186,6 +203,18 @@ describe('selectOpenThreads', () => {
       'open',
       'rejected',
     ]);
+  });
+
+  it('leaves out a rejected thread the reviewer opened by editing', () => {
+    const edited = {
+      id: 'edited',
+      messages: [{ author: REVIEWER_EDIT_AUTHOR }],
+    };
+    const edits = [decision('rejected', 'ffff', undefined, 'edited')];
+    expect(selectOpenThreads([edited], new Map(), edits)).toEqual([]);
+    expect(
+      selectOpenThreads([{ ...edited, messages: [{ author: 'User' }] }], new Map(), edits),
+    ).toHaveLength(1);
   });
 
   it('returns nothing when every thread has been answered or settled', () => {

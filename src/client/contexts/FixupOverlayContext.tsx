@@ -2,12 +2,28 @@ import { createContext, useContext, type ReactNode } from 'react';
 
 import type {
   CommentThread,
+  DirectEditRequest,
   ReviewDecision,
   ReviewDecisionKind,
   ThreadFixup,
   ThreadReviewState,
 } from '../../types/diff';
-import { deriveThreadReviewState, pendingFixupFor } from '../../utils/reviewDecisions';
+import {
+  deriveThreadReviewState,
+  isOpenedByEdit,
+  pendingFixupFor,
+} from '../../utils/reviewDecisions';
+import { type EditRange, rangeOfLine, rangesOverlap } from '../utils/directEdit';
+
+export interface DirectEditFailure {
+  message: string;
+  output?: string;
+}
+
+export interface DirectEditControls {
+  // Resolves to null once the fixup commit is made.
+  submit: (request: DirectEditRequest) => Promise<DirectEditFailure | null>;
+}
 
 export interface FixupOverlayState {
   enabled: boolean;
@@ -18,6 +34,8 @@ export interface FixupOverlayState {
   recordDecision: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
   undoApproval: (threadId: string) => void;
   openReviewAt: (commit: string) => void;
+  // Null when this review cannot take edits.
+  directEdit: DirectEditControls | null;
 }
 
 export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
@@ -28,6 +46,7 @@ export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
   recordDecision: () => {},
   undoApproval: () => {},
   openReviewAt: () => {},
+  directEdit: null,
 };
 
 const FixupOverlayContext = createContext<FixupOverlayState>(EMPTY_FIXUP_OVERLAY);
@@ -70,18 +89,36 @@ export function recordWithPatchId(
 
 export function threadReviewControls(
   overlay: FixupOverlayState,
-  threadId: string,
+  thread: CommentThread,
 ): ThreadReviewControls | undefined {
   if (overlay.targetCommit === null) return undefined;
-  const fixups = overlay.fixupsByThread.get(threadId) ?? [];
+  const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
   return {
-    state: deriveThreadReviewState(threadId, fixups, overlay.decisions),
-    fixupSha: pendingFixupFor(threadId, fixups, overlay.decisions)?.sha ?? null,
+    state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, isOpenedByEdit(thread)),
+    fixupSha: pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
     targetCommit: overlay.targetCommit,
     onDecide: overlay.recordDecision,
     onUndoApproval: overlay.undoApproval,
     onOpenReviewAt: overlay.openReviewAt,
   };
+}
+
+export function canAnswerByEdit(overlay: FixupOverlayState, thread: CommentThread): boolean {
+  if (!overlay.directEdit || (thread.side ?? 'new') !== 'new' || thread.isOutdated) return false;
+  if (isOpenedByEdit(thread)) return false;
+  const state = threadReviewControls(overlay, thread)?.state;
+  return state === 'awaiting-fix' || state === 'rejected';
+}
+
+export function threadAnsweredByEdit(
+  overlay: FixupOverlayState,
+  threads: CommentThread[],
+  range: EditRange,
+): string | undefined {
+  const answerable = threads.filter(
+    (thread) => canAnswerByEdit(overlay, thread) && rangesOverlap(rangeOfLine(thread.line), range),
+  );
+  return answerable.length === 1 ? answerable[0]?.id : undefined;
 }
 
 // An outdated thread has no trustworthy line to draw under, so it gets no overlay.

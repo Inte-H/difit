@@ -287,7 +287,7 @@ program
         process.exit(1);
       }
 
-      const { url, port, isEmpty } = await startServer({
+      const { url, port, isEmpty, settleDirectEdits } = await startServer({
         selection,
         preferredPort: options.port,
         host: options.host,
@@ -330,8 +330,12 @@ program
         console.log('💡 Use --open to automatically open browser\n');
       }
 
+      let shuttingDown = false;
       process.on('SIGINT', async () => {
+        if (shuttingDown) process.exit(130);
+        shuttingDown = true;
         console.log('\n👋 Shutting down difit server...');
+        await settleDirectEdits?.();
 
         // Try to fetch comments before shutting down
         try {

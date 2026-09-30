@@ -26,6 +26,7 @@ vi.mock('./hooks/useDiffComments', () => ({
     threads: mockComments,
     decisions: mockDecisions,
     replaceThreads: mockReplaceThreads,
+    mergeDecisions: mockMergeDecisions,
     addComment: vi.fn(),
     addThread: vi.fn(),
     removeComment: vi.fn(),
@@ -124,6 +125,7 @@ Object.defineProperty(window, 'EventSource', {
 let mockComments: DiffCommentThread[] = [];
 let mockDecisions: ReviewDecision[] = [];
 const mockReplaceThreads = vi.fn();
+const mockMergeDecisions = vi.fn();
 const mockClearAllComments = vi.fn();
 const mockApplyCommentImports = vi.fn(() => []);
 const mockGenerateAllCommentsPrompt = vi.fn(() => 'formatted prompt');
@@ -1485,5 +1487,172 @@ describe('App Component - Fixup review colors', () => {
 
     await screen.findByRole('button', { name: /toggle file tree panel/i });
     expect(container.querySelector('[data-fixup-review]')).toBeNull();
+  });
+});
+
+describe('App Component - Direct edit', () => {
+  const editableReview: DiffResponse = {
+    ...pinnedDiffResponse,
+    directEditAvailable: true,
+    files: [
+      {
+        path: 'test.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 0,
+        chunks: [
+          {
+            header: '@@ -1,1 +1,2 @@',
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 2,
+            lines: [
+              { type: 'normal', content: 'const a = 1;', oldLineNumber: 1, newLineNumber: 1 },
+              { type: 'add', content: '// says what a is', newLineNumber: 2 },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const editedThread = createMockThread({
+    id: 'e1',
+    filePath: 'test.ts',
+    line: 2,
+    body: '직접 고침',
+    author: 'reviewer-edit',
+  });
+  const approval: ReviewDecision = {
+    threadId: 'e1',
+    kind: 'approved',
+    fixupSha: 'f'.repeat(40),
+    at: '2026-01-01T00:00:00Z',
+  };
+
+  function serve(editResponse: { status: number; body: unknown }) {
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url.startsWith('/api/direct-edit')) {
+        return Promise.resolve({
+          ok: editResponse.status === 200,
+          status: editResponse.status,
+          statusText: '',
+          json: async () => editResponse.body,
+        } as Response);
+      }
+      if (url.startsWith('/api/fixups')) {
+        return Promise.resolve({ ok: true, json: async () => ({ fixups: [] }) } as Response);
+      }
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      if (url.startsWith('/api/blob/')) {
+        const bytes = new TextEncoder().encode('const a = 1;\n// says what a is\n');
+        return Promise.resolve({
+          ok: true,
+          text: async () => new TextDecoder().decode(bytes),
+          arrayBuffer: async () => bytes.slice().buffer,
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => editableReview,
+        blob: async () => ({ size: 1024 }),
+      } as Response);
+    });
+  }
+
+  const callsTo = (prefix: string) =>
+    vi.mocked(global.fetch).mock.calls.filter(([url]) => String(url).startsWith(prefix));
+
+  async function hoverLineTwo() {
+    const { container } = renderApp();
+    const rows = await waitFor(() => {
+      const found = container.querySelectorAll('[data-diff-line-row="true"]');
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    fireEvent.mouseEnter(rows[1]!.children[2]!);
+  }
+
+  async function editLineTwo(text: string) {
+    await hoverLineTwo();
+    fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
+    fireEvent.change(await screen.findByLabelText('고칠 코드'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockDecisions = [];
+  });
+
+  it('posts the edit as JSON and takes in the thread and approval the server made', async () => {
+    serve({
+      status: 200,
+      body: {
+        success: true,
+        sha: approval.fixupSha,
+        threadId: 'e1',
+        version: 3,
+        threads: [editedThread],
+        decisions: [approval],
+      },
+    });
+
+    await editLineTwo('');
+
+    await waitFor(() => expect(mockMergeDecisions).toHaveBeenCalledWith([approval]));
+    const [url, init] = callsTo('/api/direct-edit')[0]!;
+    expect(String(url)).toBe('/api/direct-edit?base=abc1234%5E&target=abc1234');
+    expect(init).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(JSON.parse(String(init?.body))).toEqual({
+      filePath: 'test.ts',
+      startLine: 2,
+      endLine: 2,
+      original: ['// says what a is'],
+      replacement: [''],
+    });
+    expect(mockReplaceThreads).toHaveBeenCalledWith([editedThread]);
+    await waitFor(() => expect(callsTo('/api/fixups').length).toBeGreaterThan(1));
+    expect(screen.queryByLabelText('고칠 코드')).not.toBeInTheDocument();
+  });
+
+  it('keeps the edit open and says why when the server refuses it', async () => {
+    serve({
+      status: 409,
+      body: { error: 'Direct edit refused: commit-failed', reason: 'commit-failed', output: 'no' },
+    });
+
+    await editLineTwo('');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('fixup 커밋을 만들지 못했습니다.');
+    expect(alert).toHaveTextContent('no');
+    expect(mockMergeDecisions).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('고칠 코드')).toBeInTheDocument();
+  });
+
+  it('offers no edit for a review that follows HEAD', async () => {
+    serve({ status: 200, body: {} });
+    vi.mocked(global.fetch).mockImplementation((input) =>
+      Promise.resolve({
+        ok: true,
+        json: async () =>
+          String(input).startsWith('/api/diff')
+            ? { ...editableReview, ...mockDiffResponse, files: editableReview.files }
+            : null,
+      } as Response),
+    );
+
+    await hoverLineTwo();
+
+    expect(screen.queryByRole('button', { name: 'Add a comment' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '줄 직접 고치기' })).not.toBeInTheDocument();
   });
 });
