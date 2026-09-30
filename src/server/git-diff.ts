@@ -14,7 +14,9 @@ import {
   type DiffLine,
   type DiffResponse,
   type DiffSelection,
+  type NewerTarget,
   type ThreadFixup,
+  AUTOSQUASH_PREFIX,
   REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
 import {
@@ -725,6 +727,45 @@ export class GitDiffParser {
     }
 
     return entries.map((entry) => this.toThreadFixup(entry));
+  }
+
+  // Counts the commits on `ref` that neither the target nor `since` holds, leaving out fixups;
+  // `commit` is the newest of them.
+  async findNewerTarget(
+    targetCommitish: string,
+    ref: string,
+    since: string,
+  ): Promise<NewerTarget | null> {
+    if (!isCommitTarget(targetCommitish) || !validateCommitish(targetCommitish)) {
+      return null;
+    }
+
+    let log: string;
+    try {
+      log = await this.git.raw([
+        'log',
+        '--no-show-signature',
+        FIXUP_LOG_FORMAT,
+        ref,
+        `^${targetCommitish}`,
+        `^${since}`,
+        '--',
+      ]);
+    } catch (error) {
+      console.error('Error looking for newer commits:', error);
+      return null;
+    }
+    const others = parseFixupLog(log).filter(
+      (entry) => entry.threadIds.length === 0 && !AUTOSQUASH_PREFIX.test(entry.subject),
+    );
+    const [newest] = others;
+    return newest
+      ? {
+          ref: ref.replace(/^refs\/(?:heads|remotes|tags)\//, ''),
+          commit: newest.sha,
+          commitCount: others.length,
+        }
+      : null;
   }
 
   // A commit that is not a merge, read the way listThreadFixups reads it.
