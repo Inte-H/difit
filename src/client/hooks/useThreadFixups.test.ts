@@ -154,4 +154,20 @@ describe('useThreadFixups', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
+
+  it('picks up a newer commit on the followed ref while the fixups stay the same', async () => {
+    respondWith([]);
+    const { result } = renderHook(() => useThreadFixups('/api/fixups', 0));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(result.current.newerTarget).toBeUndefined();
+
+    const newerTarget = { ref: 'HEAD', commit: 'e'.repeat(40), commitCount: 1 };
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ fixups: [], newerTarget }),
+    });
+    returnLater('focus');
+
+    await waitFor(() => expect(result.current.newerTarget).toEqual(newerTarget));
+  });
 });

@@ -1,11 +1,12 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { fstatSync, type Stats } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 
 import type { SimpleGit } from 'simple-git';
 
-import type { CommentImport } from '../types/diff.js';
+import type { CommentImport, DiffSelection } from '../types/diff.js';
 import { parseCommentImportValue } from '../utils/commentImports.js';
+import { createDiffSelection, isCommitTarget } from '../utils/diffSelection.js';
 
 type StdinStat = Pick<Stats, 'isFIFO' | 'isFile' | 'isSocket'>;
 
@@ -57,6 +58,38 @@ export function getGitRoot(): string {
   } catch {
     throw new Error('Not a git repository (or any of the parent directories)');
   }
+}
+
+function runGit(args: string[], cwd?: string): string | null {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+  } catch {
+    return null;
+  }
+}
+
+interface PinnedSelection {
+  selection: DiffSelection;
+  // The full name of the ref the target was named by, such as `refs/heads/main`.
+  followedRef?: string;
+}
+
+export function pinSelection(selection: DiffSelection, cwd?: string): PinnedSelection {
+  const { baseCommitish, targetCommitish, baseMode } = selection;
+  if (!isCommitTarget(targetCommitish)) return { selection };
+  const target = runGit(['rev-parse', '--verify', '--quiet', `${targetCommitish}^{commit}`], cwd);
+  if (!target) return { selection };
+
+  const base =
+    baseCommitish === `${targetCommitish}^`
+      ? `${target}^`
+      : (runGit(['rev-parse', '--verify', '--quiet', `${baseCommitish}^{commit}`], cwd) ??
+        baseCommitish);
+  const followedRef = runGit(['rev-parse', '--symbolic-full-name', targetCommitish], cwd);
+  return {
+    selection: createDiffSelection(base, target, baseMode),
+    ...(followedRef?.startsWith('refs/') ? { followedRef } : {}),
+  };
 }
 
 export function validateCommitish(commitish: string): boolean {

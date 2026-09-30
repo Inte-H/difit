@@ -90,6 +90,7 @@ vi.mock('./git-diff.js', () => {
     });
     clearResolvedCommitCache = vi.fn();
     listThreadFixups = vi.fn().mockResolvedValue([]);
+    findNewerTarget = vi.fn().mockResolvedValue(null);
     readThreadFixup = vi.fn(
       async (sha: string) =>
         ((await this.listThreadFixups()) as Array<{ sha: string }>).find(
@@ -1785,6 +1786,39 @@ describe('Server Integration Tests', () => {
       expect(data2.clearComments).toBe(true);
     });
   });
+  describe('Fixups API', () => {
+    const NEWER = { ref: 'HEAD', commit: 'e'.repeat(40), commitCount: 1 };
+
+    async function fixupsFrom(followedRef?: string) {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'abc1234', baseCommitish: 'abc1234^' },
+        preferredPort: 9150,
+        ...(followedRef ? { followedRef } : {}),
+      });
+      servers.push(server);
+      const parser = parserInstances.at(-1)!;
+      parser.findNewerTarget.mockResolvedValue(NEWER);
+      const body = await (
+        await fetch(`http://localhost:${port}/api/fixups?base=def4567&target=abc1234`)
+      ).json();
+      return { body, findNewerTarget: parser.findNewerTarget };
+    }
+
+    it('reports where the ref the review was pinned from has moved', async () => {
+      const { body, findNewerTarget } = await fixupsFrom('HEAD');
+
+      expect(body).toEqual({ fixups: [], newerTarget: NEWER });
+      expect(findNewerTarget).toHaveBeenCalledWith('abc1234', 'HEAD', 'abc1234');
+    });
+
+    it('reports no newer target for a review opened by hash', async () => {
+      const { body, findNewerTarget } = await fixupsFrom();
+
+      expect(body).toEqual({ fixups: [] });
+      expect(findNewerTarget).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Direct edit API', () => {
     const FIXUP_SHA = 'f'.repeat(40);
     const PINNED = '?base=def4567&target=abc1234';

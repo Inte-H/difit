@@ -1490,6 +1490,67 @@ describe('App Component - Fixup review colors', () => {
   });
 });
 
+describe('App Component - Newer commits on the followed ref', () => {
+  const reviewAt = (commit: string): DiffResponse => ({
+    ...pinnedDiffResponse,
+    baseCommitish: `${commit}^`,
+    targetCommitish: commit,
+    requestedBaseCommitish: `${commit}^`,
+    requestedTargetCommitish: commit,
+  });
+  const reopenButton = () => screen.queryByRole('button', { name: /HEAD에 새 커밋 2개/ });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockDecisions = [];
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      if (url.startsWith('/api/fixups')) {
+        const onOriginal = new URLSearchParams(url.split('?')[1]).get('target') === 'abc1234';
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            fixups: [],
+            ...(onOriginal
+              ? { newerTarget: { ref: 'HEAD', commit: 'fed9876', commitCount: 2 } }
+              : {}),
+          }),
+        } as Response);
+      }
+      const target = url.startsWith('/api/diff')
+        ? new URLSearchParams(url.split('?')[1]).get('target')
+        : null;
+      return Promise.resolve({
+        ok: true,
+        json: async () => reviewAt(target ?? 'abc1234'),
+        blob: async () => ({ size: 1024 }),
+      } as Response);
+    });
+  });
+
+  it('reopens the review at the commit the followed ref moved to', async () => {
+    renderApp();
+
+    fireEvent.click(await screen.findByRole('button', { name: /HEAD에 새 커밋 2개/ }));
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(global.fetch)
+          .mock.calls.map(([url]) => String(url))
+          .filter((url) => url.startsWith('/api/diff'))
+          .map((url) => new URLSearchParams(url.split('?')[1]).get('base'))
+          .at(-1),
+      ).toBe('fed9876^'),
+    );
+    await waitFor(() => expect(reopenButton()).toBeNull());
+  });
+});
+
 describe('App Component - Direct edit', () => {
   const editableReview: DiffResponse = {
     ...pinnedDiffResponse,

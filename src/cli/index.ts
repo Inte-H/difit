@@ -6,7 +6,7 @@ import { simpleGit, type SimpleGit } from 'simple-git';
 import pkg from '../../package.json' with { type: 'json' };
 import { startServer } from '../server/server.js';
 import { type CommentImport, type DiffSelection } from '../types/diff.js';
-import { createDiffSelection } from '../utils/diffSelection.js';
+import { createDiffSelection, isSameCommit } from '../utils/diffSelection.js';
 import { DiffMode } from '../types/watch.js';
 
 import {
@@ -18,6 +18,8 @@ import {
   validateDiffArguments,
   getGitRoot,
   readStdin,
+  pinSelection,
+  shortHash,
 } from './utils.js';
 import { createCommentCommand } from './comment.js';
 import { getPrPatch, getPrCommentImports } from './github.js';
@@ -287,8 +289,9 @@ program
         process.exit(1);
       }
 
+      const pinned = pinSelection(selection, repoPath);
       const { url, port, isEmpty, settleDirectEdits } = await startServer({
-        selection,
+        selection: pinned.selection,
         preferredPort: options.port,
         host: options.host,
         openBrowser: options.open,
@@ -297,6 +300,7 @@ program
         contextLines: options.context,
         diffMode: determineDiffMode(selection, compareWith),
         repoPath,
+        ...(pinned.followedRef ? { followedRef: pinned.followedRef } : {}),
         ...(commentImports.length > 0 ? { commentImports } : {}),
       });
 
@@ -309,7 +313,12 @@ program
       }
 
       console.log(`\n🚀 difit server started on ${url}`);
-      console.log(`📋 Reviewing: ${selection.targetCommitish}`);
+      const pinnedTarget = pinned.selection.targetCommitish;
+      console.log(
+        isSameCommit(pinnedTarget, selection.targetCommitish)
+          ? `📋 Reviewing: ${selection.targetCommitish}`
+          : `📋 Reviewing: ${selection.targetCommitish} (${shortHash(pinnedTarget)})`,
+      );
 
       if (options.keepAlive) {
         console.log('🔒 Keep-alive mode: server will stay running after browser disconnects');
