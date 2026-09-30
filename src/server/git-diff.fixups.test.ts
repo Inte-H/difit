@@ -293,3 +293,81 @@ describe('listThreadFixups against a real repository', () => {
     expect(calls).toEqual(['revparse', 'revparse', 'raw']);
   });
 });
+
+describe('findNewerTarget against a real repository', () => {
+  it('stays quiet while only fixups follow the target', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'f.txt': 'a\n' });
+    commit(repo, `fixup! ${target}`, { 'f.txt': 'b\n' });
+    commit(repo, 'squash! base', { 'f.txt': 'c\n' });
+    commit(repo, 'amend! base', { 'f.txt': 'd\n' });
+    commit(repo, 'answer\n\nreview-thread: t1', { 'f.txt': 'e\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(await parser.findNewerTarget(target, 'HEAD', target)).toBeNull();
+  });
+
+  it('counts commits autosquash would not fold, and reopens at the newest of them', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'f.txt': 'a\n' });
+    commit(repo, 'Fixup! capitalised', { 'g.txt': 'g\n' });
+    commit(repo, 'Revert "fixup! x"', { 'g.txt': 'i\n' });
+    const newest = commit(repo, 'next feature\n\nfixup! quoted in the body', { 'g.txt': 'h\n' });
+    commit(repo, `fixup! ${target}`, { 'f.txt': 'b\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(await parser.findNewerTarget(target, 'refs/heads/main', target)).toEqual({
+      ref: 'main',
+      commit: newest,
+      commitCount: 3,
+    });
+  });
+
+  it('leaves out commits the ref already held at launch', async () => {
+    const repo = createRepo();
+    const older = commit(repo, 'older', { 'f.txt': 'a\n' });
+    commit(repo, 'middle', { 'f.txt': 'b\n' });
+    const launch = commit(repo, 'launch', { 'f.txt': 'c\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(await parser.findNewerTarget(older, 'HEAD', launch)).toBeNull();
+
+    const later = commit(repo, 'later', { 'f.txt': 'd\n' });
+
+    expect(await parser.findNewerTarget(older, 'HEAD', launch)).toEqual({
+      ref: 'HEAD',
+      commit: later,
+      commitCount: 1,
+    });
+  });
+
+  it('points at the folded history after the target is rewritten', async () => {
+    const repo = createRepo();
+    commit(repo, 'root', { 'f.txt': 'a\n' });
+    const target = commit(repo, 'base', { 'f.txt': 'b\n' });
+    commit(repo, `fixup! ${target}`, { 'f.txt': 'c\n' });
+    git(repo, 'reset', '-q', '--soft', 'HEAD~2');
+    const folded = commit(repo, 'base');
+
+    const parser = new GitDiffParser(repo);
+
+    expect(await parser.findNewerTarget(target, 'HEAD', target)).toEqual({
+      ref: 'HEAD',
+      commit: folded,
+      commitCount: 1,
+    });
+  });
+
+  it('stays quiet when the ref is gone or still on the target', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'f.txt': 'a\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(await parser.findNewerTarget(target, 'HEAD', target)).toBeNull();
+    expect(await parser.findNewerTarget(target, 'refs/heads/deleted', target)).toBeNull();
+  });
+});

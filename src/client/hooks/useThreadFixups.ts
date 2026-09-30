@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { FixupsResponse, ThreadFixup } from '../../types/diff';
+import type { FixupsResponse, NewerTarget, ThreadFixup } from '../../types/diff';
 
 // Focus and visibilitychange usually fire together on one return to the page.
 const RETURN_THROTTLE_MS = 1000;
@@ -14,14 +14,22 @@ const sameFixups = (a: ThreadFixup[], b: ThreadFixup[]) =>
       fixup.threadIds.join() === b[index]?.threadIds.join(),
   );
 
+const sameNewerTarget = (a?: NewerTarget, b?: NewerTarget) =>
+  a?.ref === b?.ref && a?.commit === b?.commit && a?.commitCount === b?.commitCount;
+
 interface ThreadFixups {
   fixupsByThread: Map<string, ThreadFixup[]>;
+  newerTarget: NewerTarget | undefined;
   // False until the list for the current URL has been read at least once.
   loaded: boolean;
 }
 
 export function useThreadFixups(fixupsApiUrl: string | null, refreshKey: number): ThreadFixups {
-  const [list, setList] = useState<{ url: string; fixups: ThreadFixup[] } | null>(null);
+  const [list, setList] = useState<{
+    url: string;
+    fixups: ThreadFixup[];
+    newerTarget: NewerTarget | undefined;
+  } | null>(null);
   const [returnCount, setReturnCount] = useState(0);
   const lastReturnAtRef = useRef(0);
 
@@ -57,10 +65,13 @@ export function useThreadFixups(fixupsApiUrl: string | null, refreshKey: number)
         const payload = (await response.json()) as FixupsResponse;
         if (!cancelled) {
           const next = Array.isArray(payload.fixups) ? payload.fixups : [];
+          const { newerTarget } = payload;
           setList((current) =>
-            current?.url === fixupsApiUrl && sameFixups(current.fixups, next)
+            current?.url === fixupsApiUrl &&
+            sameFixups(current.fixups, next) &&
+            sameNewerTarget(current.newerTarget, newerTarget)
               ? current
-              : { url: fixupsApiUrl, fixups: next },
+              : { url: fixupsApiUrl, fixups: next, newerTarget },
           );
         }
       })
@@ -91,5 +102,5 @@ export function useThreadFixups(fixupsApiUrl: string | null, refreshKey: number)
     return map;
   }, [fixups]);
 
-  return { fixupsByThread, loaded };
+  return { fixupsByThread, newerTarget: loaded ? list?.newerTarget : undefined, loaded };
 }
