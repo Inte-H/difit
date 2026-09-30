@@ -3,9 +3,13 @@ import { useState, useRef } from 'react';
 
 import { useClickOutside } from '../hooks/useClickOutside';
 
+export type CopyAllNotice = 'copied' | 'empty';
+
 interface CommentsDropdownProps {
   commentsCount: number;
-  isCopiedAll: boolean;
+  // Null until the fixup list is read, since answered threads cannot be told apart before that.
+  openCount: number | null;
+  copyAllNotice: CopyAllNotice | null;
   onCopyAll: () => void;
   onDeleteAll: () => void;
   onViewAll?: () => void;
@@ -15,7 +19,8 @@ interface CommentsDropdownProps {
 
 export function CommentsDropdown({
   commentsCount,
-  isCopiedAll,
+  openCount,
+  copyAllNotice,
   onCopyAll,
   onDeleteAll,
   onViewAll,
@@ -44,19 +49,25 @@ export function CommentsDropdown({
     setIsOpen(false);
   };
 
-  const copyLabel = isCompact
-    ? isCopiedAll
-      ? 'Copied'
-      : `Copy All (${commentsCount})`
-    : isCopiedAll
-      ? 'Copied All!'
-      : `Copy All Prompt (${commentsCount})`;
+  const copyLabel =
+    openCount === null
+      ? 'Checking fixups…'
+      : copyAllNotice === 'empty'
+        ? 'No open comments'
+        : isCompact
+          ? copyAllNotice === 'copied'
+            ? 'Copied'
+            : `Copy All (${openCount})`
+          : copyAllNotice === 'copied'
+            ? 'Copied All!'
+            : `Copy All Prompt (${openCount})`;
 
   return (
     <div className="relative" ref={dropdownRef}>
       <div className="flex">
         <button
           onClick={handleCopyAll}
+          disabled={openCount === null}
           className={`text-xs px-3 py-1.5 pr-2 rounded-l transition-all flex items-center gap-1.5 ${
             isCompact ? 'whitespace-normal' : 'whitespace-nowrap'
           }`}
@@ -74,9 +85,9 @@ export function CommentsDropdown({
             e.currentTarget.style.backgroundColor = 'var(--color-yellow-btn-bg)';
             e.currentTarget.style.borderColor = 'var(--color-yellow-btn-border)';
           }}
-          title={`Copy all ${commentsCount} comments to AI coding agent`}
+          title="Copy a prompt with only the open comments (not yet answered, or rejected)"
         >
-          {isCopiedAll ? <Check size={12} /> : <Copy size={12} />}
+          {copyAllNotice === 'copied' ? <Check size={12} /> : <Copy size={12} />}
           {copyLabel}
         </button>
         <button

@@ -8,6 +8,7 @@ import {
   type LineNumber,
   type LineSelection,
 } from '../../types/diff';
+import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -20,6 +21,7 @@ import { CommentButton } from './CommentButton';
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
+import { FixupOverlayRow } from './FixupOverlayCard';
 import { OpenInEditorButton } from './OpenInEditorButton';
 import type { AppearanceSettings } from './SettingsModal';
 import { WordLevelDiffHighlighter } from './WordLevelDiffHighlighter';
@@ -170,6 +172,7 @@ export function SideBySideDiffChunk({
   } | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
+  const overlay = useFixupOverlay();
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -777,12 +780,23 @@ export function SideBySideDiffChunk({
                   </td>
                 </tr>
 
+                {allThreads.map((thread) => (
+                  <FixupOverlayRow
+                    key={`fixup-${thread.id}`}
+                    thread={thread}
+                    filePath={filename}
+                    colSpan={4}
+                    syntaxTheme={syntaxTheme}
+                  />
+                ))}
+
                 {/* Comment threads row */}
                 {allThreads.length > 0 && (
                   <tr className="bg-github-bg-secondary">
                     <td colSpan={4} className="p-0 border-t border-github-border">
                       {allThreads.map((thread) => {
                         const threadSide = thread.side || 'new';
+                        const review = threadReviewControls(overlay, thread.id);
                         let layout: 'left' | 'right' | 'full';
 
                         if (threadSide === 'old' && sideLine.oldLineNumber) {
@@ -808,6 +822,7 @@ export function SideBySideDiffChunk({
                               <div className="m-2 mx-3">
                                 <CommentThreadCard
                                   thread={thread}
+                                  review={review}
                                   showAuthorBadges={showAuthorBadges}
                                   onGeneratePrompt={onGenerateThreadPrompt}
                                   onRemoveThread={onRemoveThread}

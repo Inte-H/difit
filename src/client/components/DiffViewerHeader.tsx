@@ -32,7 +32,12 @@ const getFileIcon = (status: DiffFile['status']) => {
     case 'deleted':
       return <FileX size={16} className="text-github-danger" />;
     case 'renamed':
-      return <FilePen size={16} className="text-github-warning" />;
+      return (
+        <FilePen
+          size={16}
+          className="text-github-warning fixup-review:text-github-text-secondary"
+        />
+      );
     default:
       return <FileDiff size={16} className="text-github-text-secondary" />;
   }
@@ -110,7 +115,7 @@ export const DiffViewerHeader = ({
       <div className="flex items-center gap-3">
         {isChangedSinceViewed && !isReviewed && (
           <span
-            className="inline-flex h-6 items-center rounded-full border border-github-warning px-2.5 text-xs font-medium text-github-warning"
+            className="inline-flex h-6 items-center rounded-full border border-github-warning px-2.5 text-xs font-medium text-github-warning fixup-review:border-github-text-secondary fixup-review:text-github-text-secondary"
             title="Updated since you last viewed this file"
             aria-label="Updated since you last viewed this file"
           >

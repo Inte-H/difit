@@ -10,6 +10,7 @@ import {
   type LineSelection,
 } from '../../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
+import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import {
   computeWordLevelDiff,
@@ -20,6 +21,7 @@ import {
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
+import { FixupOverlayRow } from './FixupOverlayCard';
 import type { AppearanceSettings } from './SettingsModal';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
 
@@ -93,6 +95,7 @@ export const DiffChunk = memo(function DiffChunk({
     lineNumber: number;
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const overlay = useFixupOverlay();
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -508,33 +511,43 @@ export const DiffChunk = memo(function DiffChunk({
 
                 {lineThreads.map((thread) => {
                   const layout = getCommentLayout(line);
+                  const review = threadReviewControls(overlay, thread.id);
                   return (
-                    <tr key={thread.id} className="bg-github-bg-secondary">
-                      <td colSpan={3} className="p-0 border-t border-github-border">
-                        <div
-                          className={`flex ${
-                            layout === 'left'
-                              ? 'justify-start'
-                              : layout === 'right'
-                                ? 'justify-end'
-                                : 'justify-center'
-                          }`}
-                        >
-                          <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'} m-2 mx-4`}>
-                            <CommentThreadCard
-                              thread={thread}
-                              showAuthorBadges={showAuthorBadges}
-                              onGeneratePrompt={onGenerateThreadPrompt}
-                              onRemoveThread={onRemoveThread}
-                              onReplyToThread={onReplyToThread}
-                              onRemoveMessage={onRemoveMessage}
-                              onUpdateMessage={onUpdateMessage}
-                              syntaxTheme={syntaxTheme}
-                            />
+                    <React.Fragment key={thread.id}>
+                      <FixupOverlayRow
+                        thread={thread}
+                        filePath={filename}
+                        colSpan={3}
+                        syntaxTheme={syntaxTheme}
+                      />
+                      <tr className="bg-github-bg-secondary">
+                        <td colSpan={3} className="p-0 border-t border-github-border">
+                          <div
+                            className={`flex ${
+                              layout === 'left'
+                                ? 'justify-start'
+                                : layout === 'right'
+                                  ? 'justify-end'
+                                  : 'justify-center'
+                            }`}
+                          >
+                            <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'} m-2 mx-4`}>
+                              <CommentThreadCard
+                                thread={thread}
+                                review={review}
+                                showAuthorBadges={showAuthorBadges}
+                                onGeneratePrompt={onGenerateThreadPrompt}
+                                onRemoveThread={onRemoveThread}
+                                onReplyToThread={onReplyToThread}
+                                onRemoveMessage={onRemoveMessage}
+                                onUpdateMessage={onUpdateMessage}
+                                syntaxTheme={syntaxTheme}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                      </tr>
+                    </React.Fragment>
                   );
                 })}
 

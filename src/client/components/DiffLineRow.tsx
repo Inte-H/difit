@@ -74,10 +74,10 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
         onMouseMove={onMouseMove}
         onClick={onClick}
       >
-        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative">
+        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative">
           {line.oldLineNumber || ''}
         </td>
-        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible">
+        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible">
           <span>{line.newLineNumber || ''}</span>
           {showLineActions && (
             <>

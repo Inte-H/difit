@@ -23,6 +23,16 @@ export function createDiffSelection(
   };
 }
 
+// Reopening a single-commit review at another commit diffs that commit against its own parent.
+export function selectionAtCommit(current: DiffSelection, commit: string): DiffSelection {
+  const reviewsOneCommit = current.baseCommitish === `${current.targetCommitish}^`;
+  return createDiffSelection(
+    reviewsOneCommit ? `${commit}^` : current.baseCommitish,
+    commit,
+    current.baseMode,
+  );
+}
+
 export function diffSelectionsEqual(
   left: DiffSelection | null | undefined,
   right: DiffSelection | null | undefined,
@@ -44,4 +54,21 @@ export function getMergeBaseTargetRef(targetCommitish: string): string {
   }
 
   return targetCommitish;
+}
+
+export function isCommitTarget(targetCommitish: string): boolean {
+  return !['.', 'staged', 'working', 'stdin'].includes(targetCommitish);
+}
+
+const HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
+
+export function isCommitHash(commitish: string): boolean {
+  return HASH_PATTERN.test(commitish);
+}
+
+// Hashes of different lengths name the same commit when the shorter is a prefix of the longer.
+export function isSameCommit(a: string, b: string): boolean {
+  if (!HASH_PATTERN.test(a) || !HASH_PATTERN.test(b)) return a === b;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  return longer.toLowerCase().startsWith(shorter.toLowerCase());
 }

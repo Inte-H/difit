@@ -207,6 +207,7 @@ describe('StorageService - Repository Isolation', () => {
         threads: [],
         viewedFiles: [],
         appliedCommentImportIds: ['import-bundle-1'],
+        decisions: [],
       });
 
       service.saveViewedFiles('base', 'target', [
@@ -219,6 +220,51 @@ describe('StorageService - Repository Isolation', () => {
 
       const data = service.getDiffContextData('base', 'target');
       expect(data?.appliedCommentImportIds).toEqual(['import-bundle-1']);
+    });
+
+    it('writes decisions into a version 2 record so an older difit keeps reading it', () => {
+      const decisions = [
+        { threadId: 't1', kind: 'approved' as const, fixupSha: 'aaaa', at: '2024-01-01T00:00:00Z' },
+      ];
+      service.saveDiffContextData('base', 'target', {
+        version: 2,
+        baseCommitish: 'base',
+        targetCommitish: 'target',
+        createdAt: '2024-01-01T00:00:00Z',
+        lastModifiedAt: '2024-01-01T00:00:00Z',
+        threads: [],
+        viewedFiles: [],
+        appliedCommentImportIds: [],
+        decisions,
+      });
+
+      const key = localStorageMock._keys.find((k) => k.startsWith('difit-storage-v1')) ?? '';
+      const raw = JSON.parse(localStorage.getItem(key) ?? '{}');
+      expect(raw.version).toBe(2);
+      expect(raw.decisions).toEqual(decisions);
+    });
+
+    it('reads back a version 3 record with its decisions', () => {
+      service.saveDiffContextData('base', 'target', {
+        version: 2,
+        baseCommitish: 'base',
+        targetCommitish: 'target',
+        createdAt: '2024-01-01T00:00:00Z',
+        lastModifiedAt: '2024-01-01T00:00:00Z',
+        threads: [],
+        viewedFiles: [],
+        appliedCommentImportIds: [],
+      });
+      const key = localStorageMock._keys.find((k) => k.startsWith('difit-storage-v1')) ?? '';
+      const decisions = [
+        { threadId: 't1', kind: 'rejected', fixupSha: 'aaaa', at: '2024-01-01T00:00:00Z' },
+      ];
+      const raw = JSON.parse(localStorage.getItem(key) ?? '{}');
+      localStorage.setItem(key, JSON.stringify({ ...raw, version: 3, decisions }));
+
+      const data = service.getDiffContextData('base', 'target');
+      expect(data?.version).toBe(2);
+      expect(data?.decisions).toEqual(decisions);
     });
 
     it('separates direct and merge-base diff contexts', () => {
