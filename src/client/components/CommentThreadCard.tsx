@@ -5,6 +5,7 @@ import {
   type AnchorStaleReason,
   type CommentThread,
   type DiffCommentMessage,
+  REVIEWER_EDIT_AUTHOR,
 } from '../../types/diff';
 import { isSameCommit } from '../../utils/diffSelection';
 import { reviewStateLabel } from '../../utils/reviewDecisions';
@@ -210,6 +211,8 @@ interface CommentThreadCardProps {
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
   onClick?: (e: React.MouseEvent) => void;
+  // Absent when this comment cannot be answered by editing the code here.
+  onEditDirectly?: () => void;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
 }
 
@@ -224,11 +227,13 @@ export function CommentThreadCard({
   onRemoveMessage,
   onUpdateMessage,
   onClick,
+  onEditDirectly,
   syntaxTheme,
 }: CommentThreadCardProps) {
   const [isCopied, setIsCopied] = useState(false);
   const [isReplying, setIsReplying] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const answeredByEdit = thread.messages.some((message) => message.author === REVIEWER_EDIT_AUTHOR);
   const lineLabel = Array.isArray(thread.line)
     ? `${thread.line[0]}-${thread.line[1]}`
     : thread.line;
@@ -412,6 +417,15 @@ export function CommentThreadCard({
                   </button>
                 </>
               )}
+              {review.state === 'approved' && answeredByEdit && review.fixupSha && (
+                <button
+                  type="button"
+                  onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
+                  className="min-h-10 flex-1 rounded border border-github-danger bg-github-bg-secondary px-3 text-sm text-github-text-primary"
+                >
+                  되돌리기
+                </button>
+              )}
               {review.state === 'approved' && (
                 <button
                   type="button"
@@ -422,6 +436,19 @@ export function CommentThreadCard({
                 </button>
               )}
             </div>
+          )}
+
+          {onEditDirectly && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onEditDirectly();
+              }}
+              className="min-h-10 w-full rounded border border-github-accent bg-github-bg-secondary px-3 text-sm text-github-text-primary"
+            >
+              직접 고치기
+            </button>
           )}
 
           {review && anchorCommit && (
