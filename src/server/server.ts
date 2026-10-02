@@ -26,6 +26,7 @@ import {
 } from '../utils/editorOptions.js';
 import { createId } from '../utils/createId.js';
 import { getFileExtension } from '../utils/fileUtils.js';
+import { isSymbolName } from '../utils/symbolName.js';
 import {
   deriveThreadReviewState,
   isOpenedByEdit,
@@ -34,9 +35,11 @@ import {
   selectOpenThreads,
 } from '../utils/reviewDecisions.js';
 
+import { validateCommitish } from '../cli/utils.js';
 import { commitDirectEdit } from './direct-edit.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
+import { searchSymbol } from './symbol-search.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
 
 import {
@@ -54,6 +57,7 @@ import {
   type GeneratedStatusResponse,
   type ReviewDecision,
   type RevisionsResponse,
+  type SymbolSearchResponse,
   type ThreadReviewState,
 } from '@/types/diff.js';
 import {
@@ -412,6 +416,7 @@ export async function startServer(options: ServerOptions): Promise<{
       ignoreWhitespace,
       openInEditorAvailable: !options.stdinDiff,
       directEditAvailable: canEditDirectly(currentCommentSelection),
+      symbolSearchAvailable: !options.stdinDiff,
       baseCommitish,
       targetCommitish,
       requestedBaseCommitish,
@@ -462,6 +467,43 @@ export async function startServer(options: ServerOptions): Promise<{
     } catch (error) {
       console.error('Error fetching generated status:', error);
       res.status(500).json({ error: 'Failed to get generated status' });
+    }
+  });
+
+  app.get('/api/symbol', async (req, res) => {
+    if (options.stdinDiff) {
+      res.status(404).json({ error: 'Symbol search is not available for stdin diff' });
+      return;
+    }
+
+    const { name, ref, from } = req.query;
+    if (typeof name !== 'string' || !isSymbolName(name)) {
+      res.status(400).json({ error: 'Invalid symbol name' });
+      return;
+    }
+    if (typeof ref !== 'string' || !validateCommitish(ref)) {
+      res.status(400).json({ error: 'Invalid ref' });
+      return;
+    }
+    const fromPath = typeof from === 'string' ? parseRepositoryRelativePath(from) : undefined;
+    const disconnected = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) disconnected.abort();
+    });
+
+    try {
+      const response: SymbolSearchResponse = await searchSymbol(
+        repositoryPath,
+        name,
+        ref,
+        fromPath?.ok ? fromPath.path : undefined,
+        disconnected.signal,
+      );
+      res.json(response);
+    } catch (error) {
+      if (disconnected.signal.aborted) return;
+      console.error('Error searching symbol:', error);
+      res.status(404).json({ error: 'Could not search this revision' });
     }
   });
 
