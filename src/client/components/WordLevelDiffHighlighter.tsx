@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react';
 
+import { isWordToken } from '../utils/wordDetection';
 import { type DiffSegment } from '../utils/wordLevelDiff';
 
 interface WordLevelDiffHighlighterProps {
@@ -26,7 +27,15 @@ export const WordLevelDiffHighlighter = React.memo(function WordLevelDiffHighlig
 
       return (
         <span key={index} className={diffClass}>
-          {segment.value}
+          {segment.value.split(/(\w+)/).map((part, partIndex) =>
+            isWordToken(part) ? (
+              <span key={partIndex} className="word-token" data-word={part}>
+                {part}
+              </span>
+            ) : (
+              part
+            ),
+          )}
         </span>
       );
     });

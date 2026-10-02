@@ -704,7 +704,11 @@ export function SideBySideDiffChunk({
                     className={`w-1/2 p-0 align-top border-r border-github-border relative ${getSideBySideLineClass(sideLine.oldLine, isExpandedLine(sideLine.oldLine))} ${getSelectedLineStyle('old', sideLine)} ${highlightOldCell ? cellHighlightClass : ''}`}
                   >
                     {sideLine.oldLine && (
-                      <div className="flex items-center relative min-h-[20px] px-3">
+                      <div
+                        className="flex items-center relative min-h-[20px] px-3"
+                        data-symbol-side="old"
+                        data-symbol-path={filename}
+                      >
                         {sideLine.wordLevelDiff ? (
                           <WordLevelDiffHighlighter
                             segments={sideLine.wordLevelDiff.oldSegments}
@@ -768,7 +772,11 @@ export function SideBySideDiffChunk({
                     className={`w-1/2 p-0 align-top relative ${getSideBySideLineClass(sideLine.newLine, isExpandedLine(sideLine.newLine))} ${getSelectedLineStyle('new', sideLine)} ${highlightNewCell ? cellHighlightClass : ''}`}
                   >
                     {sideLine.newLine && (
-                      <div className="flex items-center relative min-h-[20px] px-3">
+                      <div
+                        className="flex items-center relative min-h-[20px] px-3"
+                        data-symbol-side="new"
+                        data-symbol-path={filename}
+                      >
                         {sideLine.wordLevelDiff ? (
                           <WordLevelDiffHighlighter
                             segments={sideLine.wordLevelDiff.newSegments}

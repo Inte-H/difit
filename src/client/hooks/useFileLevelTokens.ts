@@ -1,7 +1,8 @@
-import { normalizeTokens, type Token } from 'prism-react-renderer';
+import { type Token } from 'prism-react-renderer';
 import { useEffect, useMemo, useState } from 'react';
 
 import { type DiffFile } from '../../types/diff';
+import { fetchBlobText, tokenizeContent } from '../utils/fileTokens';
 import { getPrismLanguageFromFilename } from '../utils/languageDetection';
 import { loadPrismLanguage } from '../utils/languageLoader';
 import Prism from '../utils/prism';
@@ -14,34 +15,6 @@ export interface FileLevelTokens {
 }
 
 const EMPTY: FileLevelTokens = { getOldTokens: null, getNewTokens: null };
-
-// Whole-file tokenization is skipped for larger files so we don't pay the cost
-// of highlighting the entire blob; these fall back to per-line highlighting.
-const MAX_WHOLE_FILE_LINES = 2000;
-
-async function fetchBlobText(filePath: string, ref: string): Promise<string | null> {
-  try {
-    const response = await fetch(
-      `/api/blob/${encodeURIComponent(filePath)}?ref=${encodeURIComponent(ref)}`,
-    );
-    if (!response.ok) return null;
-    return await response.text();
-  } catch {
-    return null;
-  }
-}
-
-function tokenizeContent(content: string, language: string): Token[][] | null {
-  if (content.split('\n').length > MAX_WHOLE_FILE_LINES) return null;
-  const grammar = Prism.languages[language];
-  if (!grammar) return null;
-  try {
-    const raw = Prism.tokenize(content, grammar);
-    return normalizeTokens(raw);
-  } catch {
-    return null;
-  }
-}
 
 interface UseFileLevelTokensParams {
   file: DiffFile;

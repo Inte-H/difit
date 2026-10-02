@@ -40,7 +40,7 @@ export const PrismSyntaxHighlighter = React.memo(function PrismSyntaxHighlighter
   onMouseOut,
 }: PrismSyntaxHighlighterProps) {
   const detectedLang = language || (filename ? getPrismLanguageFromFilename(filename) : 'text');
-  const { actualLang } = useHighlightedCode(code, detectedLang);
+  const { actualLang } = useHighlightedCode(detectedLang);
   const theme = getSyntaxTheme(syntaxTheme);
   const hasPrecomputed = !!precomputedTokens;
 
