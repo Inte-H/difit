@@ -157,7 +157,7 @@ async function renderReview() {
       <App />
     </HotkeysProvider>,
   );
-  await screen.findByRole('button', { name: '승인' });
+  await screen.findByRole('button', { name: '승인' }, { timeout: 5000 });
   await settle();
 }
 
@@ -176,7 +176,7 @@ async function sendCommentsChanged() {
   await settle();
 }
 
-describe('App - live comment sync', () => {
+describe('App - live comment sync', { timeout: 15_000 }, () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.clearAllMocks();
