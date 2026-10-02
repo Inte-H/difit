@@ -16,7 +16,10 @@ globalThis.fetch = fetch as any;
 const parserInstances = vi.hoisted(() => [] as any[]);
 const commitDirectEdit = vi.hoisted(() => vi.fn());
 
+const searchSymbol = vi.hoisted(() => vi.fn());
+
 vi.mock('./direct-edit.js', () => ({ commitDirectEdit }));
+vi.mock('./symbol-search.js', () => ({ searchSymbol }));
 
 // Helper function to get available port
 async function getAvailablePort(preferredPort: number): Promise<number> {
@@ -473,6 +476,7 @@ describe('Server Integration Tests', () => {
       expect(data.files[0]).toHaveProperty('path', 'test.js');
       expect(data).toHaveProperty('ignoreWhitespace', false);
       expect(data).toHaveProperty('openInEditorAvailable', true);
+      expect(data).toHaveProperty('symbolSearchAvailable', true);
       expect(data).toHaveProperty('requestedBaseCommitish', 'HEAD^');
       expect(data).toHaveProperty('requestedTargetCommitish', 'HEAD');
     });
@@ -1350,6 +1354,7 @@ describe('Server Integration Tests', () => {
 
       expect(response.ok).toBe(true);
       expect(data).toHaveProperty('openInEditorAvailable', false);
+      expect(data).toHaveProperty('symbolSearchAvailable', false);
     });
 
     it('GET /api/generated-status/* returns 400 for stdin diff', async () => {
@@ -1544,6 +1549,80 @@ describe('Server Integration Tests', () => {
 
       expect(response.status).toBe(400);
       expect(data).toHaveProperty('error', 'File path outside repository');
+    });
+  });
+
+  describe('Symbol search API', () => {
+    let port: number;
+
+    beforeEach(async () => {
+      searchSymbol.mockReset();
+      const result = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9085,
+      });
+      servers.push(result.server);
+      port = result.port;
+    });
+
+    it('searches the requested revision from the repository root', async () => {
+      const found = {
+        name: 'parseDiff',
+        ref: 'abc1234',
+        definitions: [{ path: 'src/a.ts', line: 3, text: 'function parseDiff() {' }],
+        references: [],
+        truncated: false,
+      };
+      searchSymbol.mockResolvedValue(found);
+
+      const response = await fetch(
+        `http://localhost:${port}/api/symbol?name=parseDiff&ref=abc1234&from=src%2Fb.ts`,
+      );
+
+      expect(response.ok).toBe(true);
+      expect(await response.json()).toEqual(found);
+      expect(searchSymbol).toHaveBeenCalledWith(
+        expect.any(String),
+        'parseDiff',
+        'abc1234',
+        'src/b.ts',
+        expect.any(AbortSignal),
+      );
+    });
+
+    it('ignores a starting file outside the repository', async () => {
+      searchSymbol.mockResolvedValue({});
+
+      await fetch(`http://localhost:${port}/api/symbol?name=parseDiff&ref=HEAD&from=..%2Fx.ts`);
+
+      expect(searchSymbol).toHaveBeenCalledWith(
+        expect.any(String),
+        'parseDiff',
+        'HEAD',
+        undefined,
+        expect.any(AbortSignal),
+      );
+    });
+
+    it.each([
+      ['a name git could read as an option', 'name=-e&ref=HEAD', 'Invalid symbol name'],
+      ['a missing name', 'ref=HEAD', 'Invalid symbol name'],
+      ['a ref git could read as an option', 'name=parseDiff&ref=--output%3Dx', 'Invalid ref'],
+      ['a missing ref', 'name=parseDiff', 'Invalid ref'],
+    ])('refuses %s', async (_label, query, error) => {
+      const response = await fetch(`http://localhost:${port}/api/symbol?${query}`);
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error });
+      expect(searchSymbol).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 when git cannot search the revision', async () => {
+      searchSymbol.mockRejectedValue(new Error('unknown revision'));
+
+      const response = await fetch(`http://localhost:${port}/api/symbol?name=parseDiff&ref=HEAD`);
+
+      expect(response.status).toBe(404);
     });
   });
 
