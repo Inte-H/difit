@@ -90,7 +90,11 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
             </>
           )}
         </td>
-        <td className="p-0 w-full relative align-top">
+        <td
+          className="p-0 w-full relative align-top"
+          data-symbol-side={line.type === 'delete' ? 'old' : 'new'}
+          data-symbol-path={filename}
+        >
           <DiffCodeLine
             line={line}
             syntaxTheme={syntaxTheme}

@@ -41,6 +41,8 @@ import { ReloadButton } from './components/ReloadButton';
 import { RevisionDetailModal } from './components/RevisionDetailModal';
 import { SettingsModal } from './components/SettingsModal';
 import { SparkleAnimation } from './components/SparkleAnimation';
+import { SymbolPeekChip } from './components/SymbolPeekChip';
+import { SymbolPeekModal } from './components/SymbolPeekModal';
 import {
   type DirectEditControls,
   type DirectEditFailure,
@@ -58,6 +60,7 @@ import {
   reviewTargetRestoredByHistory,
   useReviewTargetHistory,
 } from './hooks/useReviewTargetHistory';
+import { useSymbolPeek } from './hooks/useSymbolPeek';
 import { useViewedFiles } from './hooks/useViewedFiles';
 import { useThreadFixups } from './hooks/useThreadFixups';
 import { useViewport } from './hooks/useViewport';
@@ -526,6 +529,12 @@ function App() {
     baseCommitish: diffData?.baseCommitish,
     targetCommitish: diffData?.targetCommitish,
     diffIdentity: diffDataVersion,
+  });
+
+  const symbolPeek = useSymbolPeek({
+    base: diffData?.baseCommitish,
+    target: diffData?.targetCommitish,
+    enabled: diffData?.symbolSearchAvailable === true,
   });
 
   const getMergedChunksRef = useRef(getMergedChunks);
@@ -1774,6 +1783,26 @@ function App() {
         )}
 
         <HelpModal isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
+
+        {symbolPeek.stack.map((request, depth) => (
+          <SymbolPeekModal
+            key={`${depth}:${request.ref}:${request.name}:${request.from ?? ''}`}
+            request={request}
+            hidden={depth !== symbolPeek.stack.length - 1}
+            canGoBack={depth > 0}
+            onBack={symbolPeek.back}
+            onClose={symbolPeek.close}
+            syntaxTheme={settings.syntaxTheme}
+          />
+        ))}
+        {symbolPeek.offer && (
+          <SymbolPeekChip
+            name={symbolPeek.offer.request.name}
+            x={symbolPeek.offer.x}
+            y={symbolPeek.offer.y}
+            onOpen={() => symbolPeek.offer && symbolPeek.open(symbolPeek.offer.request)}
+          />
+        )}
 
         <CommentsListModal
           isOpen={isCommentsListOpen}
