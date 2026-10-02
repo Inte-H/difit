@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DirectEditControls } from '../contexts/FixupOverlayContext';
 
@@ -36,6 +36,10 @@ describe('DirectEditForm', () => {
   beforeEach(() => {
     vi.mocked(global.fetch).mockReset();
     serveBlob(new TextEncoder().encode('a\nb\n// one\nconst x = 1;\nz\n'));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('starts from the lines of the reviewed commit', async () => {
@@ -88,7 +92,7 @@ describe('DirectEditForm', () => {
 
     expect(await editor()).toHaveValue('﻿a\nb\n// one');
     fireEvent.change(await editor(), { target: { value: 'a' } });
-    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
 
     await waitFor(() =>
       expect(edit.submit).toHaveBeenCalledWith(
@@ -114,7 +118,7 @@ describe('DirectEditForm', () => {
     renderForm(edit, onClose, 'c1');
 
     fireEvent.change(await editor(), { target: { value: 'const x = 1;' } });
-    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
 
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(edit.submit).toHaveBeenCalledWith({
@@ -132,7 +136,7 @@ describe('DirectEditForm', () => {
     renderForm(edit);
 
     fireEvent.change(await editor(), { target: { value: '' } });
-    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
 
     await waitFor(() =>
       expect(edit.submit).toHaveBeenCalledWith(expect.objectContaining({ replacement: [''] })),
@@ -161,7 +165,7 @@ describe('DirectEditForm', () => {
     renderForm(edit, onClose);
 
     fireEvent.change(await editor(), { target: { value: 'x' } });
-    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('커밋 실패');
     expect(screen.getByRole('alert')).toHaveTextContent('git says no');
@@ -171,12 +175,60 @@ describe('DirectEditForm', () => {
   it('cannot commit before anything changes', async () => {
     renderForm(controls());
     await editor();
-    expect(screen.getByRole('button', { name: 'fixup 커밋' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
   });
 
-  it('says commit hooks do not run', () => {
+  it('says both buttons commit at once without running commit hooks', () => {
     renderForm(controls());
-    expect(screen.getByText('커밋 훅은 실행하지 않습니다.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        '저장이나 줄 지우기를 누르면 바로 리뷰 대상 커밋을 고치는 fixup 커밋이 만들어집니다. 커밋 훅은 실행하지 않습니다.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+  });
+
+  it('puts the delete button after cancel and save in focus order', async () => {
+    renderForm(controls());
+    await editor();
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      '취소',
+      '저장',
+      '줄 지우기',
+    ]);
+  });
+
+  it('asks before throwing away an edit to delete the lines', async () => {
+    const edit = controls();
+    renderForm(edit);
+    fireEvent.change(await editor(), { target: { value: 'x' } });
+    const confirmSpy = vi.fn().mockReturnValueOnce(false);
+    vi.stubGlobal('confirm', confirmSpy);
+
+    fireEvent.click(screen.getByRole('button', { name: '줄 지우기' }));
+    expect(confirmSpy).toHaveBeenCalledWith('고친 내용을 버리고 고른 줄을 지울까요?');
+    expect(edit.submit).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole('button', { name: '줄 지우기' }));
+    await waitFor(() =>
+      expect(edit.submit).toHaveBeenCalledWith(expect.objectContaining({ replacement: [] })),
+    );
+  });
+
+  it('shows progress on the button that was pressed', async () => {
+    const edit = controls({ submit: vi.fn(() => new Promise<null>(() => {})) });
+    renderForm(edit);
+    fireEvent.change(await editor(), { target: { value: 'x' } });
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '줄 지우기' }));
+
+    expect(await screen.findByRole('button', { name: '지우는 중…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '취소' })).toBeDisabled();
   });
 });
