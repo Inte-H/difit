@@ -121,6 +121,7 @@ const buildDiffPayload = (diff: DiffResponse): DiffResponse => ({
   ...diff,
   clearComments: false,
   openInEditorAvailable: false,
+  symbolSearchAvailable: false,
 });
 
 export const installStaticApiBridge = (dataset: StaticDiffDataset): StaticApiBridge => {
@@ -181,6 +182,10 @@ export const installStaticApiBridge = (dataset: StaticDiffDataset): StaticApiBri
 
     if (requestUrl.pathname === '/api/revisions') {
       return jsonResponse({ error: 'Revision API is disabled in static mode' }, 404);
+    }
+
+    if (requestUrl.pathname === '/api/symbol') {
+      return jsonResponse({ error: 'Symbol search is disabled in static mode' }, 404);
     }
 
     if (requestUrl.pathname.startsWith('/api/line-count/')) {

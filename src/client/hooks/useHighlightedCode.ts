@@ -34,7 +34,7 @@ const DEFAULT_LANGUAGES = [
   'py',
 ];
 
-export function useHighlightedCode(_code: string, lang: string) {
+export function useHighlightedCode(lang: string) {
   const [ready, setReady] = useState(() => {
     // Check if language is already available
     return DEFAULT_LANGUAGES.includes(lang) || !!Prism.languages[lang];

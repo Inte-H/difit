@@ -55,6 +55,7 @@ export interface DiffResponse {
   isEmpty?: boolean;
   openInEditorAvailable?: boolean;
   directEditAvailable?: boolean;
+  symbolSearchAvailable?: boolean;
   baseCommitish?: string;
   targetCommitish?: string;
   requestedBaseCommitish?: string;
@@ -71,6 +72,22 @@ export interface GeneratedStatusResponse {
   ref: string;
   isGenerated: boolean;
   source: 'path' | 'content';
+}
+
+export interface SymbolMatch {
+  path: string;
+  line: number;
+  // Cut short when the source line is very long.
+  text: string;
+}
+
+export interface SymbolSearchResponse {
+  name: string;
+  ref: string;
+  // Lines that look like they declare the name, most likely first.
+  definitions: SymbolMatch[];
+  references: SymbolMatch[];
+  truncated: boolean;
 }
 
 export type LineNumber = number | [number, number];
