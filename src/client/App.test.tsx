@@ -1641,7 +1641,7 @@ describe('App Component - Direct edit', () => {
     await hoverLineTwo();
     fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
     fireEvent.change(await screen.findByLabelText('고칠 코드'), { target: { value: text } });
-    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
   }
 
   beforeEach(() => {

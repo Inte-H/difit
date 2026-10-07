@@ -564,7 +564,7 @@ describe('editing the reviewed code directly', () => {
 
   const commitEdit = async (text: string) => {
     fireEvent.change(await screen.findByLabelText('고칠 코드'), { target: { value: text } });
-    fireEvent.click(screen.getByRole('button', { name: 'fixup 커밋' }));
+    fireEvent.click(screen.getByRole('button', { name: '저장' }));
   };
 
   it('edits one line from its pencil and a range with shift-click', async () => {

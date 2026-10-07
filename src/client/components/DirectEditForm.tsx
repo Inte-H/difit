@@ -12,6 +12,8 @@ interface DirectEditFormProps {
   onClose: () => void;
 }
 
+type SubmitAction = 'save' | 'delete';
+
 export function DirectEditForm({
   filePath,
   range,
@@ -23,7 +25,8 @@ export function DirectEditForm({
   const [original, setOriginal] = useState<string[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [text, setText] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<SubmitAction | null>(null);
+  const isSubmitting = submitting !== null;
   const [failure, setFailure] = useState<DirectEditFailure | null>(null);
   const unchanged = original === null || text === original.join('\n');
 
@@ -46,10 +49,10 @@ export function DirectEditForm({
     };
   }, [filePath, targetCommit, start, end]);
 
-  const submit = async (replacement: string[]) => {
+  const submit = async (replacement: string[], action: SubmitAction) => {
     if (original === null || isSubmitting) return;
 
-    setIsSubmitting(true);
+    setSubmitting(action);
     setFailure(null);
     const result = await controls.submit({
       filePath,
@@ -59,7 +62,7 @@ export function DirectEditForm({
       replacement,
       ...(threadId === undefined ? {} : { threadId }),
     });
-    setIsSubmitting(false);
+    setSubmitting(null);
     if (result) {
       setFailure(result);
       return;
@@ -67,10 +70,16 @@ export function DirectEditForm({
     onClose();
   };
 
+  const handleDelete = () => {
+    if (unchanged || confirm('고친 내용을 버리고 고른 줄을 지울까요?')) {
+      void submit([], 'delete');
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (unchanged) return;
-    void submit(text.split('\n'));
+    void submit(text.split('\n'), 'save');
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -136,9 +145,13 @@ export function DirectEditForm({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-github-text-secondary">커밋 훅은 실행하지 않습니다.</span>
-        <div className="flex gap-2">
+      <p className="mb-2 text-xs text-github-text-secondary">
+        저장이나 줄 지우기를 누르면 바로 리뷰 대상 커밋을 고치는 fixup 커밋이 만들어집니다. 커밋
+        훅은 실행하지 않습니다.
+      </p>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="ml-auto flex gap-2">
           <button
             type="button"
             onClick={onClose}
@@ -148,21 +161,21 @@ export function DirectEditForm({
             취소
           </button>
           <button
-            type="button"
-            onClick={() => void submit([])}
-            className="rounded border border-github-danger bg-github-danger/10 px-3 py-1.5 text-xs text-github-text-primary transition-all hover:opacity-80 disabled:opacity-50"
-            disabled={original === null || isSubmitting}
-          >
-            줄 지우기
-          </button>
-          <button
             type="submit"
             className="rounded border border-github-accent bg-github-accent/20 px-3 py-1.5 text-xs font-medium text-github-text-primary transition-all disabled:opacity-50"
             disabled={unchanged || isSubmitting}
           >
-            {isSubmitting ? '커밋하는 중…' : 'fixup 커밋'}
+            {submitting === 'save' ? '저장하는 중…' : '저장'}
           </button>
         </div>
+        <button
+          type="button"
+          onClick={handleDelete}
+          className="order-first rounded border border-github-danger bg-github-danger/10 px-3 py-1.5 text-xs text-github-text-primary transition-all hover:opacity-80 disabled:opacity-50"
+          disabled={original === null || isSubmitting}
+        >
+          {submitting === 'delete' ? '지우는 중…' : '줄 지우기'}
+        </button>
       </div>
     </form>
   );
