@@ -62,7 +62,6 @@ interface UseDiffCommentsReturn {
   clearAllComments: (options?: { resetAppliedCommentImportIds?: boolean }) => void;
   applyCommentImports: (imports: CommentImport[], importId: string) => string[];
   generatePrompt: (commentId: string) => string;
-  generateThreadPrompt: (threadId: string) => string;
   generateAllCommentsPrompt: (
     context?: CommentPromptDiffContext,
     only?: DiffCommentThread[],
@@ -573,7 +572,6 @@ export function useDiffComments(
     clearAllComments: clearAllCommentsWithOptions,
     applyCommentImports,
     generatePrompt,
-    generateThreadPrompt,
     generateAllCommentsPrompt,
   };
 }

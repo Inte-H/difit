@@ -35,8 +35,7 @@ export type DiffViewerBodyProps = {
     codeContent?: string,
     side?: DiffSide,
   ) => Promise<void>;
-  onGenerateThreadPrompt: (thread: CommentThread) => string;
-  onRemoveThread: (threadId: string) => void;
+  onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;

@@ -50,8 +50,7 @@ function renderViewer(props: Partial<DiffViewerBodyProps>) {
         expandHiddenLines={asyncNoop}
         expandAllBetweenChunks={asyncNoop}
         onAddComment={asyncNoop}
-        onGenerateThreadPrompt={() => ''}
-        onRemoveThread={noop}
+        onResolveThread={noop}
         onReplyToThread={asyncNoop}
         onRemoveMessage={noop}
         onUpdateMessage={noop}

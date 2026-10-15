@@ -40,8 +40,7 @@ interface SideBySideDiffChunkProps {
     codeContent?: string,
     side?: DiffSide,
   ) => Promise<void>;
-  onGenerateThreadPrompt: (thread: CommentThread) => string;
-  onRemoveThread: (threadId: string) => void;
+  onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
@@ -151,8 +150,7 @@ export function SideBySideDiffChunk({
   threads,
   showAuthorBadges = false,
   onAddComment,
-  onGenerateThreadPrompt,
-  onRemoveThread,
+  onResolveThread,
   onReplyToThread,
   onRemoveMessage,
   onUpdateMessage,
@@ -843,8 +841,7 @@ export function SideBySideDiffChunk({
                                   thread={thread}
                                   review={review}
                                   showAuthorBadges={showAuthorBadges}
-                                  onGeneratePrompt={onGenerateThreadPrompt}
-                                  onRemoveThread={onRemoveThread}
+                                  onResolveThread={onResolveThread}
                                   onReplyToThread={onReplyToThread}
                                   onRemoveMessage={onRemoveMessage}
                                   onUpdateMessage={onUpdateMessage}
