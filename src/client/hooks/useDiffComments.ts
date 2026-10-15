@@ -10,6 +10,7 @@ import {
   type LegacyDiffComment,
   type ReviewDecision,
   type ReviewDecisionKind,
+  REVIEWER_AUTHOR,
 } from '../../types/diff';
 import {
   type CommentPromptDiffContext,
@@ -303,7 +304,7 @@ export function useDiffComments(
           {
             id: threadId,
             body: params.body,
-            author: 'User',
+            author: REVIEWER_AUTHOR,
             createdAt: now,
             updatedAt: now,
           },
@@ -342,7 +343,7 @@ export function useDiffComments(
                 {
                   id: createId(),
                   body,
-                  author: 'User',
+                  author: REVIEWER_AUTHOR,
                   createdAt: now,
                   updatedAt: now,
                 },

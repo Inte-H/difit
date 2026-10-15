@@ -96,6 +96,15 @@ Each comment thread carries a state in the text output of `comment get`:
 | `[다시 수정 중]` | The user rejected the fixup                                     | Drop the fixup and fix again       |
 | `[되돌림]`       | The user reverted a fix they made in the viewer on a new thread | Drop the fixup only                |
 
+### Learning when it is your turn
+
+A background command wakes you only when it exits, so while a review server you started is running, keep one `difit comment wait --port <port>` running as a background command. It exits as soon as a thread is your turn, printing each such thread as one JSON line: `threadId`, `filePath`, `position`, `message` (the latest message), and on pinned reviews `state` (`awaiting-fix`, `rejected` or `withdrawn`), `label` and, when a rejected fixup is still in the range, `rejectedFixupSha`. Answer every thread it brings as below, then start `difit comment wait` again the same way. It also prints threads that became your turn before it started, so nothing is lost between runs; a thread you have not answered comes back at once.
+
+- A thread is your turn when it is `[수정 중]` and the user spoke last, `[다시 수정 중]` with no new fixup and no reply from you after the rejection, or `[되돌림]` while its fixup is still in the range. On reviews without a pinned commit, any thread where the user spoke last is your turn. To answer in words instead of a fix (a question, or disagreeing with a rejection), add a reply with `comment add` (`"type": "reply"` with the thread's `filePath` and `position`); that also ends your turn.
+- Exit code 0 with nothing on standard output means the review ended: start no more `difit comment wait` for it. A non-zero exit means it could not reach the server: show its standard error to the user, unless you stopped or restarted the server yourself; after a restart, start `difit comment wait` on the new port.
+
+In Claude Code, a server started from your session (including `--background`) also sends each thread that newly became your turn into your session as a message from another session. Its first line is `difit review: your turn on <threadId> [<label>], ...; read with difit comment get --port <port> --format json`, and each following line is the same JSON `difit comment wait` prints. Answer it as below and keep `difit comment wait` running all the same: the message shape is undocumented and may stop arriving silently. When the same `threadId` with the same `state` comes both ways, answer it once.
+
 The user can also edit code in the viewer. difit then commits a `fixup! <target SHA>` commit with a `Review-Thread` trailer on top of HEAD and records it as approved. Its author is `reviewer-edit`.
 
 ### Answering a comment
@@ -119,7 +128,7 @@ The user can also edit code in the viewer. difit then commits a `fixup! <target 
 - Re-read `comment get` right before committing and confirm the comment is still `[수정 중]` or `[다시 수정 중]`. The user may have edited that line in the viewer meanwhile.
 - When fixing the same comment again before a decision, fold the change into the existing fixup instead of adding a commit: `git commit --amend --no-edit` when it is HEAD, otherwise `edit` it in `git rebase -i`.
 - A rejected fixup shows up in the JSON `decisions` as `"kind": "rejected"` with its SHA. Drop it (`drop` in `git rebase -i`) before any other rebase, since rewriting the lines right next to it can clear the rejection mark, then fix again.
-- For `[되돌림]`, drop the fixup and do not fix again. A reverted reviewer edit that answered an existing comment shows `[다시 수정 중]` and is handled like any rejection.
+- For `[되돌림]`, drop the fixup as soon as you see it and do not fix again; until it is dropped, `difit comment wait` keeps bringing the thread back. A reverted reviewer edit that answered an existing comment shows `[다시 수정 중]` and is handled like any rejection.
 
 ### Folding approved fixups
 

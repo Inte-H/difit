@@ -5,6 +5,7 @@ import {
   type AnchorStaleReason,
   type CommentThread,
   type DiffCommentMessage,
+  REVIEWER_AUTHOR,
   REVIEWER_EDIT_AUTHOR,
 } from '../../types/diff';
 import { isSameCommit } from '../../utils/diffSelection';
@@ -49,7 +50,7 @@ function ThreadMessageItem({
   const confirmContainerRef = useRef<HTMLDivElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const showAuthorHeader = showAuthorBadge && Boolean(message.author);
-  const isUserAuthoredMessage = message.author?.trim() === 'User';
+  const isUserAuthoredMessage = message.author?.trim() === REVIEWER_AUTHOR;
 
   useClickOutside(confirmContainerRef, () => setIsConfirming(false), isConfirming);
 

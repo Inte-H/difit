@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import { createCommentCommand } from './comment.js';
+import { createCommentCommand, waitForAgentTurn } from './comment.js';
 
 describe('createCommentCommand', () => {
   const command = createCommentCommand();
@@ -14,6 +14,7 @@ describe('createCommentCommand', () => {
     expect(subcommandNames).toContain('add');
     expect(subcommandNames).toContain('get');
     expect(subcommandNames).toContain('resolve');
+    expect(subcommandNames).toContain('wait');
   });
 
   describe('add subcommand', () => {
@@ -225,6 +226,101 @@ describe('comment subcommand integration', () => {
       await command.parseAsync(['node', 'difit', 'get', '--port', '4966']);
 
       expect(consoleOutput).toHaveLength(0);
+    });
+  });
+
+  describe('wait', () => {
+    const THREAD = { threadId: 'c1', state: 'awaiting-fix', label: '수정 중' };
+
+    function streamResponse(...events: string[]): Response {
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const event of events) controller.enqueue(new TextEncoder().encode(event));
+            controller.close();
+          },
+        }),
+        { headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    }
+
+    it('returns each thread of the first threads event as a JSON line', async () => {
+      mockFetch.mockResolvedValue(
+        streamResponse(
+          ': waiting\n\n: ping\n\n',
+          `event: threads\ndata: ${JSON.stringify([THREAD, { threadId: 'c2' }])}\n\n`,
+        ),
+      );
+
+      expect(await waitForAgentTurn(4966)).toEqual({
+        kind: 'threads',
+        lines: [JSON.stringify(THREAD), '{"threadId":"c2"}'],
+      });
+      expect(mockFetch).toHaveBeenCalledWith('http://localhost:4966/api/comments-wait');
+    });
+
+    it('reports the end of the review', async () => {
+      mockFetch.mockResolvedValue(streamResponse('event: end\ndata: review ended\n\n'));
+
+      expect(await waitForAgentTurn(4966)).toEqual({ kind: 'ended' });
+    });
+
+    it('connects again when the stream drops without an end', async () => {
+      mockFetch
+        .mockResolvedValueOnce(streamResponse(': waiting\n\n'))
+        .mockRejectedValueOnce(new TypeError('fetch failed'))
+        .mockResolvedValueOnce(
+          streamResponse(`event: threads\ndata: ${JSON.stringify([THREAD])}\n\n`),
+        );
+
+      expect(await waitForAgentTurn(4966)).toEqual({
+        kind: 'threads',
+        lines: [JSON.stringify(THREAD)],
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('reports a server that answers without the wait endpoint at once', async () => {
+      mockFetch.mockResolvedValue(new Response('Not Found', { status: 404 }));
+
+      expect(await waitForAgentTurn(4966)).toEqual({ kind: 'refused', status: 404 });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('connects again after a server error answer', async () => {
+      mockFetch
+        .mockResolvedValueOnce(new Response('Bad Gateway', { status: 502 }))
+        .mockResolvedValueOnce(
+          streamResponse(`event: threads\ndata: ${JSON.stringify([THREAD])}\n\n`),
+        );
+
+      expect(await waitForAgentTurn(4966)).toEqual({
+        kind: 'threads',
+        lines: [JSON.stringify(THREAD)],
+      });
+    });
+
+    it('gives up once the server stays unreachable past the window', async () => {
+      mockFetch.mockRejectedValue(new TypeError('fetch failed'));
+
+      expect(await waitForAgentTurn(4966, 300)).toEqual({ kind: 'unreachable' });
+    });
+
+    it('prints the threads on standard output and exits with 0', async () => {
+      mockFetch.mockResolvedValue(
+        streamResponse(`event: threads\ndata: ${JSON.stringify([THREAD])}\n\n`),
+      );
+      const written: string[] = [];
+      vi.spyOn(process.stdout, 'write').mockImplementation(((chunk: string, done?: () => void) => {
+        written.push(chunk);
+        done?.();
+        return true;
+      }) as typeof process.stdout.write);
+
+      await createCommentCommand().parseAsync(['node', 'difit', 'wait', '--port', '4966']);
+
+      expect(written.join('')).toBe(`${JSON.stringify(THREAD)}\n`);
+      expect(process.exit).toHaveBeenCalledWith(0);
     });
   });
 
