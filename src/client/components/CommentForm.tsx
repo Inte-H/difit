@@ -56,8 +56,9 @@ export function CommentForm({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      void handleSubmit(e);
+    if (e.key === 'Enter') {
+      if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+      if (e.metaKey || e.ctrlKey || !e.shiftKey) void handleSubmit(e);
     } else if (e.key === 'Escape') {
       onCancel();
     }
