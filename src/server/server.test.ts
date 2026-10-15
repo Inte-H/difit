@@ -920,6 +920,43 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('test.js:L50 [접힘]\nFolded');
     });
 
+    it('GET /api/comments-output leaves out resolved threads but keeps their record', async () => {
+      const comments = [
+        { file: 'test.js', line: 10, body: 'Still open' },
+        { file: 'test.js', line: 20, body: 'Settled in words' },
+      ];
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments }),
+      });
+      const commentsJson = async () =>
+        (await (await fetch(`http://localhost:${port}/api/comments-json`)).json()) as {
+          threads: Array<{ id: string; position: { line: number } }>;
+          decisions: Array<{ kind: string }>;
+        };
+      const settledId = (await commentsJson()).threads.find((t) => t.position.line === 20)!.id;
+      const resolve = (threadId: string) =>
+        fetch(`http://localhost:${port}/api/decisions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([{ threadId, kind: 'resolved', fixupSha: '', at: '2026-01-01' }]),
+        });
+      await resolve(settledId);
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      expect(output).toContain('Still open');
+      expect(output).not.toContain('Settled in words');
+      expect(output).toContain('Total comments: 1');
+
+      const { threads, decisions } = await commentsJson();
+      expect(threads).toHaveLength(2);
+      expect(decisions).toMatchObject([{ threadId: settledId, kind: 'resolved' }]);
+
+      await resolve(threads.find((t) => t.position.line === 10)!.id);
+      expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toBe('');
+    });
+
     it('POST /api/decisions rejects a body that is not a list of decisions', async () => {
       const post = (body: unknown) =>
         fetch(`http://localhost:${port}/api/decisions`, {

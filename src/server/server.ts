@@ -30,6 +30,7 @@ import { isSymbolName } from '../utils/symbolName.js';
 import {
   deriveThreadReviewState,
   isOpenedByEdit,
+  isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
   selectOpenThreads,
@@ -1328,9 +1329,12 @@ export async function startServer(options: ServerOptions): Promise<{
 
   async function renderCommentsOutput(selection: DiffSelection): Promise<string> {
     const session = getOrCreateCommentSession(selection);
-    if (session.threads.length === 0) return '';
+    const threads = session.threads.filter(
+      (thread) => !isThreadResolved(thread.id, session.decisions),
+    );
+    if (threads.length === 0) return '';
     const reviewStates = await threadReviewStatesFor(selection);
-    return formatCommentsOutput(session.threads.map(toCommentThread), reviewStates);
+    return formatCommentsOutput(threads.map(toCommentThread), reviewStates);
   }
 
   app.get('/api/comments-output', async (req, res) => {

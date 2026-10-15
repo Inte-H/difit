@@ -4,6 +4,7 @@ import { REVIEWER_EDIT_AUTHOR, type ReviewDecision, type ThreadFixup } from '../
 
 import {
   deriveThreadReviewState,
+  isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
   pendingFixupFor,
@@ -183,6 +184,34 @@ describe('reviewStateLabel', () => {
   });
 });
 
+describe('isThreadResolved', () => {
+  const resolved = (at: string) => decision('resolved', '', at);
+  const reopened = (at: string) => decision('unresolved', '', at);
+
+  it('follows the later of a resolution and a reopening', () => {
+    expect(isThreadResolved('t1', [])).toBe(false);
+    expect(isThreadResolved('t1', [resolved('2026-01-01T00:00:00Z')])).toBe(true);
+    expect(
+      isThreadResolved('t1', [resolved('2026-01-01T00:00:00Z'), reopened('2026-01-01T00:01:00Z')]),
+    ).toBe(false);
+  });
+
+  it('keeps the last press after resolving and reopening several times', () => {
+    let decisions: ReviewDecision[] = [];
+    const presses = [resolved, reopened, resolved, reopened, resolved];
+    presses.forEach((press, minute) => {
+      decisions = mergeReviewDecisions(decisions, [press(`2026-01-01T00:0${minute}:00Z`)]);
+    });
+    expect(isThreadResolved('t1', decisions)).toBe(true);
+    decisions = mergeReviewDecisions(decisions, [reopened('2026-01-01T00:09:00Z')]);
+    expect(isThreadResolved('t1', decisions)).toBe(false);
+  });
+
+  it('ignores other threads’ resolutions', () => {
+    expect(isThreadResolved('t1', [decision('resolved', '', undefined, 't2')])).toBe(false);
+  });
+});
+
 describe('selectOpenThreads', () => {
   const threads = ['open', 'answered', 'rejected', 'retried', 'approved', 'folded'].map((id) => ({
     id,
@@ -216,6 +245,19 @@ describe('selectOpenThreads', () => {
     expect(
       selectOpenThreads([{ ...edited, messages: [{ author: 'User' }] }], new Map(), edits),
     ).toHaveLength(1);
+  });
+
+  it('leaves out a resolved thread until it is reopened', () => {
+    const resolution = decision('resolved', '', '2026-01-01T00:00:00Z', 'open');
+    expect(
+      selectOpenThreads(threads, fixupsByThread, [...decisions, resolution]).map((t) => t.id),
+    ).toEqual(['rejected']);
+    const reopening = decision('unresolved', '', '2026-01-01T00:01:00Z', 'open');
+    expect(
+      selectOpenThreads(threads, fixupsByThread, [...decisions, resolution, reopening]).map(
+        (t) => t.id,
+      ),
+    ).toEqual(['open', 'rejected']);
   });
 
   it('returns nothing when every thread has been answered or settled', () => {
@@ -265,6 +307,11 @@ describe('normalizeReviewDecisions', () => {
     expect(normalizeReviewDecisions(undefined)).toEqual([]);
   });
 
+  it('keeps resolutions and reopenings, which name no fixup', () => {
+    const records = [decision('resolved', ''), decision('unresolved', '')];
+    expect(normalizeReviewDecisions(records)).toEqual(records);
+  });
+
   it('keeps only the fields a decision has and drops a mistyped optional field', () => {
     expect(
       normalizeReviewDecisions([{ ...decision('approved', 'aaaa'), patchId: 'p', extra: 'x' }]),
@@ -302,6 +349,13 @@ describe('selectThreadsAwaitingAgent', () => {
         message: 'User 0',
       },
     ]);
+  });
+
+  it('leaves out a resolved thread with or without fixups', () => {
+    const threads = [thread('asked', ['User']), thread('resolved', ['User'])];
+    const resolution = [decision('resolved', '', undefined, 'resolved')];
+    expect(ids(threads, undefined, resolution)).toEqual(['asked']);
+    expect(ids(threads, new Map(), resolution)).toEqual(['asked']);
   });
 
   it('takes a comment waiting for a fix only while the reviewer has the last word', () => {
