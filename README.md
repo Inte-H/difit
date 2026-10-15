@@ -385,6 +385,16 @@ jq '.decisions' old.json | curl -X POST "http://localhost:<새 port>/api/decisio
 
 언어 서버 없이 `git grep -w`로 이름이 나오는 줄을 모은 뒤, `function`·`class`·`def` 같은 키워드나 반환 타입이 앞에 붙은 모양을 보고 선언을 골라낸다. 그래서 이름이 같은 다른 선언도 함께 후보로 나오고, 드물게 선언을 쓰인 줄로 잘못 나누기도 한다. 선언은 누른 파일에 가까운 순서로 200줄까지, 쓰인 줄은 500줄까지 보여 준다. git 출력이 4MB를 넘으면 그 뒤의 줄은 읽지 않는다. 표준 입력과 `--pr`로 연 리뷰에서는 찾을 저장소가 없으므로 이름을 눌러도 아무것도 뜨지 않는다.
 
+## 💤 주석이나 공백만 바뀐 곳 접기 (포크)
+
+코드는 그대로 두고 주석이나 공백만 바꾼 hunk를 한 줄로 접어, 코드가 바뀐 곳에 눈을 쓰게 한다.
+
+- 위쪽 도구 막대의 `주석 변경 접기`는 처음부터 켜져 있다. 켜져 있으면 그런 hunk가 `주석 N줄 바뀜 · 펼치기`나 `공백 N줄 바뀜 · 펼치기` 한 줄로 접히고, 누르면 펼쳐진다.
+- 파일 전체가 주석이나 공백만 바뀌었으면 파일 목록에 `주석`이나 `공백` 배지가 붙는다. 지적에 답한 fixup이 그렇다면 겹침 카드 머리에 같은 배지가 붙는다. 주석을 고쳐 달라는 지적이었는지는 리뷰어가 보고 판단한다.
+- 지적이 달린 hunk, 키보드 커서가 들어간 hunk, 코멘트 입력창이 열린 hunk는 접지 않는다.
+
+판정은 서버에서 tree-sitter로 양쪽 파일 전체를 파싱해서 한다. 그래서 문자열이나 템플릿 리터럴 안의 `//`·`#`는 코드로 본다. `@ts-ignore`, `eslint-disable`, `//go:build`, `# type: ignore`, shebang처럼 도구가 읽는 주석과 Python docstring도 코드로 본다. 판정하는 언어는 TS/TSX/JS, Python, Go, Rust, Java, CSS, Bash다. 그 밖의 파일, 512KB가 넘는 파일, 바뀐 구간이 50개를 넘는 파일, 파싱 오류가 나는 파일은 판정하지 않고 늘 펼쳐 둔다. 표준 입력과 `--pr`로 연 리뷰에서는 양쪽 파일을 읽을 수 없어 판정하지 않는다. 고른 까닭과 버린 길은 `docs/adr/0006-fold-changes-that-leave-code-alone.md`에 있다.
+
 ## 🤖 Calling from Agents
 
 You can install the following Skills to work with difit from AI agents.
