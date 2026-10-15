@@ -1250,18 +1250,16 @@ export async function startServer(options: ServerOptions): Promise<{
   async function threadReviewStatesFor(
     selection: DiffSelection,
   ): Promise<Map<string, ThreadReviewState> | undefined> {
-    if (options.stdinDiff || !pinnedCommentSessionKeys.has(createCommentSessionKey(selection))) {
-      return undefined;
-    }
-    const session = getOrCreateCommentSession(selection);
     try {
-      const fixups = await parser.listThreadFixups(selection);
+      const fixupsByThread = await fixupsByThreadFor(selection);
+      if (!fixupsByThread) return undefined;
+      const session = getOrCreateCommentSession(selection);
       return new Map(
         session.threads.map((thread) => [
           thread.id,
           deriveThreadReviewState(
             thread.id,
-            fixups.filter((fixup) => fixup.threadIds.includes(thread.id)),
+            fixupsByThread.get(thread.id) ?? [],
             session.decisions,
             isOpenedByEdit(thread),
           ),
