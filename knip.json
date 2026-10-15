@@ -1,7 +1,18 @@
 {
   "ignoreBinaries": ["gh", "ssh-keygen"],
   "workspaces": {
-    ".": {},
+    ".": {
+      "ignoreDependencies": [
+        "tree-sitter-bash",
+        "tree-sitter-css",
+        "tree-sitter-go",
+        "tree-sitter-java",
+        "tree-sitter-javascript",
+        "tree-sitter-python",
+        "tree-sitter-rust",
+        "tree-sitter-typescript"
+      ]
+    },
     "packages/vscode": {
       "entry": [
         "src/extension.ts",

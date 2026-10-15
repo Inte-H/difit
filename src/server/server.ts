@@ -46,6 +46,7 @@ import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from
 
 import {
   type BaseMode,
+  type ChangeKindsResponse,
   type CommentImport,
   type Comment,
   type CommentThread,
@@ -176,6 +177,7 @@ export async function startServer(options: ServerOptions): Promise<{
     { value: GeneratedStatusResponse; expiresAt: number }
   >();
   const diffDataCache = new Map<string, DiffResponse>();
+  const changeKindsCache = new Map<string, ChangeKindsResponse>();
   const initialIgnoreWhitespace = options.ignoreWhitespace || false;
   const parseBaseMode = (value: unknown): BaseMode | undefined => {
     if (value === 'merge-base') {
@@ -236,6 +238,7 @@ export async function startServer(options: ServerOptions): Promise<{
   const invalidateCache = () => {
     diffDataCache.clear();
     generatedStatusCache.clear();
+    changeKindsCache.clear();
     parser.clearResolvedCommitCache();
   };
 
@@ -352,20 +355,24 @@ export async function startServer(options: ServerOptions): Promise<{
     return nextSession;
   }
 
-  app.get('/api/diff', async (req, res) => {
-    const ignoreWhitespace = req.query.ignoreWhitespace === 'true';
-    const hasBase = typeof req.query.base === 'string';
-    const hasTarget = typeof req.query.target === 'string';
-    const hasBaseMode = typeof req.query.baseMode === 'string';
-    const requestedSelection = createDiffSelection(
-      hasBase ? (req.query.base as string) : currentSelection.baseCommitish,
-      hasTarget ? (req.query.target as string) : currentSelection.targetCommitish,
+  const selectionFromQuery = (query: express.Request['query']): DiffSelection => {
+    const hasBase = typeof query.base === 'string';
+    const hasTarget = typeof query.target === 'string';
+    const hasBaseMode = typeof query.baseMode === 'string';
+    return createDiffSelection(
+      hasBase ? (query.base as string) : currentSelection.baseCommitish,
+      hasTarget ? (query.target as string) : currentSelection.targetCommitish,
       hasBaseMode
-        ? parseBaseMode(req.query.baseMode)
+        ? parseBaseMode(query.baseMode)
         : hasBase || hasTarget
           ? undefined
           : currentSelection.baseMode,
     );
+  };
+
+  app.get('/api/diff', async (req, res) => {
+    const ignoreWhitespace = req.query.ignoreWhitespace === 'true';
+    const requestedSelection = selectionFromQuery(req.query);
     const shouldIncludeCommentImports =
       initialCommentImports.length > 0 &&
       (Boolean(options.stdinDiff) || diffSelectionsEqual(requestedSelection, initialSelection));
@@ -392,6 +399,7 @@ export async function startServer(options: ServerOptions): Promise<{
         }
         setCachedDiffResponse(diffDataCache, cacheKey, responseDiffData);
         generatedStatusCache.clear();
+        changeKindsCache.clear();
       }
     }
 
@@ -432,6 +440,53 @@ export async function startServer(options: ServerOptions): Promise<{
       commentImports: shouldIncludeCommentImports ? initialCommentImports : undefined,
       commentImportId: shouldIncludeCommentImports ? commentImportId : undefined,
     });
+  });
+
+  // Takes the same query as /api/diff.
+  app.get(/^\/api\/change-kinds\/(.*)$/, async (req, res) => {
+    if (options.stdinDiff) {
+      res.status(400).json({ error: 'Change kinds are not available for stdin diff' });
+      return;
+    }
+
+    const filepathResult = parseRepositoryRelativePath(req.params[0]);
+    if (!filepathResult.ok) {
+      res.status(400).json({ error: filepathResult.error });
+      return;
+    }
+    const ignoreWhitespace = req.query.ignoreWhitespace === 'true';
+    const selection = selectionFromQuery(req.query);
+    const diffCacheKey = createDiffCacheKey(selection, ignoreWhitespace);
+    const cacheKey = `${diffCacheKey}\u0000${filepathResult.path}`;
+    const cached = changeKindsCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    try {
+      let diff = getCachedDiffResponse(diffDataCache, diffCacheKey);
+      if (!diff) {
+        diff = await parser.parseDiff(selection, ignoreWhitespace, options.contextLines);
+        setCachedDiffResponse(diffDataCache, diffCacheKey, diff);
+      }
+      const file = diff.files.find((candidate) => candidate.path === filepathResult.path);
+      if (!file) {
+        res.status(404).json({ error: 'File is not in the diff' });
+        return;
+      }
+
+      const classified = await parser.classifyDiffFile(selection, file);
+      const response: ChangeKindsResponse = {
+        path: file.path,
+        chunks: classified.chunks.map(({ header, changeKind }) => ({ header, changeKind })),
+      };
+      changeKindsCache.set(cacheKey, response);
+      res.json(response);
+    } catch (error) {
+      console.error('Error classifying changes:', error);
+      res.status(500).json({ error: 'Failed to classify changes' });
+    }
   });
 
   app.get(/^\/api\/generated-status\/(.*)$/, async (req, res) => {
@@ -1050,7 +1105,7 @@ export async function startServer(options: ServerOptions): Promise<{
     const { followedRef } = options;
     try {
       const [fixups, newerTarget] = await Promise.all([
-        parser.listThreadFixups(selection),
+        parser.listThreadFixups(selection).then((listed) => parser.classifyFixups(listed)),
         followedRef
           ? parser.findNewerTarget(
               selection.targetCommitish,

@@ -8,6 +8,9 @@ export interface DiffFile {
   isGenerated?: boolean;
 }
 
+// What a chunk's changed lines alter, read from a parse of both whole files.
+export type ChunkChangeKind = 'comment' | 'whitespace' | 'code' | 'unknown';
+
 export interface DiffChunk {
   header: string;
   oldStart: number;
@@ -15,6 +18,8 @@ export interface DiffChunk {
   newStart: number;
   newLines: number;
   lines: DiffLine[];
+  // Absent when the file was not classified.
+  changeKind?: ChunkChangeKind;
 }
 
 export interface DiffLine {
@@ -65,6 +70,12 @@ export interface DiffResponse {
   repositoryId?: string;
   commentImports?: CommentImport[];
   commentImportId?: string;
+}
+
+export interface ChangeKindsResponse {
+  path: string;
+  // In the order of the file's chunks in the diff the same query returns.
+  chunks: Array<Pick<DiffChunk, 'header' | 'changeKind'>>;
 }
 
 export interface GeneratedStatusResponse {
