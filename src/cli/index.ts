@@ -290,7 +290,7 @@ program
       }
 
       const pinned = pinSelection(selection, repoPath);
-      const { url, port, isEmpty, settleDirectEdits } = await startServer({
+      const { url, port, isEmpty, settleDirectEdits, endCommentWaits } = await startServer({
         selection: pinned.selection,
         preferredPort: options.port,
         host: options.host,
@@ -345,6 +345,7 @@ program
         shuttingDown = true;
         console.log('\n👋 Shutting down difit server...');
         await settleDirectEdits?.();
+        await endCommentWaits?.();
 
         // Try to fetch comments before shutting down
         try {

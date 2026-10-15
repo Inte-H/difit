@@ -33,9 +33,11 @@ import {
   mergeReviewDecisions,
   normalizeReviewDecisions,
   selectOpenThreads,
+  selectThreadsAwaitingAgent,
 } from '../utils/reviewDecisions.js';
 
 import { validateCommitish } from '../cli/utils.js';
+import { sendToClaudeSession, sessionMessageFor } from './claude-session.js';
 import { commitDirectEdit } from './direct-edit.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
@@ -58,6 +60,8 @@ import {
   type ReviewDecision,
   type RevisionsResponse,
   type SymbolSearchResponse,
+  type ThreadAwaitingAgent,
+  type ThreadFixup,
   type ThreadReviewState,
 } from '@/types/diff.js';
 import {
@@ -154,6 +158,7 @@ export async function startServer(options: ServerOptions): Promise<{
   isEmpty?: boolean;
   server?: Server;
   settleDirectEdits?: () => Promise<unknown>;
+  endCommentWaits?: () => Promise<void>;
 }> {
   const app = express();
   const repositoryPath = resolve(options.repoPath ?? process.cwd());
@@ -834,7 +839,89 @@ export async function startServer(options: ServerOptions): Promise<{
       version: session.version,
       timestamp: new Date().toISOString(),
     });
+    for (const wait of commentWaits) void wait.check();
     return true;
+  }
+
+  async function fixupsByThreadFor(
+    selection: DiffSelection,
+  ): Promise<Map<string, ThreadFixup[]> | undefined> {
+    if (options.stdinDiff || !pinnedCommentSessionKeys.has(createCommentSessionKey(selection))) {
+      return undefined;
+    }
+    const fixups = await parser.listThreadFixups(selection);
+    const byThread = new Map<string, ThreadFixup[]>();
+    for (const fixup of fixups) {
+      for (const threadId of fixup.threadIds) {
+        byThread.set(threadId, [...(byThread.get(threadId) ?? []), fixup]);
+      }
+    }
+    return byThread;
+  }
+
+  async function threadsAwaitingAgentFor(selection: DiffSelection): Promise<ThreadAwaitingAgent[]> {
+    try {
+      const fixupsByThread = await fixupsByThreadFor(selection);
+      const session = getOrCreateCommentSession(selection);
+      return selectThreadsAwaitingAgent(session.threads, fixupsByThread, session.decisions);
+    } catch (error) {
+      console.error('Error listing fixups:', error);
+      return [];
+    }
+  }
+
+  interface CommentWait {
+    check: () => Promise<void>;
+    finish: (event: string) => Promise<void>;
+  }
+  const commentWaits = new Set<CommentWait>();
+  let commentWaitsEnded = false;
+  const REVIEW_ENDED_EVENT = 'event: end\ndata: review ended\n\n';
+
+  async function endCommentWaits(): Promise<void> {
+    commentWaitsEnded = true;
+    await Promise.all([...commentWaits].map((wait) => wait.finish(REVIEW_ENDED_EVENT)));
+  }
+
+  // Only what the reviewer saves from the page is told: threads the agent itself added or copied
+  // over, and fixups the reviewer committed by editing, need no answer.
+  let sessionMessages: Promise<void> = Promise.resolve();
+  function tellClaudeSession(
+    selection: DiffSelection,
+    before: Pick<CommentSessionState, 'threads' | 'decisions'>,
+  ) {
+    if (!process.env.CLAUDE_CODE_MESSAGING_SOCKET) return;
+    const session = getOrCreateCommentSession(selection);
+    const after = { threads: session.threads, decisions: session.decisions };
+    sessionMessages = sessionMessages.then(async () => {
+      let fixupsByThread: Map<string, ThreadFixup[]> | undefined;
+      try {
+        fixupsByThread = await fixupsByThreadFor(selection);
+      } catch (error) {
+        console.error('Error listing fixups:', error);
+        return;
+      }
+      const turnKey = (threads: DiffCommentThread[], waiting: ThreadAwaitingAgent): string => {
+        const lastMessageId = threads.find((t) => t.id === waiting.threadId)?.messages.at(-1)?.id;
+        return JSON.stringify([
+          waiting.threadId,
+          waiting.state,
+          lastMessageId,
+          waiting.rejectedFixupSha,
+        ]);
+      };
+      const known = new Set(
+        selectThreadsAwaitingAgent(before.threads, fixupsByThread, before.decisions).map(
+          (waiting) => turnKey(before.threads, waiting),
+        ),
+      );
+      const fresh = selectThreadsAwaitingAgent(
+        after.threads,
+        fixupsByThread,
+        after.decisions,
+      ).filter((waiting) => !known.has(turnKey(after.threads, waiting)));
+      if (fresh.length > 0) await sendToClaudeSession(sessionMessageFor(port, fresh));
+    });
   }
 
   app.post('/api/comments', (req, res) => {
@@ -846,6 +933,7 @@ export async function startServer(options: ServerOptions): Promise<{
       const nextDecisions = parseDecisionsPayload(body);
       const baseVersion = parseBaseVersion(body);
       const session = getOrCreateCommentSession(selection);
+      const before = { threads: session.threads, decisions: session.decisions };
 
       // Stale baseVersion means another writer (e.g. an agent) changed comments since the
       // client's last read, so merge rather than overwrite. A matching/absent version replaces.
@@ -860,7 +948,9 @@ export async function startServer(options: ServerOptions): Promise<{
             ? mergeReviewDecisions(session.decisions, nextDecisions)
             : nextDecisions;
 
-      updateCommentSession(selection, resolvedThreads, resolvedDecisions);
+      if (updateCommentSession(selection, resolvedThreads, resolvedDecisions)) {
+        tellClaudeSession(selection, before);
+      }
 
       res.json({
         success: true,
@@ -1160,18 +1250,16 @@ export async function startServer(options: ServerOptions): Promise<{
   async function threadReviewStatesFor(
     selection: DiffSelection,
   ): Promise<Map<string, ThreadReviewState> | undefined> {
-    if (options.stdinDiff || !pinnedCommentSessionKeys.has(createCommentSessionKey(selection))) {
-      return undefined;
-    }
-    const session = getOrCreateCommentSession(selection);
     try {
-      const fixups = await parser.listThreadFixups(selection);
+      const fixupsByThread = await fixupsByThreadFor(selection);
+      if (!fixupsByThread) return undefined;
+      const session = getOrCreateCommentSession(selection);
       return new Map(
         session.threads.map((thread) => [
           thread.id,
           deriveThreadReviewState(
             thread.id,
-            fixups.filter((fixup) => fixup.threadIds.includes(thread.id)),
+            fixupsByThread.get(thread.id) ?? [],
             session.decisions,
             isOpenedByEdit(thread),
           ),
@@ -1350,6 +1438,41 @@ export async function startServer(options: ServerOptions): Promise<{
     });
   });
 
+  app.get('/api/comments-wait', (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    if (commentWaitsEnded) {
+      res.end(REVIEW_ENDED_EVENT);
+      return;
+    }
+    res.write(': waiting\n\n');
+    // fetch gives up on a body that stays silent for five minutes.
+    const ping = setInterval(() => res.write(': ping\n\n'), 30_000);
+    const wait: CommentWait = {
+      check: async () => {
+        const waiting = await threadsAwaitingAgentFor(selection);
+        if (waiting.length > 0) {
+          await wait.finish(`event: threads\ndata: ${JSON.stringify(waiting)}\n\n`);
+        }
+      },
+      finish: (event) => {
+        if (!commentWaits.delete(wait)) return Promise.resolve();
+        clearInterval(ping);
+        return new Promise((resolve) => res.end(event, () => resolve()));
+      },
+    };
+    commentWaits.add(wait);
+    req.on('close', () => {
+      commentWaits.delete(wait);
+      clearInterval(ping);
+    });
+    void wait.check();
+  });
+
   // SSE endpoint to detect when tab is closed
   app.get('/api/heartbeat', (req, res) => {
     res.writeHead(200, {
@@ -1382,6 +1505,7 @@ export async function startServer(options: ServerOptions): Promise<{
           await fileWatcher.stop();
 
           await directEditQueue;
+          await endCommentWaits();
           await outputFinalComments();
           process.exit(0);
         }, 100);
@@ -1457,6 +1581,7 @@ export async function startServer(options: ServerOptions): Promise<{
     isEmpty: initialDiffData.isEmpty || false,
     server,
     settleDirectEdits: () => directEditQueue,
+    endCommentWaits,
   };
 }
 

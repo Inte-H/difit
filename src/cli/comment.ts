@@ -37,6 +37,64 @@ async function parseCommentAddInput(json?: string): Promise<string> {
   return stdin;
 }
 
+type WaitResult =
+  | { kind: 'threads'; lines: string[] }
+  | { kind: 'ended' }
+  | { kind: 'unreachable' }
+  | { kind: 'refused'; status: number };
+
+// A server stopped and started again on the same port within this time keeps the same wait.
+const RECONNECT_WINDOW_MS = 10_000;
+
+export async function waitForAgentTurn(
+  port: number,
+  reconnectWindowMs = RECONNECT_WINDOW_MS,
+): Promise<WaitResult> {
+  const pause = () => new Promise((resolve) => setTimeout(resolve, 200));
+  let announced = false;
+  for (let until = Date.now() + reconnectWindowMs; ; ) {
+    let response: Response;
+    try {
+      response = await fetch(`http://localhost:${port}/api/comments-wait`);
+      if (response.status === 404) return { kind: 'refused', status: response.status };
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+    } catch {
+      if (Date.now() >= until) return { kind: 'unreachable' };
+      await pause();
+      continue;
+    }
+    if (!announced) {
+      console.error(`Waiting for a review thread on port ${port}`);
+      announced = true;
+    }
+    try {
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        for (let cut; (cut = buffer.indexOf('\n\n')) >= 0; buffer = buffer.slice(cut + 2)) {
+          const fields = new Map(
+            buffer
+              .slice(0, cut)
+              .split('\n')
+              .map((line) => [
+                line.slice(0, line.indexOf(':')),
+                line.slice(line.indexOf(':') + 1).trimStart(),
+              ]),
+          );
+          if (fields.get('event') === 'end') return { kind: 'ended' };
+          if (fields.get('event') === 'threads') {
+            const threads = JSON.parse(fields.get('data') ?? '[]') as unknown[];
+            return { kind: 'threads', lines: threads.map((thread) => JSON.stringify(thread)) };
+          }
+        }
+      }
+    } catch {}
+    until = Date.now() + reconnectWindowMs;
+    await pause();
+  }
+}
+
 export function createCommentCommand(): Command {
   const comment = new Command('comment').description(
     'Add, retrieve, or resolve comments on a running difit server',
@@ -109,6 +167,32 @@ export function createCommentCommand(): Command {
       } catch (error) {
         handleCommandError(error, opts.port);
       }
+    });
+
+  comment
+    .command('wait')
+    .description(
+      'Wait until a review thread is your turn, print each such thread as a JSON line, and exit',
+    )
+    .requiredOption('--port <port>', 'port of the running difit server', parseInt)
+    .action(async (opts: { port: number }) => {
+      const result = await waitForAgentTurn(opts.port);
+      if (result.kind === 'unreachable') {
+        console.error(
+          `Error: Cannot connect to difit server on port ${opts.port}. Is the server running?`,
+        );
+        process.exit(1);
+      }
+      if (result.kind === 'refused') {
+        console.error(
+          `Error: difit server on port ${opts.port} answered HTTP ${result.status}; it may be a difit without comment wait.`,
+        );
+        process.exit(1);
+      }
+      if (result.kind === 'ended') console.error('Review ended');
+      const output =
+        result.kind === 'threads' ? result.lines.map((line) => `${line}\n`).join('') : '';
+      process.stdout.write(output, () => process.exit(0));
     });
 
   comment

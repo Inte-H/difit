@@ -9,6 +9,7 @@ import {
   pendingFixupFor,
   reviewStateLabel,
   selectOpenThreads,
+  selectThreadsAwaitingAgent,
 } from './reviewDecisions';
 
 const fixup = (sha: string, threadIds = ['t1']): ThreadFixup => ({
@@ -269,5 +270,106 @@ describe('normalizeReviewDecisions', () => {
       normalizeReviewDecisions([{ ...decision('approved', 'aaaa'), patchId: 'p', extra: 'x' }]),
     ).toEqual([{ ...decision('approved', 'aaaa'), patchId: 'p' }]);
     expect(normalizeReviewDecisions([{ ...decision('folded', 'aaaa'), targetSha: 1 }])).toEqual([]);
+  });
+});
+
+describe('selectThreadsAwaitingAgent', () => {
+  const thread = (id: string, ...authors: Array<[string | undefined, string?]>) => ({
+    id,
+    filePath: 'a.ts',
+    position: { side: 'new' as const, line: 1 },
+    messages: authors.map(([author, createdAt = '2026-01-01T00:00:00Z'], index) => ({
+      id: `${id}-${index}`,
+      body: `${author ?? 'agent'} ${index}`,
+      ...(author === undefined ? {} : { author }),
+      createdAt,
+      updatedAt: createdAt,
+    })),
+  });
+  const ids = (
+    threads: ReturnType<typeof thread>[],
+    byThread: Map<string, ThreadFixup[]> | undefined,
+    decisions: ReviewDecision[] = [],
+  ) => selectThreadsAwaitingAgent(threads, byThread, decisions).map((t) => t.threadId);
+
+  it('takes, without states, every thread where the reviewer spoke last', () => {
+    const threads = [thread('asked', ['User']), thread('replied', ['User'], ['Claude'])];
+    expect(selectThreadsAwaitingAgent(threads, undefined, [])).toEqual([
+      {
+        threadId: 'asked',
+        filePath: 'a.ts',
+        position: { side: 'new', line: 1 },
+        message: 'User 0',
+      },
+    ]);
+  });
+
+  it('takes a comment waiting for a fix only while the reviewer has the last word', () => {
+    const threads = [
+      thread('new', ['User']),
+      thread('answered-in-words', ['User'], [undefined]),
+      thread('asked-back', [undefined], ['User']),
+      thread('own-note', [undefined]),
+    ];
+    expect(ids(threads, new Map())).toEqual(['new', 'asked-back']);
+    expect(selectThreadsAwaitingAgent(threads, new Map(), [])[0]).toMatchObject({
+      state: 'awaiting-fix',
+      label: '수정 중',
+    });
+  });
+
+  it('leaves out a thread whose fixup waits for the reviewer or was approved', () => {
+    const threads = [thread('pending', ['User']), thread('approved', ['User'])];
+    const byThread = new Map([
+      ['pending', [fixup('aaaa', ['pending'])]],
+      ['approved', [fixup('bbbb', ['approved'])]],
+    ]);
+    expect(ids(threads, byThread, [decision('approved', 'bbbb', undefined, 'approved')])).toEqual(
+      [],
+    );
+  });
+
+  it('takes a rejection with the fixup to drop while it is still in the range', () => {
+    const rejected = [decision('rejected', 'aaaa', '2026-01-02T00:00:00Z')];
+    const inRange = selectThreadsAwaitingAgent(
+      [thread('t1', ['User'])],
+      new Map([['t1', [fixup('aaaa')]]]),
+      rejected,
+    );
+    expect(inRange).toMatchObject([
+      { threadId: 't1', state: 'rejected', label: '다시 수정 중', rejectedFixupSha: 'aaaa' },
+    ]);
+    const dropped = selectThreadsAwaitingAgent([thread('t1', ['User'])], new Map(), rejected);
+    expect(dropped).toMatchObject([{ threadId: 't1', state: 'rejected' }]);
+    expect(dropped[0]).not.toHaveProperty('rejectedFixupSha');
+  });
+
+  it('gives a rejection back to the reviewer once the agent has answered after it', () => {
+    const rejected = [decision('rejected', 'aaaa', '2026-01-02T00:00:00Z')];
+    const answered = thread('t1', ['User'], [undefined, '2026-01-03T00:00:00Z']);
+    const answeredBefore = thread('t1', ['User'], [undefined, '2026-01-01T12:00:00Z']);
+    const askedAgain = thread(
+      't1',
+      ['User'],
+      [undefined, '2026-01-03T00:00:00Z'],
+      ['User', '2026-01-04T00:00:00Z'],
+    );
+    expect(ids([answered], new Map(), rejected)).toEqual([]);
+    expect(ids([answeredBefore], new Map(), rejected)).toEqual(['t1']);
+    expect(ids([askedAgain], new Map(), rejected)).toEqual(['t1']);
+  });
+
+  it('takes a reverted reviewer edit only until its fixup is dropped', () => {
+    const edited = thread('t1', [REVIEWER_EDIT_AUTHOR]);
+    const reverted = [
+      decision('approved', 'aaaa'),
+      decision('rejected', 'aaaa', '2026-01-02T00:00:00Z'),
+    ];
+    expect(
+      selectThreadsAwaitingAgent([edited], new Map([['t1', [fixup('aaaa')]]]), reverted),
+    ).toMatchObject([
+      { threadId: 't1', state: 'withdrawn', label: '되돌림', rejectedFixupSha: 'aaaa' },
+    ]);
+    expect(ids([edited], new Map(), reverted)).toEqual([]);
   });
 });

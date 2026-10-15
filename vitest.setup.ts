@@ -6,6 +6,10 @@ import { Agent, setGlobalDispatcher } from 'undici';
 // Use pipelining=0 instead of keepAlive=false for this version of undici
 setGlobalDispatcher(new Agent({ pipelining: 0 }));
 
+// Run from a Claude Code session, the tests would otherwise post review updates into it.
+delete process.env.CLAUDE_CODE_MESSAGING_SOCKET;
+delete process.env.CLAUDE_CODE_MESSAGING_TOKEN;
+
 // Mock fetch globally for component tests, but not for server integration tests
 if (!process.env.VITEST_SERVER_TEST) {
   global.fetch = vi.fn();

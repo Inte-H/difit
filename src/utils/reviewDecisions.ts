@@ -1,6 +1,10 @@
 import {
+  REVIEWER_AUTHOR,
   REVIEWER_EDIT_AUTHOR,
+  type DiffCommentMessage,
+  type DiffCommentThread,
   type ReviewDecision,
+  type ThreadAwaitingAgent,
   type ThreadFixup,
   type ThreadReviewState,
 } from '../types/diff.js';
@@ -146,6 +150,69 @@ export function selectOpenThreads<
       isOpenedByEdit(thread),
     );
     return state === 'awaiting-fix' || state === 'rejected';
+  });
+}
+
+type ThreadForAgent = Pick<DiffCommentThread, 'id' | 'filePath' | 'position' | 'messages'>;
+
+const isAgentMessage = (message: DiffCommentMessage) =>
+  message.author !== REVIEWER_AUTHOR && message.author !== REVIEWER_EDIT_AUTHOR;
+
+// A rejection stays the agent's turn until a new fixup lands, the rejected one is dropped
+// (withdrawn only), or the agent has the last word after it.
+function rejectionAwaitingAgent(
+  thread: ThreadForAgent,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+  state: 'rejected' | 'withdrawn',
+): string | undefined | null {
+  const rejections = decisions.filter(
+    (decision) => decision.threadId === thread.id && decision.kind === 'rejected',
+  );
+  const latest = rejections.reduce((a, b) => (decidedAt(a) >= decidedAt(b) ? a : b));
+  const last = thread.messages.at(-1);
+  if (last && isAgentMessage(last) && (Date.parse(last.createdAt) || 0) >= decidedAt(latest)) {
+    return null;
+  }
+  const leftInRange = fixups.find(matcherFor(rejections))?.sha;
+  if (state === 'withdrawn' && leftInRange === undefined) return null;
+  return leftInRange;
+}
+
+// Threads whose next move is the agent's. Without fixups (a review with no pinned commit) that is
+// any thread where the reviewer spoke last.
+export function selectThreadsAwaitingAgent(
+  threads: ThreadForAgent[],
+  fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
+  decisions: ReviewDecision[],
+): ThreadAwaitingAgent[] {
+  return threads.flatMap((thread): ThreadAwaitingAgent[] => {
+    const last = thread.messages.at(-1);
+    const base = {
+      threadId: thread.id,
+      filePath: thread.filePath,
+      position: thread.position,
+      message: last?.body ?? '',
+    };
+    const reviewerSpokeLast = last?.author === REVIEWER_AUTHOR;
+    if (!fixupsByThread) return reviewerSpokeLast ? [base] : [];
+
+    const fixups = fixupsByThread.get(thread.id) ?? [];
+    const state = deriveThreadReviewState(thread.id, fixups, decisions, isOpenedByEdit(thread));
+    if (state === 'awaiting-fix') {
+      return reviewerSpokeLast ? [{ ...base, state, label: reviewStateLabel(state) }] : [];
+    }
+    if (state !== 'rejected' && state !== 'withdrawn') return [];
+    const rejectedFixupSha = rejectionAwaitingAgent(thread, fixups, decisions, state);
+    if (rejectedFixupSha === null) return [];
+    return [
+      {
+        ...base,
+        state,
+        label: reviewStateLabel(state),
+        ...(rejectedFixupSha === undefined ? {} : { rejectedFixupSha }),
+      },
+    ];
   });
 }
 

@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import { createServer as createNetServer, type Server as NetServer } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -2225,6 +2226,233 @@ describe('Server Integration Tests', () => {
 
       expect(responses.map((response) => response.status)).toEqual([200, 200]);
       expect(overlapped).toBe(false);
+    });
+  });
+  describe('Waiting for the agent turn', () => {
+    const PINNED = '?base=def4567&target=abc1234';
+    const FIXUP = 'b'.repeat(40);
+    let socketDir: string;
+    let received: string[];
+    let socketServer: NetServer | undefined;
+    const savedEnv = { ...process.env };
+
+    async function startPinned() {
+      const result = await startServer({
+        selection: { targetCommitish: 'abc1234', baseCommitish: 'abc1234^' },
+        preferredPort: 9170,
+      });
+      servers.push(result.server);
+      await fetch(`http://localhost:${result.port}/api/diff`);
+      return result;
+    }
+
+    const reviewerThread = (id: string, at = '2026-01-01T00:00:00Z') => ({
+      id,
+      filePath: 'test.js',
+      createdAt: at,
+      updatedAt: at,
+      position: { side: 'new', line: 3 },
+      messages: [{ id, body: `fix ${id}`, author: 'User', createdAt: at, updatedAt: at }],
+    });
+
+    const postFromPage = (port: number, body: unknown) =>
+      fetch(`http://localhost:${port}/api/comments${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    async function readWait(port: number, signal?: AbortSignal) {
+      const response = await fetch(`http://localhost:${port}/api/comments-wait${PINNED}`, {
+        ...(signal ? { signal } : {}),
+      });
+      return response.text();
+    }
+
+    async function listenOnSocket(token?: string) {
+      socketDir = await fs.mkdtemp(join(tmpdir(), 'difit-session-'));
+      const path = join(socketDir, 'inbox.sock');
+      received = [];
+      socketServer = createNetServer((connection) => {
+        let data = '';
+        connection.on('data', (chunk) => (data += chunk));
+        connection.on('end', () => received.push(data));
+      });
+      await new Promise<void>((resolve) => socketServer!.listen(path, resolve));
+      process.env.CLAUDE_CODE_MESSAGING_SOCKET = path;
+      if (token) process.env.CLAUDE_CODE_MESSAGING_TOKEN = token;
+      else delete process.env.CLAUDE_CODE_MESSAGING_TOKEN;
+    }
+
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+    afterEach(async () => {
+      process.env = { ...savedEnv };
+      if (socketServer) await new Promise((resolve) => socketServer!.close(resolve));
+      socketServer = undefined;
+      if (socketDir) await fs.rm(socketDir, { recursive: true, force: true });
+    });
+
+    it('answers at once with a comment the reviewer left before the wait started', async () => {
+      const { port } = await startPinned();
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+
+      const text = await readWait(port);
+
+      expect(text).toContain('event: threads');
+      const data = JSON.parse(text.split('data: ')[1]!.split('\n')[0]!);
+      expect(data).toEqual([
+        {
+          threadId: 'c1',
+          state: 'awaiting-fix',
+          label: '수정 중',
+          filePath: 'test.js',
+          position: { side: 'new', line: 3 },
+          message: 'fix c1',
+        },
+      ]);
+    });
+
+    it('holds until the reviewer saves a comment, ignoring what the agent adds', async () => {
+      const { port } = await startPinned();
+      const waited = readWait(port);
+      await settle();
+      await fetch(`http://localhost:${port}/api/comment-imports${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'thread',
+          filePath: 'test.js',
+          position: { side: 'new', line: 1 },
+          body: 'note from the agent',
+        }),
+      });
+      await settle();
+      let settled = false;
+      void waited.then(() => (settled = true));
+      await settle();
+      expect(settled).toBe(false);
+
+      const { version } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as { version: number; threads: unknown[] };
+      const current = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as { threads: unknown[] };
+      await postFromPage(port, {
+        threads: [...current.threads, reviewerThread('c2')],
+        baseVersion: version,
+      });
+
+      expect(await waited).toContain('"threadId":"c2"');
+    });
+
+    it('tells a waiting command that the review ended', async () => {
+      const { port, endCommentWaits } = await startPinned();
+      const waited = readWait(port);
+      await settle();
+
+      await endCommentWaits!();
+
+      expect(await waited).toContain('event: end');
+      expect(await readWait(port)).toContain('event: end');
+    });
+
+    it('sends a new reviewer comment into the Claude Code session with its token', async () => {
+      await listenOnSocket('secret');
+      const { port } = await startPinned();
+
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+      await settle();
+
+      expect(received).toHaveLength(1);
+      const [auth, message] = received[0]!
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(auth).toEqual({ type: 'auth', token: 'secret' });
+      expect(message.type).toBe('user');
+      expect(message.message.role).toBe('user');
+      const [first, json] = (message.message.content as string).split('\n');
+      expect(first).toBe(
+        `difit review: your turn on c1 [수정 중]; read with difit comment get --port ${port} --format json`,
+      );
+      expect(JSON.parse(json!)).toMatchObject({ threadId: 'c1', state: 'awaiting-fix' });
+    });
+
+    it('sends a rejection and a reverted edit, but not an approval or the same turn twice', async () => {
+      await listenOnSocket();
+      const { port } = await startPinned();
+      const parser = parserInstances.at(-1)!;
+      const edit = {
+        ...reviewerThread('e1'),
+        messages: [{ ...reviewerThread('e1').messages[0], author: 'reviewer-edit' }],
+      };
+      const threads = [reviewerThread('c1'), edit];
+      parser.listThreadFixups.mockResolvedValue([
+        {
+          sha: FIXUP,
+          shortSha: 'bbbbbbb',
+          patchId: 'p1',
+          subject: 'fixup! x',
+          threadIds: ['c1'],
+          files: [],
+        },
+        {
+          sha: 'e'.repeat(40),
+          shortSha: 'eeeeeee',
+          patchId: 'p2',
+          subject: 'fixup! x',
+          threadIds: ['e1'],
+          files: [],
+        },
+      ]);
+      const approvals = [
+        { threadId: 'e1', kind: 'approved', fixupSha: 'e'.repeat(40), at: '2026-01-01T00:00:00Z' },
+      ];
+      await postFromPage(port, { threads, decisions: approvals });
+      await postFromPage(port, {
+        threads,
+        decisions: [
+          ...approvals,
+          { threadId: 'c1', kind: 'approved', fixupSha: FIXUP, at: '2026-01-02T00:00:00Z' },
+        ],
+      });
+      await settle();
+      expect(received).toEqual([]);
+
+      const rejections = [
+        ...approvals,
+        { threadId: 'c1', kind: 'rejected', fixupSha: FIXUP, at: '2026-01-03T00:00:00Z' },
+        { threadId: 'e1', kind: 'rejected', fixupSha: 'e'.repeat(40), at: '2026-01-03T00:00:00Z' },
+      ];
+      await postFromPage(port, { threads, decisions: rejections });
+      await postFromPage(port, {
+        threads: threads.map((t) => ({ ...t, updatedAt: '2026-01-04T00:00:00Z' })),
+        decisions: rejections,
+      });
+      await settle();
+
+      expect(received).toHaveLength(1);
+      const content = JSON.parse(received[0]!.trim().split('\n').at(-1)!).message.content as string;
+      expect(content.split('\n')[0]).toContain('c1 [다시 수정 중], e1 [되돌림]');
+      expect(content).toContain(`"rejectedFixupSha":"${FIXUP}"`);
+    });
+
+    it('keeps the review going when the session socket is gone', async () => {
+      process.env.CLAUDE_CODE_MESSAGING_SOCKET = join(tmpdir(), 'difit-no-such-session.sock');
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { port } = await startPinned();
+
+      const response = await postFromPage(port, { threads: [reviewerThread('c1')] });
+      await settle();
+
+      expect(response.status).toBe(200);
+      expect(errors).toHaveBeenCalledWith(
+        expect.stringMatching(/^Could not send the review update to the Claude Code session: /),
+      );
+      expect(await readWait(port)).toContain('"threadId":"c1"');
+      errors.mockRestore();
     });
   });
 });
