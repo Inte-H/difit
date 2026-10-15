@@ -15,6 +15,12 @@ import {
 import { memo, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 
 import { type DiffFile, type CommentThread } from '../../types/diff';
+import {
+  combineChangeKinds,
+  LEAVES_CODE_ALONE_LABEL,
+  LEAVES_CODE_ALONE_TITLE,
+  leavesCodeAlone,
+} from '../../utils/changeKind';
 import { isSafariBrowser } from '../utils/browser';
 
 import { Checkbox } from './Checkbox';
@@ -406,6 +412,7 @@ export const FileList = memo(function FileList({
       const isReviewed = reviewedFiles.has(file.path);
       const fileIndex = fileIndexMap.get(file.path) ?? -1;
       const isSelected = selectedFileIndex !== null && selectedFileIndex === fileIndex;
+      const changeKind = combineChangeKinds(file.chunks.map((chunk) => chunk.changeKind));
 
       return (
         <div
@@ -439,6 +446,14 @@ export const FileList = memo(function FileList({
           >
             {node.name}
           </span>
+          {leavesCodeAlone(changeKind) && (
+            <span
+              title={LEAVES_CODE_ALONE_TITLE[changeKind]}
+              className="shrink-0 rounded px-1.5 text-xs bg-github-bg-tertiary text-github-text-secondary"
+            >
+              {LEAVES_CODE_ALONE_LABEL[changeKind]}
+            </span>
+          )}
           {commentCount > 0 && (
             <span className="text-github-warning fixup-review:text-github-text-secondary text-sm font-medium ml-auto flex items-center gap-1">
               <MessageSquare size={14} />

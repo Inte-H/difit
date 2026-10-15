@@ -16,6 +16,7 @@ export type DiffViewerBodyProps = {
   cursor?: CursorPosition | null;
   fileIndex?: number;
   mergedChunks: MergedChunk[];
+  foldCommentChanges?: boolean;
   isExpandLoading: boolean;
   expandHiddenLines: (
     file: DiffFile,

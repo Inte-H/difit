@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { Language, Parser, type Tree } from 'web-tree-sitter';
 
 import type { ChunkChangeKind, DiffChunk } from '../types/diff.js';
+import { combineChangeKinds, leavesCodeAlone } from '../utils/changeKind.js';
 
 const GRAMMAR_BY_EXTENSION: Record<string, string> = {
   '.ts': 'tree-sitter-typescript/tree-sitter-typescript.wasm',
@@ -168,13 +169,6 @@ function changedRunsOf(chunks: DiffChunk[], oldLines: string[], newLines: string
   return runs;
 }
 
-function kindOfChunk(kinds: ChunkChangeKind[]): ChunkChangeKind {
-  if (kinds.length === 0) return 'unknown';
-  if (kinds.includes('code')) return 'code';
-  if (kinds.includes('unknown')) return 'unknown';
-  return kinds.includes('comment') ? 'comment' : 'whitespace';
-}
-
 // Per chunk, whether its changed lines alter only comments, only whitespace, or the code. Null when
 // the file is not in a supported language. Anything the parser cannot settle is 'unknown'.
 export async function classifyChunks(
@@ -217,9 +211,7 @@ export async function classifyChunks(
 
   // Each run was judged alone against the old file. Taking all of them back out of the new file must
   // leave its code unchanged too, or one of them changes code together with another run.
-  const neutral = runs.filter(
-    (_, index) => runKinds[index] !== 'code' && runKinds[index] !== 'unknown',
-  );
+  const neutral = runs.filter((_, index) => leavesCodeAlone(runKinds[index]));
   if (neutral.length > 0) {
     const reverted = [...newLines];
     for (const run of [...neutral].reverse()) {
@@ -232,12 +224,14 @@ export async function classifyChunks(
     const signatures = parseSignatures(parser, reverted.join('\n'));
     if (!signatures || signatures.code !== after.code) {
       for (const [index, kind] of runKinds.entries()) {
-        if (kind === 'comment' || kind === 'whitespace') runKinds[index] = 'unknown';
+        if (leavesCodeAlone(kind)) runKinds[index] = 'unknown';
       }
     }
   }
 
-  return chunks.map((_, chunkIndex) =>
-    kindOfChunk(runKinds.filter((_, index) => runs[index]?.chunkIndex === chunkIndex)),
+  return chunks.map(
+    (_, chunkIndex) =>
+      combineChangeKinds(runKinds.filter((_, index) => runs[index]?.chunkIndex === chunkIndex)) ??
+      'unknown',
   );
 }

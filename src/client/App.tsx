@@ -55,6 +55,7 @@ import { useDiffComments } from './hooks/useDiffComments';
 import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
 import { useFileWatch } from './hooks/useFileWatch';
 import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
+import { useChunkChangeKinds } from './hooks/useChunkChangeKinds';
 import { useLazyDiffRendering } from './hooks/useLazyDiffRendering';
 import {
   reviewTargetRestoredByHistory,
@@ -154,6 +155,7 @@ function App() {
   const [diffDataVersion, setDiffDataVersion] = useState(0);
   const [diffMode, setDiffMode] = useState<DiffViewMode>(getInitialDiffViewMode);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(true);
+  const [foldCommentChanges, setFoldCommentChanges] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyAllNotice, setCopyAllNotice] = useState<CopyAllNotice | null>(null);
@@ -407,6 +409,7 @@ function App() {
     diffScrollContainerRef,
     setDiffData,
   });
+  useChunkChangeKinds({ diffData, renderedFilePaths, setDiffData });
 
   const toggleFileReviewed = useCallback(
     async (filePath: string) => {
@@ -1460,6 +1463,18 @@ function App() {
                 label="Ignore Whitespace"
                 title={ignoreWhitespace ? 'Show whitespace changes' : 'Ignore whitespace changes'}
               />
+              {diffData?.targetCommitish !== 'stdin' && (
+                <Checkbox
+                  checked={foldCommentChanges}
+                  onChange={setFoldCommentChanges}
+                  label="주석 변경 접기"
+                  title={
+                    foldCommentChanges
+                      ? '주석이나 공백만 바뀐 곳도 펼쳐 보기'
+                      : '코드는 그대로이고 주석이나 공백만 바뀐 곳을 한 줄로 접기'
+                  }
+                />
+              )}
               {fixupsByThread.size > 0 && (
                 <Checkbox
                   checked={showFixupOverlay}
@@ -1730,6 +1745,7 @@ function App() {
                       isExpandLoading={isExpandLoading}
                       diffVersion={diffDataVersion}
                       fixupOverlay={fixupOverlay}
+                      foldCommentChanges={foldCommentChanges}
                     />
                   ) : (
                     <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
