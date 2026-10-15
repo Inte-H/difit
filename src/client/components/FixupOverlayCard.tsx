@@ -1,4 +1,10 @@
 import type { CommentThread, DiffChunk, DiffLine, ThreadFixup } from '../../types/diff';
+import {
+  combineChangeKinds,
+  LEAVES_CODE_ALONE_LABEL,
+  LEAVES_CODE_ALONE_TITLE,
+  leavesCodeAlone,
+} from '../../utils/changeKind';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
 import { overlaidFixup, useFixupOverlay } from '../contexts/FixupOverlayContext';
 
@@ -29,6 +35,9 @@ function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProp
     file.path === filePath || file.oldPath === filePath;
   const chunks: DiffChunk[] = fixup.files.filter(isThisFile).flatMap((file) => file.chunks);
   const otherPaths = fixup.files.filter((file) => !isThisFile(file)).map((file) => file.path);
+  const changeKind = combineChangeKinds(
+    fixup.files.flatMap((file) => file.chunks.map((chunk) => chunk.changeKind)),
+  );
 
   return (
     <div
@@ -37,6 +46,15 @@ function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProp
     >
       <div className="px-3 py-1 text-xs font-mono text-github-text-secondary border-b border-github-border">
         {fixup.shortSha}
+        {leavesCodeAlone(changeKind) && (
+          <span
+            data-testid="fixup-change-kind"
+            title={LEAVES_CODE_ALONE_TITLE[changeKind]}
+            className="ml-2 rounded px-1.5 bg-github-bg-tertiary text-github-text-primary"
+          >
+            {LEAVES_CODE_ALONE_LABEL[changeKind]}
+          </span>
+        )}
         {otherPaths.length > 0 && <span> · 다른 파일도 고침: {otherPaths.join(', ')}</span>}
       </div>
       <FileLevelTokensProvider value={NO_PRECOMPUTED_TOKENS}>

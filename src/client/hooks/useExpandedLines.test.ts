@@ -196,3 +196,53 @@ describe('useExpandedLines', () => {
     expect(result.current.expandedState).toEqual({});
   });
 });
+
+describe('useExpandedLines change kinds', () => {
+  const chunkAt = (line: number, changeKind: 'comment' | 'whitespace' | 'code') => ({
+    header: `@@ -${line} +${line} @@`,
+    oldStart: line,
+    oldLines: 1,
+    newStart: line,
+    newLines: 1,
+    changeKind,
+    lines: [
+      { type: 'delete' as const, content: `old ${line}`, oldLineNumber: line },
+      { type: 'add' as const, content: `new ${line}`, newLineNumber: line },
+    ],
+  });
+
+  const twoChunks = (second: 'whitespace' | 'code'): DiffFile => ({
+    path: 'src/two.ts',
+    status: 'modified',
+    additions: 2,
+    deletions: 2,
+    chunks: [chunkAt(1, 'comment'), chunkAt(3, second)],
+  });
+
+  beforeEach(() => {
+    vi.mocked(global.fetch).mockImplementation(() =>
+      Promise.resolve({ ok: true, text: async () => 'old 1\nkept\nold 3\n' } as Response),
+    );
+  });
+
+  it.each([
+    ['whitespace', 'comment'],
+    ['code', 'code'],
+  ] as const)('merges a comment chunk with a %s chunk into %s', async (second, merged) => {
+    const file = twoChunks(second);
+    const { result } = renderHook(() =>
+      useExpandedLines({ baseCommitish: 'base', targetCommitish: 'target' }),
+    );
+
+    expect(result.current.getMergedChunks(file).map((chunk) => chunk.changeKind)).toEqual([
+      'comment',
+      second,
+    ]);
+
+    await act(async () => {
+      await result.current.expandAllBetweenChunks(file, 1, 1);
+    });
+
+    expect(result.current.getMergedChunks(file).map((chunk) => chunk.changeKind)).toEqual([merged]);
+  });
+});

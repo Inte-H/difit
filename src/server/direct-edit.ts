@@ -45,7 +45,11 @@ interface GitOptions {
 
 const GIT_TIMEOUT_MS = 60_000;
 
-function runGit(repoPath: string, args: string[], options: GitOptions = {}): Promise<GitRun> {
+export function runGit(
+  repoPath: string,
+  args: string[],
+  options: GitOptions = {},
+): Promise<GitRun> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn('git', args, {
       cwd: repoPath,

@@ -93,7 +93,12 @@ vi.mock('./git-diff.js', () => {
       source: 'content',
     });
     clearResolvedCommitCache = vi.fn();
+    classifyDiffFile = vi.fn(async (_selection: unknown, file: { chunks: object[] }) => ({
+      ...file,
+      chunks: file.chunks.map((chunk) => ({ ...chunk, changeKind: 'comment' })),
+    }));
     listThreadFixups = vi.fn().mockResolvedValue([]);
+    classifyFixups = vi.fn(async (fixups: unknown[]) => fixups);
     findNewerTarget = vi.fn().mockResolvedValue(null);
     readThreadFixup = vi.fn(
       async (sha: string) =>
@@ -741,6 +746,34 @@ describe('Server Integration Tests', () => {
         isGenerated: true,
         source: 'content',
       });
+    });
+
+    it('GET /api/change-kinds/* classifies one file of the same diff, once', async () => {
+      const parser = parserInstances[parserInstances.length - 1] as any;
+      parser.parseDiff.mockResolvedValueOnce({
+        files: [{ path: 'src/a.ts', chunks: [{ header: '@@ -1 +1 @@', lines: [] }] }],
+      });
+      const url = `http://localhost:${port}/api/change-kinds/src/a.ts?base=main&target=topic&ignoreWhitespace=true`;
+
+      const response = await fetch(url);
+      expect(response.ok).toBe(true);
+      expect(await response.json()).toEqual({
+        path: 'src/a.ts',
+        chunks: [{ header: '@@ -1 +1 @@', changeKind: 'comment' }],
+      });
+      expect(parser.parseDiff).toHaveBeenLastCalledWith(
+        expect.objectContaining({ baseCommitish: 'main', targetCommitish: 'topic' }),
+        true,
+        undefined,
+      );
+
+      await fetch(url);
+      expect(parser.classifyDiffFile).toHaveBeenCalledTimes(1);
+
+      const missing = await fetch(
+        `http://localhost:${port}/api/change-kinds/src/other.ts?base=main&target=topic&ignoreWhitespace=true`,
+      );
+      expect(missing.status).toBe(404);
     });
 
     it('GET /api/generated-status/* rejects paths outside repository', async () => {
@@ -1889,6 +1922,26 @@ describe('Server Integration Tests', () => {
 
       expect(body).toEqual({ fixups: [], newerTarget: NEWER });
       expect(findNewerTarget).toHaveBeenCalledWith('abc1234', 'HEAD', 'abc1234');
+    });
+
+    it('classifies fixups for the screen only, not when it works out review states', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'abc1234', baseCommitish: 'abc1234^' },
+        preferredPort: 9152,
+        commentImports: [
+          { type: 'thread', filePath: 'test.js', position: { side: 'new', line: 1 }, body: 'Fix' },
+        ],
+      });
+      servers.push(server);
+      const parser = parserInstances.at(-1)!;
+
+      await fetch(`http://localhost:${port}/api/diff`);
+      await fetch(`http://localhost:${port}/api/comments-output`);
+      expect(parser.listThreadFixups).toHaveBeenCalled();
+      expect(parser.classifyFixups).not.toHaveBeenCalled();
+
+      await fetch(`http://localhost:${port}/api/fixups?base=def4567&target=abc1234`);
+      expect(parser.classifyFixups).toHaveBeenCalledTimes(1);
     });
 
     it('reports no newer target for a review opened by hash', async () => {

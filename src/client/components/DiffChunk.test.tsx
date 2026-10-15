@@ -312,6 +312,32 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     expect(screen.getByTestId('review-state-chip')).toHaveTextContent('승인 대기');
   });
 
+  it('labels a fixup that changes only comments, and no other fixup', () => {
+    const withKind = (changeKind: 'comment' | 'code'): ThreadFixup => {
+      const base = fixup('c'.repeat(40));
+      return {
+        ...base,
+        files: base.files.map((file) => ({
+          ...file,
+          chunks: file.chunks.map((chunk) => ({ ...chunk, changeKind })),
+        })),
+      };
+    };
+
+    const { unmount } = renderSplit({
+      enabled: true,
+      fixupsByThread: new Map([['t1', [withKind('comment')]]]),
+    });
+    const badge = screen.getByTestId('fixup-change-kind');
+    expect(badge).toHaveTextContent(/^주석$/);
+    expect(badge).toHaveAttribute('title', '코드는 그대로이고 주석만 바뀜');
+    unmount();
+
+    renderSplit({ enabled: true, fixupsByThread: new Map([['t1', [withKind('code')]]]) });
+    expect(screen.getByTestId('fixup-overlay-card')).toBeInTheDocument();
+    expect(screen.queryByTestId('fixup-change-kind')).toBeNull();
+  });
+
   it('shows no review controls when the target is not a commit', () => {
     renderSplit({
       enabled: true,

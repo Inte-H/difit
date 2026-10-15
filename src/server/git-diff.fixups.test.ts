@@ -2,9 +2,21 @@ import { execFileSync } from 'child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { GitDiffParser } from './git-diff';
+
+const runGitCalls = vi.hoisted(() => [] as string[][]);
+vi.mock('./direct-edit.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./direct-edit.js')>();
+  return {
+    ...actual,
+    runGit: (...args: Parameters<typeof actual.runGit>) => {
+      runGitCalls.push(args[1]);
+      return actual.runGit(...args);
+    },
+  };
+});
 
 // Runs against real repositories because the risk is in how git prints many commits in one go.
 let home: string;
@@ -369,5 +381,157 @@ describe('findNewerTarget against a real repository', () => {
 
     expect(await parser.findNewerTarget(target, 'HEAD', target)).toBeNull();
     expect(await parser.findNewerTarget(target, 'refs/heads/deleted', target)).toBeNull();
+  });
+});
+
+describe('change kinds against a real repository', () => {
+  const source = (comment: string, value: number) =>
+    `${lines(8, '// filler ')}// ${comment}\nexport const value = ${value};\n`;
+
+  it('marks the chunks of each fixup by what they change', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'a.ts': source('old', 1), 'b.ts': source('old', 1) });
+    commit(repo, 'comment only\n\nReview-Thread: t-comment', { 'a.ts': source('new', 1) });
+    commit(repo, 'code\n\nReview-Thread: t-code', { 'b.ts': source('old', 2) });
+    commit(repo, 'renamed comment\n\nReview-Thread: t-rename', {
+      'b.ts': null,
+      'c.ts': source('renamed', 2),
+    });
+    commit(repo, 'plain text\n\nReview-Thread: t-text', { 'notes.txt': 'a\n' });
+
+    const parser = new GitDiffParser(repo);
+    const fixups = await parser.classifyFixups(
+      await parser.listThreadFixups({
+        targetCommitish: target,
+        baseCommitish: target,
+      }),
+    );
+    const kinds = new Map(
+      fixups.map((fixup) => [
+        fixup.subject,
+        fixup.files.map((file) => file.chunks.map((chunk) => chunk.changeKind)),
+      ]),
+    );
+
+    expect(kinds.get('comment only')).toEqual([['comment']]);
+    expect(kinds.get('code')).toEqual([['code']]);
+    expect(kinds.get('renamed comment')).toEqual([['comment']]);
+    expect(kinds.get('plain text')).toEqual([[undefined]]);
+
+    const listed = await parser.listThreadFixups({
+      targetCommitish: target,
+      baseCommitish: target,
+    });
+    expect(
+      listed.flatMap((fixup) => fixup.files.flatMap((file) => file.chunks)),
+    ).not.toContainEqual(expect.objectContaining({ changeKind: expect.anything() }));
+  });
+
+  it('reads the files of every fixup with one git call and keeps only finished results', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'a.ts': source('old', 1), 'b.ts': source('old', 1) });
+    commit(repo, 'first\n\nReview-Thread: t1', { 'a.ts': source('new', 1) });
+    commit(repo, 'second\n\nReview-Thread: t2', { 'b.ts': source('new', 1) });
+    commit(repo, 'third\n\nReview-Thread: t3', { 'a.ts': source('newer', 1) });
+    const selection = { targetCommitish: target, baseCommitish: target };
+    const parser = new GitDiffParser(repo);
+    const kindsOf = (fixups: Awaited<ReturnType<GitDiffParser['listThreadFixups']>>) =>
+      fixups.map((fixup) => fixup.files[0]?.chunks[0]?.changeKind);
+
+    const readTexts = vi
+      .spyOn(parser as any, 'readTexts')
+      .mockRejectedValueOnce(new Error('cat-file failed'));
+    expect(kindsOf(await parser.classifyFixups(await parser.listThreadFixups(selection)))).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    readTexts.mockRestore();
+
+    runGitCalls.length = 0;
+    expect(kindsOf(await parser.classifyFixups(await parser.listThreadFixups(selection)))).toEqual([
+      'comment',
+      'comment',
+      'comment',
+    ]);
+    expect(runGitCalls.filter((args) => args[0] === 'cat-file')).toHaveLength(1);
+
+    runGitCalls.length = 0;
+    await parser.classifyFixups(await parser.listThreadFixups(selection));
+    expect(runGitCalls).toEqual([]);
+  });
+
+  it('makes progress on every listing when the time budget runs out', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'a.ts': source('old', 1), 'b.ts': source('old', 1) });
+    commit(repo, 'first\n\nReview-Thread: t1', { 'a.ts': source('new', 1) });
+    commit(repo, 'second\n\nReview-Thread: t2', { 'b.ts': source('new', 1) });
+    commit(repo, 'third\n\nReview-Thread: t3', { 'a.ts': source('newer', 1) });
+    const selection = { targetCommitish: target, baseCommitish: target };
+    const parser = new GitDiffParser(repo);
+    const kinds = async () =>
+      (await parser.classifyFixups(await parser.listThreadFixups(selection))).map(
+        (fixup) => fixup.files[0]?.chunks[0]?.changeKind,
+      );
+    const budget = (GitDiffParser as any).CHANGE_KIND_BUDGET_MS;
+    (GitDiffParser as any).CHANGE_KIND_BUDGET_MS = -1;
+    try {
+      expect(await kinds()).toEqual(['comment', undefined, undefined]);
+      expect(await kinds()).toEqual(['comment', 'comment', undefined]);
+      expect(await kinds()).toEqual(['comment', 'comment', 'comment']);
+      runGitCalls.length = 0;
+      await kinds();
+      expect(runGitCalls).toEqual([]);
+    } finally {
+      (GitDiffParser as any).CHANGE_KIND_BUDGET_MS = budget;
+    }
+  });
+
+  it('judges a file even when the first one could not be read and the budget is gone', async () => {
+    const repo = createRepo();
+    const target = commit(repo, 'base', { 'a.ts': source('old', 1), 'b.ts': source('old', 1) });
+    commit(repo, 'first\n\nReview-Thread: t1', { 'a.ts': source('new', 1) });
+    commit(repo, 'second\n\nReview-Thread: t2', { 'b.ts': source('new', 1) });
+    const parser = new GitDiffParser(repo);
+    const readTexts = (parser as any).readTexts.bind(parser);
+    vi.spyOn(parser as any, 'readTexts').mockImplementation(async (requests: unknown) => {
+      const texts = await readTexts(requests);
+      return [null, null, ...texts.slice(2)];
+    });
+    const budget = (GitDiffParser as any).CHANGE_KIND_BUDGET_MS;
+    (GitDiffParser as any).CHANGE_KIND_BUDGET_MS = -1;
+    try {
+      const fixups = await parser.classifyFixups(
+        await parser.listThreadFixups({
+          targetCommitish: target,
+          baseCommitish: target,
+        }),
+      );
+      expect(fixups.map((fixup) => fixup.files[0]?.chunks[0]?.changeKind)).toEqual([
+        undefined,
+        'comment',
+      ]);
+    } finally {
+      (GitDiffParser as any).CHANGE_KIND_BUDGET_MS = budget;
+    }
+  });
+
+  it('classifies a file of the reviewed diff for commits and for the working tree', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'a.ts': source('old', 1) });
+    const target = commit(repo, 'target', { 'a.ts': source('new', 1) });
+    const parser = new GitDiffParser(repo);
+
+    const committed = { baseCommitish: base, targetCommitish: target };
+    const [file] = (await parser.parseDiff(committed)).files;
+    expect(file?.chunks[0]?.changeKind).toBeUndefined();
+    const classified = await parser.classifyDiffFile(committed, file!);
+    expect(classified.chunks.map((chunk) => chunk.changeKind)).toEqual(['comment']);
+
+    writeFileSync(join(repo, 'a.ts'), source('new', 3));
+    const working = { baseCommitish: 'HEAD', targetCommitish: '.' };
+    const [workingFile] = (await parser.parseDiff(working)).files;
+    const classifiedWorking = await parser.classifyDiffFile(working, workingFile!);
+    expect(classifiedWorking.chunks.map((chunk) => chunk.changeKind)).toEqual(['code']);
   });
 });

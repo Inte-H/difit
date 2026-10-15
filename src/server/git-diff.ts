@@ -25,6 +25,8 @@ import {
   normalizeBaseMode,
 } from '../utils/diffSelection.js';
 
+import { classifyChunks, isClassifiablePath } from './change-kind.js';
+import { runGit } from './direct-edit.js';
 import { isGeneratedFile } from './generated-file-check.js';
 
 // Hashes every diff line with its surrounding context but not the line numbers, so a rebase keeps
@@ -50,6 +52,8 @@ const FIXUP_LOG_FORMAT = `--format=%x00%H%x00%P%x00%s%x00%(trailers:key=${REVIEW
 // only open one of our headers, even when a file diffed as text holds NUL bytes. Lines are split on
 // \n alone: the `m` flag would also start a line after \r, U+2028 or U+2029 inside file content.
 const FIXUP_LOG_HEADER = /(?<=^|\n)\0([0-9a-f]+)\0([0-9a-f ]*)\0([^\0]*)\0([^\0]*)\0(?=\n|$)/g;
+
+type ClassifiableFile = Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks' | 'isGenerated'>;
 
 interface FixupLogEntry {
   sha: string;
@@ -83,6 +87,8 @@ export class GitDiffParser {
   private static readonly RESOLVED_COMMIT_CACHE_TTL_MS = 5_000;
   private static readonly GENERATED_HEADER_SCAN_BYTES = 4 * 1024;
   private static readonly GITATTRIBUTES_CHECK_CHUNK_SIZE = 200;
+  private static readonly CHANGE_KIND_BUDGET_MS = 2_000;
+  private readonly classifiedFixupFiles = new Map<string, ThreadFixup['files']>();
 
   constructor(repoPath = process.cwd()) {
     this.repoPath = repoPath;
@@ -800,6 +806,159 @@ export class GitDiffParser {
       threadIds,
       files,
     };
+  }
+
+  async classifyFixups(fixups: ThreadFixup[]): Promise<ThreadFixup[]> {
+    const unclassified = fixups.filter((fixup) => !this.classifiedFixupFiles.has(fixup.sha));
+    const marked = await this.markChangeKinds(
+      unclassified.map((fixup) => ({
+        files: fixup.files,
+        oldRef: `${fixup.sha}^`,
+        newRef: fixup.sha,
+      })),
+    );
+    const markedBySha = new Map<string, ThreadFixup['files']>();
+    for (const [index, fixup] of unclassified.entries()) {
+      const result = marked[index];
+      if (!result) continue;
+      markedBySha.set(fixup.sha, result.files);
+      if (result.settled) this.classifiedFixupFiles.set(fixup.sha, result.files);
+    }
+    return fixups.map((fixup) => {
+      const files = this.classifiedFixupFiles.get(fixup.sha) ?? markedBySha.get(fixup.sha);
+      return files ? { ...fixup, files } : fixup;
+    });
+  }
+
+  // Old side first. 'staged', 'working' and '.' stand for the index and the working tree.
+  private async sideRefsOf(selection: DiffSelection): Promise<[string, string]> {
+    const { targetCommitish } = selection;
+    if (targetCommitish === 'working') return ['staged', 'working'];
+    const baseHash = (await this.git.revparse([await this.resolveBaseCommitish(selection)])).trim();
+    if (targetCommitish === 'staged' || targetCommitish === '.') return [baseHash, targetCommitish];
+    return [baseHash, (await this.git.revparse([targetCommitish])).trim()];
+  }
+
+  async classifyDiffFile<File extends ClassifiableFile>(
+    selection: DiffSelection,
+    file: File,
+  ): Promise<File> {
+    const [oldRef, newRef] = await this.sideRefsOf(selection);
+    const [marked] = await this.markChangeKinds([{ files: [file], oldRef, newRef }]);
+    return marked?.files[0] ?? file;
+  }
+
+  // Reads every file a ref holds with one git process; null where that side has no such file.
+  private async readTexts(
+    requests: Array<{ path: string; ref: string }>,
+  ): Promise<Array<string | null>> {
+    const texts: Array<string | null> = requests.map(() => null);
+    const fromGit: Array<{ index: number; spec: string }> = [];
+    for (const [index, { path, ref }] of requests.entries()) {
+      if (ref === 'working' || ref === '.') {
+        texts[index] = await this.getBlobContent(path, ref).then(
+          (content) => content.toString('utf8'),
+          () => null,
+        );
+        continue;
+      }
+      const normalized = this.normalizeRepositoryRelativePath(path);
+      // One request per line, so a path holding a newline cannot be asked for.
+      if (!normalized.includes('\n')) {
+        fromGit.push({ index, spec: `${ref === 'staged' ? '' : ref}:${normalized}` });
+      }
+    }
+    if (fromGit.length === 0) return texts;
+
+    const run = await runGit(this.repoPath, ['cat-file', '--batch'], {
+      input: Buffer.from(fromGit.map(({ spec }) => `${spec}\n`).join('')),
+    });
+    if (run.code !== 0) throw new Error(`git cat-file failed: ${run.output}`);
+    let offset = 0;
+    for (const { index } of fromGit) {
+      const headerEnd = run.stdout.indexOf(0x0a, offset);
+      if (headerEnd < 0) break;
+      const [, type, size] = run.stdout.subarray(offset, headerEnd).toString('utf8').split(' ');
+      const length = Number(size);
+      if (!Number.isInteger(length)) {
+        offset = headerEnd + 1;
+        continue;
+      }
+      if (type === 'blob') {
+        texts[index] = run.stdout.subarray(headerEnd + 1, headerEnd + 1 + length).toString('utf8');
+      }
+      offset = headerEnd + 1 + length + 1;
+    }
+    return texts;
+  }
+
+  // Reads every group's files with one git process; the groups share one time budget. A group is
+  // unsettled when reading failed or the budget ran out before any of its files was started on.
+  private async markChangeKinds<File extends ClassifiableFile>(
+    groups: Array<{ files: File[]; oldRef: string; newRef: string }>,
+  ): Promise<Array<{ files: File[]; settled: boolean }>> {
+    const candidates = groups.flatMap(({ files, oldRef, newRef }, group) =>
+      files
+        .filter(
+          (file) =>
+            (file.status === 'modified' || file.status === 'renamed') &&
+            file.chunks.length > 0 &&
+            !file.isGenerated &&
+            isClassifiablePath(file.path),
+        )
+        .map((file) => ({ group, file, oldRef, newRef })),
+    );
+    const settled = groups.map(() => true);
+    const started = groups.map(() => false);
+    const classified = new Map<File, File>();
+    const results = () =>
+      groups.map(({ files }, group) => ({
+        files: files.map((file) => classified.get(file) ?? file),
+        settled: settled[group] ?? false,
+      }));
+    if (candidates.length === 0) return results();
+
+    let texts: Array<string | null>;
+    try {
+      texts = await this.readTexts(
+        candidates.flatMap(({ file, oldRef, newRef }) => [
+          { path: file.oldPath ?? file.path, ref: oldRef },
+          { path: file.path, ref: newRef },
+        ]),
+      );
+    } catch (error) {
+      console.warn('Could not read files to classify their changes:', error);
+      return groups.map(({ files }) => ({ files, settled: false }));
+    }
+
+    const deadline = Date.now() + GitDiffParser.CHANGE_KIND_BUDGET_MS;
+    let judged = 0;
+    for (const [index, { group, file }] of candidates.entries()) {
+      const oldText = texts[index * 2];
+      const newText = texts[index * 2 + 1];
+      if (oldText == null || newText == null) continue;
+      if (judged > 0 && Date.now() > deadline) {
+        if (!started[group]) settled[group] = false;
+        continue;
+      }
+      started[group] = true;
+      judged += 1;
+      try {
+        const kinds = await classifyChunks(file.path, oldText, newText, file.chunks);
+        if (kinds) {
+          classified.set(file, {
+            ...file,
+            chunks: file.chunks.map((chunk, chunkIndex) => ({
+              ...chunk,
+              changeKind: kinds[chunkIndex],
+            })),
+          });
+        }
+      } catch (error) {
+        console.warn(`Could not classify changes in ${file.path}:`, error);
+      }
+    }
+    return results();
   }
 
   parseStdinDiff(diffContent: string): DiffResponse {

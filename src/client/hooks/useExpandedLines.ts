@@ -7,6 +7,7 @@ import {
   type ExpandedLinesState,
   type FileExpandedState,
 } from '../../types/diff';
+import { combineChangeKinds } from '../../utils/changeKind';
 
 const DEFAULT_EXPAND_COUNT = 20;
 
@@ -604,6 +605,10 @@ export function useExpandedLines({
           lastMerged.lines = [...lastMerged.lines, ...expandedChunk.lines];
           lastMerged.originalIndices.push(i);
           lastMerged.hiddenLinesAfter = hiddenAfter;
+          lastMerged.changeKind = combineChangeKinds([
+            lastMerged.changeKind,
+            expandedChunk.changeKind,
+          ]);
           // Update chunk metadata
           const lastLine = lastMerged.lines[lastMerged.lines.length - 1];
           lastMerged.oldLines =

@@ -54,6 +54,7 @@ interface DiffViewerProps {
   isFocused?: boolean;
   fileIndex?: number;
   fixupOverlay?: FixupOverlayState;
+  foldCommentChanges?: boolean;
   mergedChunks: MergedChunk[];
   expandLines: (
     file: DiffFile,
@@ -215,6 +216,7 @@ export const DiffViewer = memo(function DiffViewer({
   isExpandLoading,
   diffVersion,
   fixupOverlay,
+  foldCommentChanges = false,
 }: DiffViewerProps) {
   const isCollapsed = collapsedFiles.has(file.path);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -351,6 +353,7 @@ export const DiffViewer = memo(function DiffViewer({
     cursor,
     fileIndex,
     mergedChunks,
+    foldCommentChanges,
     isExpandLoading,
     expandHiddenLines: expandLines,
     expandAllBetweenChunks,
