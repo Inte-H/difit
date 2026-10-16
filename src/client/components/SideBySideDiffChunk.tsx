@@ -837,7 +837,7 @@ export function SideBySideDiffChunk({
                                   : 'justify-center'
                             }`}
                           >
-                            <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'}`}>
+                            <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'} min-w-0`}>
                               <div className="m-2 mx-3">
                                 <CommentThreadCard
                                   thread={thread}

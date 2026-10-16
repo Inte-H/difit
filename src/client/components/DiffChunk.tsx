@@ -543,7 +543,9 @@ export const DiffChunk = memo(function DiffChunk({
                                   : 'justify-center'
                             }`}
                           >
-                            <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'} m-2 mx-4`}>
+                            <div
+                              className={`${layout === 'full' ? 'w-full' : 'w-1/2'} m-2 mx-4 min-w-0`}
+                            >
                               <CommentThreadCard
                                 thread={thread}
                                 review={review}
