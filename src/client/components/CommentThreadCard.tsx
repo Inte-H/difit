@@ -8,7 +8,7 @@ import {
   REVIEWER_AUTHOR,
   REVIEWER_EDIT_AUTHOR,
 } from '../../types/diff';
-import { formatCommentPrompt } from '../../utils/commentFormatting';
+import { formatCommentContent } from '../../utils/commentFormatting';
 import { isSameCommit } from '../../utils/diffSelection';
 import { isThreadResolved, reviewStateLabel } from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
@@ -160,8 +160,8 @@ function ThreadMessageItem({
                     ? 'text-green-700'
                     : 'text-github-text-primary [@media(hover:hover)]:opacity-0'
                 }`}
-                title={isCopied ? 'Copied!' : 'Copy prompt for AI coding agent'}
-                aria-label="Copy prompt"
+                title={isCopied ? 'Copied!' : 'Copy comment'}
+                aria-label="Copy comment"
               >
                 {isCopied ? <Check size={12} /> : <Copy size={12} />}
               </button>
@@ -266,8 +266,8 @@ export function CommentThreadCard({
     else onResolveThread(thread.id);
   };
 
-  const messagePrompt = (message: DiffCommentMessage) =>
-    formatCommentPrompt(thread.file, thread.line, message.body, thread.codeContent, thread.side);
+  const messageText = (message: DiffCommentMessage) =>
+    formatCommentContent(message.body, thread.codeContent);
 
   const anchorCommit =
     review &&
@@ -390,7 +390,7 @@ export function CommentThreadCard({
             filename={thread.file}
             originalCode={thread.codeContent}
             onUpdate={(newBody) => onUpdateMessage(thread.id, rootMessage.id, newBody)}
-            onCopy={() => messagePrompt(rootMessage)}
+            onCopy={() => messageText(rootMessage)}
           />
 
           {thread.messages.slice(1).map((message) => (
@@ -402,7 +402,7 @@ export function CommentThreadCard({
                 filename={thread.file}
                 originalCode={thread.codeContent}
                 onUpdate={(newBody) => onUpdateMessage(thread.id, message.id, newBody)}
-                onCopy={() => messagePrompt(message)}
+                onCopy={() => messageText(message)}
                 onDelete={() => onRemoveMessage(thread.id, message.id)}
               />
             </div>
