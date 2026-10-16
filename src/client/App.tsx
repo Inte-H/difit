@@ -1606,6 +1606,7 @@ function App() {
           <FileChips
             files={diffData.files}
             comments={normalizedThreads}
+            decisions={decisions}
             reviewedFiles={viewedFiles}
             selectedFileIndex={cursor?.fileIndex ?? null}
             onScrollToFile={scrollFileIntoDiffContainer}
@@ -1665,6 +1666,7 @@ function App() {
                   onScrollToFile={scrollFileIntoDiffContainer}
                   onFileSelected={isMobile ? handleMobileFileSelected : undefined}
                   comments={normalizedThreads}
+                  decisions={decisions}
                   reviewedFiles={viewedFiles}
                   onToggleReviewed={toggleFileReviewed}
                   onToggleFolderReviewed={toggleFolderReviewed}

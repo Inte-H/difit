@@ -1,11 +1,13 @@
 import { MessageSquare } from 'lucide-react';
 import { memo, useMemo } from 'react';
 
-import { type CommentThread, type DiffFile } from '../../types/diff';
+import { type CommentThread, type DiffFile, type ReviewDecision } from '../../types/diff';
+import { isThreadResolved } from '../../utils/reviewDecisions';
 
 interface FileChipsProps {
   files: DiffFile[];
   comments: CommentThread[];
+  decisions: ReviewDecision[];
   reviewedFiles: Set<string>;
   selectedFileIndex: number | null;
   onScrollToFile: (path: string) => void;
@@ -16,6 +18,7 @@ const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 export const FileChips = memo(function FileChips({
   files,
   comments,
+  decisions,
   reviewedFiles,
   selectedFileIndex,
   onScrollToFile,
@@ -23,10 +26,11 @@ export const FileChips = memo(function FileChips({
   const commentCounts = useMemo(() => {
     const counts = new Map<string, number>();
     comments.forEach((comment) => {
+      if (isThreadResolved(comment.id, decisions)) return;
       counts.set(comment.file, (counts.get(comment.file) ?? 0) + 1);
     });
     return counts;
-  }, [comments]);
+  }, [comments, decisions]);
 
   return (
     <nav
