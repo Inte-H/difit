@@ -33,7 +33,6 @@ export function useDirectEditing(
   );
   const hunk = useMemo(() => (editable ? hunkRange(lineNumbers) : null), [editable, lineNumbers]);
   const [editing, setEditing] = useState<OpenEdit | null>(null);
-  const [anchor, setAnchor] = useState<number | null>(null);
 
   const open = (range: EditRange, threadId?: string) => {
     if (!rangeShown(lineNumbers, range)) return;
@@ -43,12 +42,7 @@ export function useDirectEditing(
     });
   };
 
-  const editLine = (lineNumber: number, extend: boolean) => {
-    if (extend && anchor !== null) {
-      open({ start: Math.min(anchor, lineNumber), end: Math.max(anchor, lineNumber) });
-      return;
-    }
-    setAnchor(lineNumber);
+  const editLine = (lineNumber: number) => {
     open({ start: lineNumber, end: lineNumber });
   };
 
@@ -58,6 +52,7 @@ export function useDirectEditing(
     editing: controls ? editing : null,
     close: () => setEditing(null),
     editLine: controls ? editLine : undefined,
+    editRange: controls ? (range: EditRange) => open(range) : undefined,
     editHunk: controls && hunk ? () => open(hunk) : undefined,
     editThread: (thread: CommentThread) => {
       const range = rangeOfLine(thread.line);

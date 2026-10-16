@@ -9,7 +9,7 @@ export const EditLineButton: React.FC<EditLineButtonProps> = React.memo(({ onCli
   return (
     <button
       type="button"
-      className="absolute -right-[4.5rem] top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded border border-github-accent bg-github-bg-secondary text-github-accent transition-all duration-150 hover:scale-110 z-10"
+      className="w-7 h-7 flex items-center justify-center rounded border border-github-accent bg-github-bg-secondary text-github-accent transition-all duration-150 hover:scale-110 z-10"
       data-edit-line-button="true"
       onMouseDown={(e) => {
         e.stopPropagation();
@@ -19,7 +19,7 @@ export const EditLineButton: React.FC<EditLineButtonProps> = React.memo(({ onCli
         e.stopPropagation();
         onClick(e);
       }}
-      title="직접 고치기 (Shift-클릭으로 범위)"
+      title="직접 고치기"
       aria-label="줄 직접 고치기"
     >
       <Pencil className="w-4 h-4" />

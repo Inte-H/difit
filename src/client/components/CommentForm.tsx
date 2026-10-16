@@ -7,6 +7,7 @@ interface CommentFormProps {
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
   selectedCode?: string;
+  quote?: string;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   filename?: string;
   initialValue?: string;
@@ -22,6 +23,7 @@ export function CommentForm({
   onSubmit,
   onCancel,
   selectedCode,
+  quote,
   syntaxTheme,
   filename,
   initialValue = '',
@@ -104,6 +106,15 @@ export function CommentForm({
           </div>
         )}
       </div>
+
+      {quote !== undefined && (
+        <blockquote
+          aria-label="고른 부분"
+          className="mb-2 max-h-40 overflow-auto border-l-4 border-github-border pl-3 font-mono text-xs leading-5 text-github-text-secondary whitespace-pre-wrap break-all"
+        >
+          {quote}
+        </blockquote>
+      )}
 
       {hasSuggestion && effectiveMode === 'preview' ? (
         <div className="min-h-[60px] mb-2 bg-github-bg-secondary border border-github-border rounded px-3 py-2">

@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CommentThread, DiffChunk as DiffChunkData, ThreadFixup } from '../../types/diff';
+import { formatCommentPrompt } from '../../utils/commentFormatting';
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
 import {
   EMPTY_FIXUP_OVERLAY,
@@ -585,13 +586,30 @@ describe('editing the reviewed code directly', () => {
     fireEvent.click(screen.getByRole('button', { name: '저장' }));
   };
 
-  it('edits one line from its pencil and a range with shift-click', async () => {
+  it('edits only the line whose pencil was pressed, even with shift held', async () => {
     const { submit, hover } = renderEditable();
 
     hover(0);
     fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
     hover(2);
     fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }), { shiftKey: true });
+
+    expect(await screen.findByLabelText('고칠 코드')).toHaveValue('const third = 3;');
+    await commitEdit('const third = 30;');
+    await waitFor(() =>
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({ startLine: 12, endLine: 12, replacement: ['const third = 30;'] }),
+      ),
+    );
+  });
+
+  it('edits the picked lines from the selection bar', async () => {
+    const { submit, container } = renderEditable();
+    const rows = container.querySelectorAll('[data-diff-line-row="true"]');
+
+    selectText([codeCell('unified', rows[0]!), 'first'], [codeCell('unified', rows[2]!), 'third']);
+    fireEvent.click(await screen.findByRole('button', { name: '직접 고치기' }));
+    document.getSelection()?.removeAllRanges();
 
     expect(await screen.findByLabelText('고칠 코드')).toHaveValue(
       ['const first = 1;', 'const second = 2;', 'const third = 3;'].join('\n'),
@@ -739,4 +757,224 @@ describe('editing the reviewed code directly', () => {
     expect(screen.queryByRole('button', { name: '줄 직접 고치기' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'hunk 고치기' })).not.toBeInTheDocument();
   });
+});
+
+type ChunkMode = 'unified' | 'split';
+
+function renderChunk(mode: ChunkMode, extra: { onOpenInEditor?: () => void } = {}) {
+  const onAddComment = vi.fn().mockResolvedValue(undefined);
+  const props = {
+    chunk: testChunk,
+    chunkIndex: 0,
+    threads: [],
+    onAddComment,
+    onResolveThread: noop,
+    onReplyToThread: asyncNoop,
+    onRemoveMessage: noop,
+    onUpdateMessage: noop,
+    filename: 'src/example.ts',
+    ...extra,
+  };
+  const view = renderWithProviders(
+    mode === 'unified' ? (
+      <DiffChunk {...props} mode="unified" />
+    ) : (
+      <SideBySideDiffChunk {...props} />
+    ),
+  );
+  const rows = Array.from(view.container.querySelectorAll('[data-diff-line-row="true"]'));
+  return { onAddComment, rows };
+}
+
+// Unified rows are old number, new number, code; split rows are old number, old code, new number,
+// new code.
+const codeCell = (mode: ChunkMode, row: Element) => row.children[mode === 'unified' ? 2 : 3]!;
+const lineNumberCell = (mode: ChunkMode, row: Element) => row.children[mode === 'unified' ? 0 : 2]!;
+
+function textPoint(cell: Element, text: string): [Text, number] {
+  const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const index = node.textContent?.indexOf(text) ?? -1;
+    if (index !== -1) return [node as Text, index];
+  }
+  throw new Error(`no "${text}" in the cell`);
+}
+
+function selectText(from: [Element, string], to: [Element, string]) {
+  const [startNode, startOffset] = textPoint(...from);
+  const [endNode, endIndex] = textPoint(...to);
+  const range = document.createRange();
+  range.setStart(startNode, startOffset);
+  range.setEnd(endNode, endIndex + to[1].length);
+  const selection = document.getSelection()!;
+  selection.removeAllRanges();
+  selection.addRange(range);
+  document.dispatchEvent(new Event('selectionchange'));
+}
+
+describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)', (mode) => {
+  afterEach(() => {
+    document.getSelection()?.removeAllRanges();
+  });
+
+  it('hands over the picked text together with the lines it spans', async () => {
+    const { onAddComment, rows } = renderChunk(mode);
+
+    selectText([codeCell(mode, rows[0]!), 'first'], [codeCell(mode, rows[1]!), 'second']);
+    fireEvent.click(await screen.findByRole('button', { name: '고른 부분에 지적 달기' }));
+
+    expect(screen.getByLabelText('고른 부분')).toHaveTextContent('first = 1; const second');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Why two lines?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    const body = '> first = 1;\n> const second\n\nWhy two lines?';
+    await waitFor(() => {
+      expect(onAddComment).toHaveBeenCalledWith(
+        [10, 11],
+        body,
+        ['const first = 1;', 'const second = 2;'].join('\n'),
+        'new',
+      );
+    });
+    const [location, ...content] = formatCommentPrompt('src/example.ts', [10, 11], body).split(
+      '\n',
+    );
+    expect(location).toContain('src/example.ts');
+    expect(content).toEqual(['> first = 1;', '> const second', '', 'Why two lines?']);
+  });
+
+  it('comments on the whole lines dragged over in the line numbers', async () => {
+    const { onAddComment, rows } = renderChunk(mode);
+
+    fireEvent.mouseDown(lineNumberCell(mode, rows[0]!));
+    fireEvent.mouseMove(codeCell(mode, rows[2]!));
+    fireEvent.mouseUp(document);
+
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'All three' } });
+    expect(screen.queryByLabelText('고른 부분')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    await waitFor(() => {
+      expect(onAddComment).toHaveBeenCalledWith(
+        [10, 12],
+        'All three',
+        ['const first = 1;', 'const second = 2;', 'const third = 3;'].join('\n'),
+        'new',
+      );
+    });
+  });
+
+  it('opens no comment for a click on a line number', async () => {
+    const { rows } = renderChunk(mode);
+
+    fireEvent.mouseDown(lineNumberCell(mode, rows[1]!));
+    fireEvent.mouseUp(document);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+  });
+});
+
+it('moves the bar to the chunk the selection moves to', async () => {
+  const props = {
+    threads: [],
+    onAddComment: asyncNoop,
+    onResolveThread: noop,
+    onReplyToThread: asyncNoop,
+    onRemoveMessage: noop,
+    onUpdateMessage: noop,
+    filename: 'src/example.ts',
+    mode: 'unified' as const,
+  };
+  const later: DiffChunkData = {
+    ...testChunk,
+    header: '@@ -40,3 +40,3 @@',
+    lines: testChunk.lines.map((line) => ({
+      ...line,
+      content: line.content.replace('const', 'let'),
+      oldLineNumber: line.oldLineNumber && line.oldLineNumber + 30,
+      newLineNumber: line.newLineNumber && line.newLineNumber + 30,
+    })),
+  };
+  const { container } = renderWithProviders(
+    <>
+      <DiffChunk {...props} chunk={testChunk} chunkIndex={0} />
+      <DiffChunk {...props} chunk={later} chunkIndex={1} />
+    </>,
+  );
+  const rows = Array.from(container.querySelectorAll('[data-diff-line-row="true"]'));
+
+  selectText([codeCell('unified', rows[0]!), 'first'], [codeCell('unified', rows[0]!), 'first']);
+  await screen.findByRole('button', { name: '고른 부분에 지적 달기' });
+  selectText([codeCell('unified', rows[4]!), 'second'], [codeCell('unified', rows[4]!), 'second']);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(screen.getAllByRole('button', { name: '고른 부분에 지적 달기' })).toHaveLength(1);
+
+  fireEvent.click(screen.getByRole('button', { name: '고른 부분에 지적 달기' }));
+  expect(rows[4]!.closest('table')).toContainElement(screen.getByRole('textbox'));
+  expect(screen.getByLabelText('고른 부분')).toHaveTextContent('second');
+  document.getSelection()?.removeAllRanges();
+});
+
+describe('line buttons by input device', () => {
+  const originalMatchMedia = window.matchMedia;
+
+  const pointerCanHover = (canHover: boolean) => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(hover: hover)' ? canHover : false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+  };
+
+  afterEach(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+  });
+
+  it.each<ChunkMode>(['unified', 'split'])(
+    'puts the comment button on the line number and the others at the end of the line with a mouse (%s)',
+    (mode) => {
+      pointerCanHover(true);
+      const { rows } = renderChunk(mode, { onOpenInEditor: noop });
+      const row = rows[2]!;
+
+      fireEvent.mouseEnter(mode === 'unified' ? row : codeCell(mode, row));
+
+      const numberCell = row.children[mode === 'unified' ? 1 : 2]!;
+      expect(numberCell).toContainElement(screen.getByRole('button', { name: 'Add a comment' }));
+      expect(codeCell(mode, row)).toContainElement(screen.getByTitle('Open in editor'));
+      expect(screen.queryByRole('button', { name: '줄 메뉴' })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each<ChunkMode>(['unified', 'split'])(
+    'opens every line action from one button on the line number on a touch screen (%s)',
+    async (mode) => {
+      pointerCanHover(false);
+      const onOpenInEditor = vi.fn();
+      const { rows } = renderChunk(mode, { onOpenInEditor });
+      const row = rows[2]!;
+
+      fireEvent.mouseEnter(mode === 'unified' ? row : codeCell(mode, row));
+
+      expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+      expect(screen.queryByTitle('Open in editor')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: '줄 메뉴' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: '에디터에서 열기' }));
+      expect(onOpenInEditor).toHaveBeenCalledWith('src/example.ts', 12);
+
+      fireEvent.click(screen.getByRole('button', { name: '줄 메뉴' }));
+      fireEvent.click(await screen.findByRole('menuitem', { name: '지적 달기' }));
+      expect(screen.getByRole('textbox')).toBeInTheDocument();
+    },
+  );
 });

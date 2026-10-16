@@ -61,6 +61,7 @@ export function DiffCodeLine({
   return (
     <div className="flex items-center relative min-h-[16px]">
       <span
+        data-diff-prefix
         className={`w-5 text-center flex-shrink-0 ${showPrefixBorder ? 'border-r border-github-border' : ''} ${getPrefixClass(
           line.type,
         )}`}

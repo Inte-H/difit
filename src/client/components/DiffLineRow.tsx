@@ -1,12 +1,11 @@
 import React from 'react';
 
 import { type DiffLine, type ExpandedLine } from '../../types/diff';
+import { codeCellAttributes } from '../utils/codeSelection';
 import { type DiffSegment } from '../utils/wordLevelDiff';
 
-import { CommentButton } from './CommentButton';
 import { DiffCodeLine } from './DiffCodeLine';
-import { EditLineButton } from './EditLineButton';
-import { OpenInEditorButton } from './OpenInEditorButton';
+import { LineEndActions, LineNumberActions } from './LineActions';
 import type { AppearanceSettings } from './SettingsModal';
 
 interface DiffLineRowProps {
@@ -20,6 +19,9 @@ interface DiffLineRowProps {
   onMouseLeave: () => void;
   onMouseMove: () => void;
   onCommentButtonMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onComment: () => void;
+  onLineNumberMouseDown: (e: React.MouseEvent<HTMLTableCellElement>) => void;
+  canHover: boolean;
   onOpenInEditor?: () => void;
   onEditLine?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
@@ -55,6 +57,9 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
     onMouseLeave,
     onMouseMove,
     onCommentButtonMouseDown,
+    onComment,
+    onLineNumberMouseDown,
+    canHover,
     onOpenInEditor,
     onEditLine,
     syntaxTheme,
@@ -64,6 +69,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
   }) => {
     const lineNumber = line.newLineNumber || line.oldLineNumber;
     const showLineActions = hoveredLineIndex === index && lineNumber;
+    const side = line.type === 'delete' ? 'old' : 'new';
 
     const highlightClass = isCurrentLine ? 'keyboard-cursor' : '';
 
@@ -77,23 +83,32 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
         onMouseMove={onMouseMove}
         onClick={onClick}
       >
-        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative">
+        <td
+          className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative"
+          onMouseDown={onLineNumberMouseDown}
+        >
           {line.oldLineNumber || ''}
         </td>
-        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible">
+        <td
+          className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible"
+          onMouseDown={onLineNumberMouseDown}
+        >
           <span>{line.newLineNumber || ''}</span>
           {showLineActions && (
-            <>
-              {onEditLine && <EditLineButton onClick={onEditLine} />}
-              {onOpenInEditor && <OpenInEditorButton onClick={onOpenInEditor} />}
-              <CommentButton onMouseDown={onCommentButtonMouseDown} />
-            </>
+            <LineNumberActions
+              canHover={canHover}
+              onCommentMouseDown={onCommentButtonMouseDown}
+              onComment={onComment}
+              onEditLine={onEditLine}
+              onOpenInEditor={onOpenInEditor}
+            />
           )}
         </td>
         <td
           className="p-0 w-full relative align-top"
-          data-symbol-side={line.type === 'delete' ? 'old' : 'new'}
+          data-symbol-side={side}
           data-symbol-path={filename}
+          {...codeCellAttributes(side, side === 'old' ? line.oldLineNumber : line.newLineNumber)}
         >
           <DiffCodeLine
             line={line}
@@ -101,6 +116,9 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
             filename={filename}
             diffSegments={diffSegments}
           />
+          {showLineActions && canHover && (
+            <LineEndActions onEditLine={onEditLine} onOpenInEditor={onOpenInEditor} />
+          )}
         </td>
       </tr>
     );

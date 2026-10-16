@@ -6,4 +6,5 @@ const BREAKPOINTS = {
 export const MEDIA_QUERIES = {
   mobile: `(max-width: ${BREAKPOINTS.mobileMax}px)`,
   desktop: `(min-width: ${BREAKPOINTS.desktopMin}px)`,
+  canHover: '(hover: hover)',
 } as const;

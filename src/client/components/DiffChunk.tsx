@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, memo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 
 import {
   type DiffChunk as DiffChunkType,
@@ -12,7 +12,10 @@ import {
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
 import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
+import { useCanHover } from '../hooks/useCanHover';
+import { useCodeSelection } from '../hooks/useCodeSelection';
 import { useDirectEditing } from '../hooks/useDirectEditing';
+import { quoteSelection } from '../utils/codeSelection';
 import {
   computeWordLevelDiff,
   shouldComputeWordDiff,
@@ -25,6 +28,7 @@ import { DiffLineRow } from './DiffLineRow';
 import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
 import { FixupOverlayRow } from './FixupOverlayCard';
+import { SelectionCommentBar } from './SelectionCommentBar';
 import type { AppearanceSettings } from './SettingsModal';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
 
@@ -90,14 +94,19 @@ export const DiffChunk = memo(function DiffChunk({
   const [commentingLine, setCommentingLine] = useState<{
     side: DiffSide;
     lineNumber: LineNumber;
+    quote?: string;
   } | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<{
     side: DiffSide;
     lineNumber: number;
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const dragFromLineNumber = useRef(false);
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
+  const canHover = useCanHover();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const codeSelection = useCodeSelection(containerRef, 'unified');
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -140,7 +149,8 @@ export const DiffChunk = memo(function DiffChunk({
     setSelectionAnchor(selection);
   };
 
-  const startCommentDrag = (selection: LineSelection) => {
+  const startCommentDrag = (selection: LineSelection, fromLineNumber = false) => {
+    dragFromLineNumber.current = fromLineNumber;
     setSelectionAnchor(selection);
     setStartLine(selection.lineNumber);
     setEndLine(selection.lineNumber);
@@ -201,8 +211,9 @@ export const DiffChunk = memo(function DiffChunk({
       // Defer so the click event fired after mouseup doesn't immediately
       // close the newly opened (still empty) comment form
       setTimeout(() => {
-        if (startLine && dragSide) {
-          const actualEndLine = endLine ?? startLine;
+        const actualEndLine = endLine ?? startLine;
+        const clickedLineNumber = dragFromLineNumber.current && startLine === actualEndLine;
+        if (startLine && actualEndLine && dragSide && !clickedLineNumber) {
           if (startLine === actualEndLine) {
             handleAddComment(dragSide, startLine);
           } else {
@@ -256,7 +267,9 @@ export const DiffChunk = memo(function DiffChunk({
     async (body: string) => {
       if (commentingLine !== null) {
         const codeContent = getSelectedCodeContent();
-        await onAddComment(commentingLine.lineNumber, body, codeContent, commentingLine.side);
+        const fullBody =
+          commentingLine.quote === undefined ? body : quoteSelection(commentingLine.quote, body);
+        await onAddComment(commentingLine.lineNumber, fullBody, codeContent, commentingLine.side);
         setCommentingLine(null);
       }
     },
@@ -415,11 +428,39 @@ export const DiffChunk = memo(function DiffChunk({
     );
   }
 
-  const { editing, editLine, editHunk } = directEditing;
+  const { editing, editLine, editHunk, editRange } = directEditing;
+  const selected = codeSelection.selected;
 
   return (
-    <div className="group/hunk relative bg-github-bg-primary">
+    <div ref={containerRef} className="group/hunk relative bg-github-bg-primary">
       {editHunk && <EditHunkButton onClick={editHunk} />}
+      {selected && (
+        <SelectionCommentBar
+          range={selected.range}
+          container={containerRef.current}
+          canHover={canHover}
+          onPress={codeSelection.hold}
+          onComment={() => {
+            setCommentingLine({
+              side: selected.side,
+              lineNumber: selected.lineNumber,
+              quote: selected.text,
+            });
+            codeSelection.clear();
+          }}
+          onEdit={
+            editRange && selected.side === 'new'
+              ? () => {
+                  const [start, end] = Array.isArray(selected.lineNumber)
+                    ? selected.lineNumber
+                    : [selected.lineNumber, selected.lineNumber];
+                  editRange({ start, end });
+                  codeSelection.clear();
+                }
+              : undefined
+          }
+        />
+      )}
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
         <tbody>
           {chunk.lines.map((line, index) => {
@@ -482,6 +523,15 @@ export const DiffChunk = memo(function DiffChunk({
                       selection,
                     });
                   }}
+                  onComment={() => {
+                    if (selection) handleAddComment(selection.side, selection.lineNumber);
+                  }}
+                  onLineNumberMouseDown={(e) => {
+                    if (e.button !== 0 || e.shiftKey || !selection) return;
+                    e.preventDefault();
+                    startCommentDrag(selection, true);
+                  }}
+                  canHover={canHover}
                   onOpenInEditor={
                     onOpenInEditor &&
                     filename &&
@@ -497,7 +547,7 @@ export const DiffChunk = memo(function DiffChunk({
                   }
                   onEditLine={
                     editLine && line.type !== 'delete' && line.newLineNumber
-                      ? (e) => editLine(line.newLineNumber ?? 0, e.shiftKey)
+                      ? () => editLine(line.newLineNumber ?? 0)
                       : undefined
                   }
                   syntaxTheme={syntaxTheme}
@@ -603,6 +653,7 @@ export const DiffChunk = memo(function DiffChunk({
                             <CommentForm
                               onSubmit={handleSubmitComment}
                               onCancel={handleCancelComment}
+                              quote={commentingLine.quote}
                               selectedCode={getSelectedCodeContent()}
                               syntaxTheme={syntaxTheme}
                               filename={filename}
