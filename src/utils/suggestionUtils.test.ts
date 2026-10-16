@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import {
-  hasSuggestionBlock,
-  parseSuggestionBlocks,
-  createSuggestionTemplate,
-} from './suggestionUtils';
+import { hasSuggestionBlock, parseSuggestionBlocks } from './suggestionUtils';
 
 describe('suggestionUtils', () => {
   describe('hasSuggestionBlock', () => {
@@ -94,31 +90,6 @@ function example() {
       expect(result[0].suggestedCode).toContain('function example()');
       expect(result[0].suggestedCode).toContain('return {');
       expect(result[0].suggestedCode).toContain('value: 42');
-    });
-  });
-
-  describe('createSuggestionTemplate', () => {
-    it('should create proper template', () => {
-      const code = 'const x = 1;';
-      const result = createSuggestionTemplate(code);
-      expect(result).toBe('```suggestion\nconst x = 1;\n```');
-    });
-
-    it('should handle code that already ends with newline', () => {
-      const code = 'const x = 1;\n';
-      const result = createSuggestionTemplate(code);
-      expect(result).toBe('```suggestion\nconst x = 1;\n```');
-    });
-
-    it('should handle multi-line code', () => {
-      const code = 'const x = 1;\nconst y = 2;';
-      const result = createSuggestionTemplate(code);
-      expect(result).toBe('```suggestion\nconst x = 1;\nconst y = 2;\n```');
-    });
-
-    it('should handle empty code', () => {
-      const result = createSuggestionTemplate('');
-      expect(result).toBe('```suggestion\n\n```');
     });
   });
 });

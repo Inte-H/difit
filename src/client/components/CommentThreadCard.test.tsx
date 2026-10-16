@@ -8,6 +8,7 @@ import {
   FixupOverlayProvider,
   type FixupOverlayState,
 } from '../contexts/FixupOverlayContext';
+import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import { copyTextToClipboard } from '../utils/clipboard';
 
 import { CommentThreadCard } from './CommentThreadCard';
@@ -72,6 +73,58 @@ describe('CommentThreadCard', () => {
     expect(copied).toContain('src/client/components/CommentThreadCard.tsx:L80');
     expect(copied).toContain('Reply comment');
     expect(copied).not.toContain('Root comment');
+  });
+
+  it('offers no suggestion button in the reply or edit form', async () => {
+    const user = userEvent.setup();
+    render(
+      <CommentThreadCard
+        thread={threadWithUserReply}
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Write a reply...' }));
+    expect(screen.getByPlaceholderText('Write a reply...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /suggestion/i })).toBeNull();
+
+    await user.click(screen.getAllByTitle('Edit message')[0]!);
+    expect(screen.getByPlaceholderText('Edit your message...')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /suggestion/i })).toBeNull();
+  });
+
+  it('draws a suggestion block as removed and added lines and copies it as ORIGINAL/SUGGESTED', async () => {
+    const user = userEvent.setup();
+    const suggestionThread: CommentThread = {
+      ...mockThread,
+      messages: [
+        { ...mockThread.messages[0]!, body: 'Use two:\n\n```suggestion\nconst value = 2;\n```' },
+      ],
+    };
+    const { container } = render(
+      <WordHighlightProvider>
+        <CommentThreadCard
+          thread={suggestionThread}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />
+      </WordHighlightProvider>,
+    );
+
+    expect(container.querySelector('.bg-diff-deletion-bg')).toHaveTextContent('const value = 1;');
+    expect(container.querySelector('.bg-diff-addition-bg')).toHaveTextContent('const value = 2;');
+
+    await user.click(screen.getByRole('button', { name: 'Copy prompt' }));
+    const copied = vi.mocked(copyTextToClipboard).mock.calls[0]?.[0];
+    expect(copied).toContain('ORIGINAL:');
+    expect(copied).toContain('const value = 1;');
+    expect(copied).toContain('SUGGESTED:');
+    expect(copied).toContain('const value = 2;');
   });
 
   it('does not show delete action for replies authored by someone else', () => {
