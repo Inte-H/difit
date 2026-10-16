@@ -276,7 +276,7 @@ export function CommentBodyRenderer({
   );
 
   return (
-    <div className="text-github-text-primary text-sm leading-6">
+    <div className="text-github-text-primary text-sm leading-6 break-words">
       {parts.map((part, index) => {
         if (part.type === 'text') {
           if (!part.content.trim()) {
