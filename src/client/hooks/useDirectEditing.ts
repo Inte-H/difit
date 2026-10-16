@@ -58,6 +58,7 @@ export function useDirectEditing(
     editing: controls ? editing : null,
     close: () => setEditing(null),
     editLine: controls ? editLine : undefined,
+    editRange: controls ? (range: EditRange) => open(range) : undefined,
     editHunk: controls && hunk ? () => open(hunk) : undefined,
     editThread: (thread: CommentThread) => {
       const range = rangeOfLine(thread.line);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 import {
   type DiffChunk as DiffChunkType,
@@ -10,7 +10,10 @@ import {
 } from '../../types/diff';
 import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
+import { useCanHover } from '../hooks/useCanHover';
+import { useCodeSelection } from '../hooks/useCodeSelection';
 import { useDirectEditing } from '../hooks/useDirectEditing';
+import { codeCellAttributes, quoteSelection } from '../utils/codeSelection';
 import {
   computeWordLevelDiff,
   shouldComputeWordDiff,
@@ -18,14 +21,14 @@ import {
 } from '../utils/wordLevelDiff';
 import { useFileLevelTokensLookup } from '../contexts/FileLevelTokensContext';
 
-import { CommentButton } from './CommentButton';
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DirectEditForm } from './DirectEditForm';
-import { EditHunkButton, EditLineButton } from './EditLineButton';
+import { EditHunkButton } from './EditLineButton';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { FixupOverlayRow } from './FixupOverlayCard';
-import { OpenInEditorButton } from './OpenInEditorButton';
+import { LineEndActions, LineNumberActions } from './LineActions';
+import { SelectionCommentBar } from './SelectionCommentBar';
 import type { AppearanceSettings } from './SettingsModal';
 import { WordLevelDiffHighlighter } from './WordLevelDiffHighlighter';
 
@@ -170,12 +173,17 @@ export function SideBySideDiffChunk({
   const [commentingLine, setCommentingLine] = useState<{
     side: DiffSide;
     lineNumber: LineNumber;
+    quote?: string;
   } | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
-  const { editing, editLine, editHunk } = directEditing;
+  const { editing, editLine, editHunk, editRange } = directEditing;
+  const dragFromLineNumber = useRef(false);
+  const canHover = useCanHover();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const codeSelection = useCodeSelection(containerRef, 'split');
 
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
@@ -217,7 +225,8 @@ export function SideBySideDiffChunk({
     setSelectionAnchor(selection);
   };
 
-  const startCommentDrag = (selection: LineSelection) => {
+  const startCommentDrag = (selection: LineSelection, fromLineNumber = false) => {
+    dragFromLineNumber.current = fromLineNumber;
     setSelectionAnchor(selection);
     setStartLine(selection);
     setEndLine(selection);
@@ -275,9 +284,13 @@ export function SideBySideDiffChunk({
       // Defer so the click event fired after mouseup doesn't immediately
       // close the newly opened (still empty) comment form
       setTimeout(() => {
-        if (startLine) {
-          const actualEndLine =
-            endLine && endLine.side === startLine.side ? endLine.lineNumber : startLine.lineNumber;
+        const actualEndLine =
+          startLine && endLine && endLine.side === startLine.side
+            ? endLine.lineNumber
+            : startLine?.lineNumber;
+        const clickedLineNumber =
+          dragFromLineNumber.current && startLine?.lineNumber === actualEndLine;
+        if (startLine && actualEndLine !== undefined && !clickedLineNumber) {
           if (startLine.lineNumber === actualEndLine) {
             handleAddComment(startLine.side, startLine.lineNumber);
           } else {
@@ -330,7 +343,9 @@ export function SideBySideDiffChunk({
     async (body: string) => {
       if (commentingLine !== null) {
         const codeContent = getSelectedCodeContent();
-        await onAddComment(commentingLine.lineNumber, body, codeContent, commentingLine.side);
+        const fullBody =
+          commentingLine.quote === undefined ? body : quoteSelection(commentingLine.quote, body);
+        await onAddComment(commentingLine.lineNumber, fullBody, codeContent, commentingLine.side);
         setCommentingLine(null);
       }
     },
@@ -513,9 +528,43 @@ export function SideBySideDiffChunk({
     [chunk.lines, convertToSideBySide],
   );
 
+  const selected = codeSelection.selected;
+  const startLineNumberDrag = (selection: LineSelection | null) => (e: React.MouseEvent) => {
+    if (e.button !== 0 || e.shiftKey || !selection) return;
+    e.preventDefault();
+    startCommentDrag(selection, true);
+  };
+
   return (
-    <div className="group/hunk relative bg-github-bg-primary overflow-hidden">
+    <div ref={containerRef} className="group/hunk relative bg-github-bg-primary overflow-hidden">
       {editHunk && <EditHunkButton onClick={editHunk} />}
+      {selected && (
+        <SelectionCommentBar
+          range={selected.range}
+          container={containerRef.current}
+          canHover={canHover}
+          onPress={codeSelection.hold}
+          onComment={() => {
+            setCommentingLine({
+              side: selected.side,
+              lineNumber: selected.lineNumber,
+              quote: selected.text,
+            });
+            codeSelection.clear();
+          }}
+          onEdit={
+            editRange && selected.side === 'new'
+              ? () => {
+                  const [start, end] = Array.isArray(selected.lineNumber)
+                    ? selected.lineNumber
+                    : [selected.lineNumber, selected.lineNumber];
+                  editRange({ start, end });
+                  codeSelection.clear();
+                }
+              : undefined
+          }
+        />
+      )}
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
         <tbody>
           {sideBySideLines.map((sideLine, index) => {
@@ -576,6 +625,24 @@ export function SideBySideDiffChunk({
                   lineNumber: sideLine.newLineNumber,
                 }
               : null;
+
+            const isOldHovered =
+              hoveredLine?.side === 'old' && hoveredLine.lineNumber === sideLine.oldLineNumber;
+            const isNewHovered =
+              hoveredLine?.side === 'new' && hoveredLine.lineNumber === sideLine.newLineNumber;
+            const openInEditorAt = (lineNumber: number | undefined) =>
+              onOpenInEditor && filename && lineNumber !== undefined
+                ? () => onOpenInEditor(filename, lineNumber)
+                : undefined;
+            const openOldSideInEditor =
+              sideLine.oldLine?.type === 'delete'
+                ? undefined
+                : openInEditorAt(sideLine.newLineNumber);
+            const openNewSideInEditor = openInEditorAt(sideLine.newLineNumber);
+            const editNewLine =
+              editLine && sideLine.newLineNumber !== undefined
+                ? (e: React.MouseEvent) => editLine(sideLine.newLineNumber ?? 0, e.shiftKey)
+                : undefined;
 
             return (
               <React.Fragment key={index}>
@@ -666,40 +733,37 @@ export function SideBySideDiffChunk({
                   <td
                     id={oldLineNavId}
                     className={`w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible ${highlightOldCell ? cellHighlightClass : ''}`}
+                    onMouseDown={startLineNumberDrag(oldSelection)}
                   >
                     <span>{sideLine.oldLineNumber || ''}</span>
-                    {hoveredLine?.side === 'old' &&
-                      hoveredLine?.lineNumber === sideLine.oldLineNumber && (
-                        <>
-                          {onOpenInEditor &&
-                            filename &&
-                            sideLine.oldLine?.type !== 'delete' &&
-                            sideLine.newLineNumber !== undefined && (
-                              <OpenInEditorButton
-                                onClick={() => {
-                                  const lineNumber = sideLine.newLineNumber;
-                                  if (!filename || lineNumber === undefined) return;
-                                  onOpenInEditor(filename, lineNumber);
-                                }}
-                              />
-                            )}
-                          <CommentButton
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              if (e.shiftKey) {
-                                e.preventDefault();
-                              }
-                              handleCommentButtonMouseDown({
-                                isShiftClick: e.shiftKey,
-                                selection: oldSelection,
-                              });
-                            }}
-                          />
-                        </>
-                      )}
+                    {isOldHovered && (
+                      <LineNumberActions
+                        canHover={canHover}
+                        onCommentMouseDown={(e) => {
+                          e.stopPropagation();
+                          if (e.shiftKey) {
+                            e.preventDefault();
+                          }
+                          handleCommentButtonMouseDown({
+                            isShiftClick: e.shiftKey,
+                            selection: oldSelection,
+                          });
+                        }}
+                        onComment={() => {
+                          if (oldSelection) {
+                            handleAddComment(oldSelection.side, oldSelection.lineNumber);
+                          }
+                        }}
+                        onOpenInEditor={openOldSideInEditor}
+                      />
+                    )}
                   </td>
                   <td
                     className={`w-1/2 p-0 align-top border-r border-github-border relative ${getSideBySideLineClass(sideLine.oldLine, isExpandedLine(sideLine.oldLine))} ${getSelectedLineStyle('old', sideLine)} ${highlightOldCell ? cellHighlightClass : ''}`}
+                    {...codeCellAttributes(
+                      'old',
+                      sideLine.oldLine ? sideLine.oldLineNumber : undefined,
+                    )}
                   >
                     {sideLine.oldLine && (
                       <div
@@ -726,48 +790,47 @@ export function SideBySideDiffChunk({
                         )}
                       </div>
                     )}
+                    {isOldHovered && canHover && (
+                      <LineEndActions onOpenInEditor={openOldSideInEditor} />
+                    )}
                   </td>
 
                   {/* New side */}
                   <td
                     id={newLineNavId}
                     className={`w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible ${highlightNewCell ? cellHighlightClass : ''}`}
+                    onMouseDown={startLineNumberDrag(newSelection)}
                   >
                     <span>{sideLine.newLineNumber || ''}</span>
-                    {hoveredLine?.side === 'new' &&
-                      hoveredLine?.lineNumber === sideLine.newLineNumber && (
-                        <>
-                          {editLine && sideLine.newLineNumber !== undefined && (
-                            <EditLineButton
-                              onClick={(e) => editLine(sideLine.newLineNumber ?? 0, e.shiftKey)}
-                            />
-                          )}
-                          {onOpenInEditor && filename && sideLine.newLineNumber !== undefined && (
-                            <OpenInEditorButton
-                              onClick={() => {
-                                const lineNumber = sideLine.newLineNumber;
-                                if (!filename || lineNumber === undefined) return;
-                                onOpenInEditor(filename, lineNumber);
-                              }}
-                            />
-                          )}
-                          <CommentButton
-                            onMouseDown={(e) => {
-                              e.stopPropagation();
-                              if (e.shiftKey) {
-                                e.preventDefault();
-                              }
-                              handleCommentButtonMouseDown({
-                                isShiftClick: e.shiftKey,
-                                selection: newSelection,
-                              });
-                            }}
-                          />
-                        </>
-                      )}
+                    {isNewHovered && (
+                      <LineNumberActions
+                        canHover={canHover}
+                        onCommentMouseDown={(e) => {
+                          e.stopPropagation();
+                          if (e.shiftKey) {
+                            e.preventDefault();
+                          }
+                          handleCommentButtonMouseDown({
+                            isShiftClick: e.shiftKey,
+                            selection: newSelection,
+                          });
+                        }}
+                        onComment={() => {
+                          if (newSelection) {
+                            handleAddComment(newSelection.side, newSelection.lineNumber);
+                          }
+                        }}
+                        onEditLine={editNewLine}
+                        onOpenInEditor={openNewSideInEditor}
+                      />
+                    )}
                   </td>
                   <td
                     className={`w-1/2 p-0 align-top relative ${getSideBySideLineClass(sideLine.newLine, isExpandedLine(sideLine.newLine))} ${getSelectedLineStyle('new', sideLine)} ${highlightNewCell ? cellHighlightClass : ''}`}
+                    {...codeCellAttributes(
+                      'new',
+                      sideLine.newLine ? sideLine.newLineNumber : undefined,
+                    )}
                   >
                     {sideLine.newLine && (
                       <div
@@ -793,6 +856,12 @@ export function SideBySideDiffChunk({
                           />
                         )}
                       </div>
+                    )}
+                    {isNewHovered && canHover && (
+                      <LineEndActions
+                        onEditLine={editNewLine}
+                        onOpenInEditor={openNewSideInEditor}
+                      />
                     )}
                   </td>
                 </tr>
@@ -907,6 +976,7 @@ export function SideBySideDiffChunk({
                             <CommentForm
                               onSubmit={handleSubmitComment}
                               onCancel={handleCancelComment}
+                              quote={commentingLine.quote}
                               selectedCode={getSelectedCodeContent()}
                               syntaxTheme={syntaxTheme}
                               filename={filename}
