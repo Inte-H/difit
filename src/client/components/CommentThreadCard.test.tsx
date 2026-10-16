@@ -53,7 +53,7 @@ describe('CommentThreadCard', () => {
     vi.mocked(copyTextToClipboard).mockClear();
   });
 
-  it('copies one message with its location, not the whole thread', async () => {
+  it('copies only the text of one message, without its location', async () => {
     const user = userEvent.setup();
     render(
       <CommentThreadCard
@@ -65,14 +65,12 @@ describe('CommentThreadCard', () => {
       />,
     );
 
-    const copyButtons = screen.getAllByRole('button', { name: 'Copy prompt' });
+    const copyButtons = screen.getAllByRole('button', { name: 'Copy comment' });
     expect(copyButtons).toHaveLength(2);
     await user.click(copyButtons[1]!);
 
     const copied = vi.mocked(copyTextToClipboard).mock.calls[0]?.[0];
-    expect(copied).toContain('src/client/components/CommentThreadCard.tsx:L80');
-    expect(copied).toContain('Reply comment');
-    expect(copied).not.toContain('Root comment');
+    expect(copied).toBe('Reply comment');
   });
 
   it('offers no suggestion button in the reply or edit form', async () => {
@@ -119,8 +117,9 @@ describe('CommentThreadCard', () => {
     expect(container.querySelector('.bg-diff-deletion-bg')).toHaveTextContent('const value = 1;');
     expect(container.querySelector('.bg-diff-addition-bg')).toHaveTextContent('const value = 2;');
 
-    await user.click(screen.getByRole('button', { name: 'Copy prompt' }));
+    await user.click(screen.getByRole('button', { name: 'Copy comment' }));
     const copied = vi.mocked(copyTextToClipboard).mock.calls[0]?.[0];
+    expect(copied?.startsWith('Use two:')).toBe(true);
     expect(copied).toContain('ORIGINAL:');
     expect(copied).toContain('const value = 1;');
     expect(copied).toContain('SUGGESTED:');
@@ -480,7 +479,7 @@ describe('CommentThreadCard', () => {
     await user.click(screen.getByRole('button', { name: 'Collapse thread' }));
 
     expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Copy prompt' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Copy comment' })).not.toBeInTheDocument();
     expect(screen.getByTitle('Resolve thread')).toBeInTheDocument();
     expect(screen.getByText('Root comment')).toBeInTheDocument();
     expect(screen.getByLabelText('2 messages in thread')).toBeInTheDocument();

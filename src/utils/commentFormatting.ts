@@ -57,7 +57,7 @@ function formatDiffContextHeader(context: CommentPromptDiffContext): string | nu
   return `diff ${requestedRange}${resolvedRange}`;
 }
 
-function formatCommentContent(body: string, codeContent?: string): string {
+export function formatCommentContent(body: string, codeContent?: string): string {
   if (hasSuggestionBlock(body)) {
     const suggestions = parseSuggestionBlocks(body);
     if (suggestions.length > 0) {
