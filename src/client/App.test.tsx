@@ -38,7 +38,6 @@ vi.mock('./hooks/useDiffComments', () => ({
     clearAllComments: mockClearAllComments,
     applyCommentImports: mockApplyCommentImports,
     generatePrompt: vi.fn(),
-    generateThreadPrompt: vi.fn(),
     generateAllCommentsPrompt: mockGenerateAllCommentsPrompt,
   })),
 }));
@@ -291,6 +290,44 @@ describe('App Component - Clear Comments Functionality', () => {
       expect(await screen.findByText('No open comments')).toBeInTheDocument();
       expect(mockGenerateAllCommentsPrompt).not.toHaveBeenCalled();
       expect(writeText).not.toHaveBeenCalled();
+    });
+
+    it('should show resolved threads again once none are left to hide', async () => {
+      mockComments = [
+        createMockThread({ id: 'settled', filePath: 'test.ts', line: 10, body: 'Settled' }),
+      ];
+      const at = (minute: number) => `2026-01-01T00:0${minute}:00Z`;
+      const resolved = (minute: number): ReviewDecision => ({
+        threadId: 'settled',
+        kind: 'resolved',
+        fixupSha: '',
+        at: at(minute),
+      });
+      const reopened = (minute: number): ReviewDecision => ({
+        threadId: 'settled',
+        kind: 'unresolved',
+        fixupSha: '',
+        at: at(minute),
+      });
+      const showResolved = () => screen.queryByRole('checkbox', { name: '해결된 지적 보기' });
+      mockDecisions = [resolved(0)];
+
+      const { rerender } = renderApp();
+      fireEvent.click(await screen.findByRole('checkbox', { name: '해결된 지적 보기' }));
+      expect(showResolved()).toHaveAttribute('aria-checked', 'false');
+
+      const app = () => (
+        <HotkeysProvider initiallyActiveScopes={['navigation']}>
+          <App />
+        </HotkeysProvider>
+      );
+      mockDecisions = [resolved(0), reopened(1)];
+      rerender(app());
+      expect(showResolved()).not.toBeInTheDocument();
+
+      mockDecisions = [reopened(1), resolved(2)];
+      rerender(app());
+      expect(showResolved()).toHaveAttribute('aria-checked', 'true');
     });
 
     it('should not read fixups for a review that follows HEAD', async () => {

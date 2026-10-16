@@ -14,6 +14,8 @@ const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
   'approved',
   'unapproved',
   'folded',
+  'resolved',
+  'unresolved',
 ];
 
 const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
@@ -93,13 +95,21 @@ function rejectionCheckFor(
   );
 }
 
-function latestApprovalOrUndo(own: ReviewDecision[]): ReviewDecision | undefined {
+function latestOf(
+  own: ReviewDecision[],
+  kinds: readonly ReviewDecision['kind'][],
+): ReviewDecision | undefined {
   return own
-    .filter((decision) => decision.kind === 'approved' || decision.kind === 'unapproved')
+    .filter((decision) => kinds.includes(decision.kind))
     .reduce<ReviewDecision | undefined>(
       (latest, decision) => (latest && decidedAt(latest) > decidedAt(decision) ? latest : decision),
       undefined,
     );
+}
+
+export function isThreadResolved(threadId: string, decisions: ReviewDecision[]): boolean {
+  const own = decisions.filter((decision) => decision.threadId === threadId);
+  return latestOf(own, ['resolved', 'unresolved'])?.kind === 'resolved';
 }
 
 export function isOpenedByEdit(thread: { messages?: ReadonlyArray<{ author?: string }> }): boolean {
@@ -117,7 +127,7 @@ export function deriveThreadReviewState(
 
   const isRejected = rejectionCheckFor(threadId, decisions);
   const unrejected = fixups.filter((fixup) => !isRejected(fixup));
-  const approval = latestApprovalOrUndo(own);
+  const approval = latestOf(own, ['approved', 'unapproved']);
   const approvalStands =
     approval?.kind === 'approved' &&
     !own.some(
@@ -134,7 +144,7 @@ export function deriveThreadReviewState(
   return openedByEdit ? 'withdrawn' : 'rejected';
 }
 
-// Threads the agent still owes an answer: nothing to judge yet, or the last answer was rejected.
+// Unresolved threads the agent still owes an answer: nothing to judge yet, or the last answer was rejected.
 export function selectOpenThreads<
   T extends { id: string; messages?: ReadonlyArray<{ author?: string }> },
 >(
@@ -143,6 +153,7 @@ export function selectOpenThreads<
   decisions: ReviewDecision[],
 ): T[] {
   return threads.filter((thread) => {
+    if (isThreadResolved(thread.id, decisions)) return false;
     const state = deriveThreadReviewState(
       thread.id,
       fixupsByThread.get(thread.id) ?? [],
@@ -179,7 +190,7 @@ function rejectionAwaitingAgent(
   return leftInRange;
 }
 
-// Threads whose next move is the agent's. Without fixups (a review with no pinned commit) that is
+// Unresolved threads whose next move is the agent's. Without fixups (a review with no pinned commit) that is
 // any thread where the reviewer spoke last.
 export function selectThreadsAwaitingAgent(
   threads: ThreadForAgent[],
@@ -187,6 +198,7 @@ export function selectThreadsAwaitingAgent(
   decisions: ReviewDecision[],
 ): ThreadAwaitingAgent[] {
   return threads.flatMap((thread): ThreadAwaitingAgent[] => {
+    if (isThreadResolved(thread.id, decisions)) return [];
     const last = thread.messages.at(-1);
     const base = {
       threadId: thread.id,

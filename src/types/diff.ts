@@ -220,13 +220,20 @@ export interface DiffContextStorage {
   decisions?: ReviewDecision[];
 }
 
-export type ReviewDecisionKind = 'rejected' | 'approved' | 'unapproved' | 'folded';
+export type ReviewDecisionKind =
+  | 'rejected'
+  | 'approved'
+  | 'unapproved'
+  | 'folded'
+  | 'resolved'
+  | 'unresolved';
 
 // Threads carry no resolved state; a thread's screen state is derived from these
 // records plus the fixup commits found by trailer.
 export interface ReviewDecision {
   threadId: string;
   kind: ReviewDecisionKind;
+  // Empty for a resolution or a reopening, which judge no fixup.
   fixupSha: string;
   // Identifies the fixup's changes across rebases that rewrite fixupSha.
   patchId?: string;

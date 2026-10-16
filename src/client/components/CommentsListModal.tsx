@@ -3,6 +3,8 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useHotkeys, useHotkeysContext } from 'react-hotkeys-hook';
 
 import type { CommentThread } from '../../types/diff';
+import { isThreadResolved } from '../../utils/reviewDecisions';
+import { FixupOverlayProvider, type FixupOverlayState } from '../contexts/FixupOverlayContext';
 
 import { CommentThreadCard } from './CommentThreadCard';
 import type { AppearanceSettings } from './SettingsModal';
@@ -12,9 +14,9 @@ interface CommentsListModalProps {
   onClose: () => void;
   onNavigate: (thread: CommentThread) => void;
   comments: CommentThread[];
+  fixupOverlay: FixupOverlayState;
   showAuthorBadges?: boolean;
-  onRemoveThread: (threadId: string) => void;
-  onGenerateThreadPrompt: (thread: CommentThread) => string;
+  onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
@@ -26,9 +28,9 @@ export function CommentsListModal({
   onClose,
   onNavigate,
   comments,
+  fixupOverlay,
   showAuthorBadges = false,
-  onRemoveThread,
-  onGenerateThreadPrompt,
+  onResolveThread,
   onReplyToThread,
   onRemoveMessage,
   onUpdateMessage,
@@ -55,19 +57,6 @@ export function CommentsListModal({
       onClose();
     },
     [onClose, onNavigate],
-  );
-
-  const handleDeleteThread = useCallback(
-    (thread: CommentThread) => {
-      const preview = thread.messages[0]?.body || '';
-      if (confirm(`Resolve this thread?\n\n"${preview}"`)) {
-        onRemoveThread(thread.id);
-        if (selectedIndex >= sortedThreads.length - 1 && selectedIndex > 0) {
-          setSelectedIndex(selectedIndex - 1);
-        }
-      }
-    },
-    [onRemoveThread, selectedIndex, sortedThreads.length],
   );
 
   useEffect(() => {
@@ -113,12 +102,13 @@ export function CommentsListModal({
   useHotkeys(
     'd',
     () => {
-      if (sortedThreads[selectedIndex]) {
-        handleDeleteThread(sortedThreads[selectedIndex]);
+      const thread = sortedThreads[selectedIndex];
+      if (thread && !isThreadResolved(thread.id, fixupOverlay.decisions)) {
+        onResolveThread(thread.id);
       }
     },
     hotkeyOptions,
-    [handleDeleteThread, selectedIndex, sortedThreads],
+    [fixupOverlay.decisions, onResolveThread, selectedIndex, sortedThreads],
   );
 
   useEffect(() => {
@@ -159,7 +149,7 @@ export function CommentsListModal({
             {sortedThreads.length === 0 ? (
               <p className="text-center text-github-text-secondary">No comments yet</p>
             ) : (
-              <>
+              <FixupOverlayProvider value={fixupOverlay}>
                 <div className="space-y-2">
                   {sortedThreads.map((thread, index) => (
                     <div
@@ -172,13 +162,7 @@ export function CommentsListModal({
                       <CommentThreadCard
                         thread={thread}
                         showAuthorBadges={showAuthorBadges}
-                        confirmRootAction={false}
-                        onGeneratePrompt={onGenerateThreadPrompt}
-                        onRemoveThread={(threadId) => {
-                          if (threadId === thread.id) {
-                            handleDeleteThread(thread);
-                          }
-                        }}
+                        onResolveThread={onResolveThread}
                         onReplyToThread={onReplyToThread}
                         onRemoveMessage={onRemoveMessage}
                         onUpdateMessage={onUpdateMessage}
@@ -195,7 +179,7 @@ export function CommentsListModal({
                 <div className="mt-4 border-t border-github-border pt-4 text-center text-xs text-github-text-secondary">
                   {selectedIndex + 1} of {sortedThreads.length} threads
                 </div>
-              </>
+              </FixupOverlayProvider>
             )}
           </div>
         </div>

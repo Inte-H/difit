@@ -395,6 +395,18 @@ jq '.decisions' old.json | curl -X POST "http://localhost:<새 port>/api/decisio
 
 판정은 서버에서 tree-sitter로 양쪽 파일 전체를 파싱해서 한다. 그래서 문자열이나 템플릿 리터럴 안의 `//`·`#`는 코드로 본다. `@ts-ignore`, `eslint-disable`, `//go:build`, `# type: ignore`, shebang처럼 도구가 읽는 주석과 Python docstring도 코드로 본다. 판정하는 언어는 TS/TSX/JS, Python, Go, Rust, Java, CSS, Bash다. 그 밖의 파일, 512KB가 넘는 파일, 바뀐 구간이 50개를 넘는 파일, 파싱 오류가 나는 파일은 판정하지 않고 늘 펼쳐 둔다. 표준 입력과 `--pr`로 연 리뷰에서는 양쪽 파일을 읽을 수 없어 판정하지 않는다. 고른 까닭과 버린 길은 `docs/adr/0006-fold-changes-that-leave-code-alone.md`에 있다.
 
+## ✅ 해결한 지적 남겨 두기 (포크)
+
+원래 difit은 Resolve를 누르면 지적을 지운다. 이 포크에서는 지우지 않고 해결됨으로 접어 둔다.
+
+- 지적 카드 헤더의 ✓ 버튼을 누르면 묻지 않고 바로 해결로 처리한다. 카드는 접힌 채 그 자리에 남고, `해결됨` 표시가 붙으며 ✓ 버튼이 눌린 모양으로 바뀐다. 눌린 ✓를 다시 누르면 다시 열린다. 해결과 다시 열기를 여러 번 오가면 마지막에 누른 것이 남는다. 해결된 카드에 답글을 달면 다시 열린다.
+- 메시지마다 그 메시지 하나를 위치와 함께 복사하는 버튼이 있다. 마우스를 쓰는 화면에서는 메시지에 마우스를 올렸을 때만 보이고, 터치 화면에서는 늘 보인다.
+- 해결된 지적은 `Copy All`, 열린 지적 수, `difit comment wait`, 세션 메시지, 리뷰를 끝낼 때의 stdout 출력에 나오지 않는다. `difit comment get --format json`은 기록까지 그대로 돌려준다.
+- 해결된 지적이 있으면 위쪽 도구 막대에 `해결된 지적 보기`가 나온다. 처음에는 켜져 있고, 끄면 diff에서 해결된 지적이 사라진다.
+- 단축키로 지적 사이를 옮길 때는 해결된 지적을 건너뛴다. 댓글 목록 창에서는 해결 여부가 보이고, `d` 키는 묻지 않고 해결로 처리한다.
+
+지우지 않기로 한 까닭과 버린 길은 `docs/adr/0007-resolve-keeps-the-thread.md`에 있다.
+
 ## 🤖 Calling from Agents
 
 You can install the following Skills to work with difit from AI agents.

@@ -1,10 +1,11 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import React from 'react';
-import { HotkeysProvider } from 'react-hotkeys-hook';
+import { HotkeysProvider, useHotkeys } from 'react-hotkeys-hook';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import type { CommentThread } from '../../types/diff';
+import type { CommentThread, ReviewDecision } from '../../types/diff';
+import { EMPTY_FIXUP_OVERLAY } from '../contexts/FixupOverlayContext';
 
 import { CommentsListModal } from './CommentsListModal';
 
@@ -62,8 +63,7 @@ const mockThreads: CommentThread[] = [
   },
 ];
 
-const mockRemoveThread = vi.fn();
-const mockGenerateThreadPrompt = vi.fn().mockReturnValue('thread prompt');
+const mockResolveThread = vi.fn();
 const mockReplyToThread = vi.fn().mockResolvedValue(undefined);
 const mockRemoveMessage = vi.fn();
 const mockUpdateMessage = vi.fn();
@@ -88,8 +88,8 @@ describe('CommentsListModal', () => {
         onClose={vi.fn()}
         onNavigate={vi.fn()}
         comments={mockThreads}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -107,8 +107,8 @@ describe('CommentsListModal', () => {
         onClose={vi.fn()}
         onNavigate={vi.fn()}
         comments={mockThreads}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -131,9 +131,9 @@ describe('CommentsListModal', () => {
         onClose={vi.fn()}
         onNavigate={vi.fn()}
         comments={mockThreads}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
         showAuthorBadges={true}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -155,8 +155,8 @@ describe('CommentsListModal', () => {
         onClose={onClose}
         onNavigate={onNavigate}
         comments={mockThreads}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -181,8 +181,8 @@ describe('CommentsListModal', () => {
         onClose={onClose}
         onNavigate={onNavigate}
         comments={mockThreads}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -209,8 +209,8 @@ describe('CommentsListModal', () => {
         onClose={onClose}
         onNavigate={onNavigate}
         comments={mockThreads}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -226,7 +226,7 @@ describe('CommentsListModal', () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it('uses the modal resolve handler from the resolve button', async () => {
+  it('resolves from the resolve button and the d key without asking', async () => {
     const user = userEvent.setup();
     const confirmSpy = vi.fn(() => false);
     vi.stubGlobal('confirm', confirmSpy);
@@ -237,8 +237,8 @@ describe('CommentsListModal', () => {
         onClose={vi.fn()}
         onNavigate={vi.fn()}
         comments={mockThreads}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}
@@ -247,9 +247,72 @@ describe('CommentsListModal', () => {
     );
 
     await user.click(screen.getAllByTitle('Resolve thread')[0]!);
+    const pressD = vi
+      .mocked(useHotkeys)
+      .mock.calls.filter(([keys]) => keys === 'd')
+      .at(-1)?.[1];
+    act(() => (pressD as () => void)());
 
-    expect(confirmSpy).toHaveBeenCalledWith('Resolve this thread?\n\n"First root comment"');
-    expect(mockRemoveThread).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(mockResolveThread).toHaveBeenCalledTimes(2);
+    expect(mockResolveThread).toHaveBeenCalledWith(mockThreads[0]!.id);
+  });
+
+  it('marks a resolved thread in the list', () => {
+    const resolved: ReviewDecision = {
+      threadId: mockThreads[0]!.id,
+      kind: 'resolved',
+      fixupSha: '',
+      at: '2026-01-01T00:00:00Z',
+    };
+
+    render(
+      <CommentsListModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onNavigate={vi.fn()}
+        comments={mockThreads}
+        fixupOverlay={{ ...EMPTY_FIXUP_OVERLAY, decisions: [resolved] }}
+        onResolveThread={mockResolveThread}
+        onReplyToThread={mockReplyToThread}
+        onRemoveMessage={mockRemoveMessage}
+        onUpdateMessage={mockUpdateMessage}
+      />,
+      { wrapper },
+    );
+
+    expect(screen.getAllByText('해결됨')).toHaveLength(1);
+  });
+
+  it('leaves an already resolved thread alone on the d key', () => {
+    const resolved: ReviewDecision = {
+      threadId: mockThreads[0]!.id,
+      kind: 'resolved',
+      fixupSha: '',
+      at: '2026-01-01T00:00:00Z',
+    };
+
+    render(
+      <CommentsListModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onNavigate={vi.fn()}
+        comments={mockThreads}
+        fixupOverlay={{ ...EMPTY_FIXUP_OVERLAY, decisions: [resolved] }}
+        onResolveThread={mockResolveThread}
+        onReplyToThread={mockReplyToThread}
+        onRemoveMessage={mockRemoveMessage}
+        onUpdateMessage={mockUpdateMessage}
+      />,
+      { wrapper },
+    );
+    const pressD = vi
+      .mocked(useHotkeys)
+      .mock.calls.filter(([keys]) => keys === 'd')
+      .at(-1)?.[1];
+    act(() => (pressD as () => void)());
+
+    expect(mockResolveThread).not.toHaveBeenCalled();
   });
 
   it('shows empty state when there are no threads', () => {
@@ -259,8 +322,8 @@ describe('CommentsListModal', () => {
         onClose={vi.fn()}
         onNavigate={vi.fn()}
         comments={[]}
-        onRemoveThread={mockRemoveThread}
-        onGenerateThreadPrompt={mockGenerateThreadPrompt}
+        fixupOverlay={EMPTY_FIXUP_OVERLAY}
+        onResolveThread={mockResolveThread}
         onReplyToThread={mockReplyToThread}
         onRemoveMessage={mockRemoveMessage}
         onUpdateMessage={mockUpdateMessage}

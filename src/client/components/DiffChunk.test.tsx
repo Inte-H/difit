@@ -56,8 +56,7 @@ describe('DiffChunk range comments', () => {
         threads={[]}
         mode="unified"
         onAddComment={onAddComment}
-        onGenerateThreadPrompt={() => ''}
-        onRemoveThread={noop}
+        onResolveThread={noop}
         onReplyToThread={asyncNoop}
         onRemoveMessage={noop}
         onUpdateMessage={noop}
@@ -92,8 +91,7 @@ describe('DiffChunk range comments', () => {
         chunkIndex={0}
         threads={[]}
         onAddComment={onAddComment}
-        onGenerateThreadPrompt={() => ''}
-        onRemoveThread={noop}
+        onResolveThread={noop}
         onReplyToThread={asyncNoop}
         onRemoveMessage={noop}
         onUpdateMessage={noop}
@@ -129,8 +127,7 @@ describe('DiffChunk range comments', () => {
         threads={[]}
         mode={DEFAULT_DIFF_VIEW_MODE}
         onAddComment={onAddComment}
-        onGenerateThreadPrompt={() => ''}
-        onRemoveThread={noop}
+        onResolveThread={noop}
         onReplyToThread={asyncNoop}
         onRemoveMessage={noop}
         onUpdateMessage={noop}
@@ -160,8 +157,7 @@ describe('DiffChunk range comments', () => {
         threads={[]}
         mode="unified"
         onAddComment={onAddComment}
-        onGenerateThreadPrompt={() => ''}
-        onRemoveThread={noop}
+        onResolveThread={noop}
         onReplyToThread={asyncNoop}
         onRemoveMessage={noop}
         onUpdateMessage={noop}
@@ -199,8 +195,7 @@ describe('DiffChunk range comments', () => {
         chunkIndex={0}
         threads={[]}
         onAddComment={onAddComment}
-        onGenerateThreadPrompt={() => ''}
-        onRemoveThread={noop}
+        onResolveThread={noop}
         onReplyToThread={asyncNoop}
         onRemoveMessage={noop}
         onUpdateMessage={noop}
@@ -284,8 +279,7 @@ describe('SideBySideDiffChunk fixup overlay', () => {
           chunkIndex={0}
           threads={threads}
           onAddComment={asyncNoop}
-          onGenerateThreadPrompt={() => ''}
-          onRemoveThread={noop}
+          onResolveThread={noop}
           onReplyToThread={asyncNoop}
           onRemoveMessage={noop}
           onUpdateMessage={noop}
@@ -446,8 +440,7 @@ describe('DiffChunk fixup overlay', () => {
           threads={threads}
           mode="unified"
           onAddComment={asyncNoop}
-          onGenerateThreadPrompt={() => ''}
-          onRemoveThread={noop}
+          onResolveThread={noop}
           onReplyToThread={asyncNoop}
           onRemoveMessage={noop}
           onUpdateMessage={noop}
@@ -566,8 +559,7 @@ describe('editing the reviewed code directly', () => {
       chunkIndex: 0,
       threads,
       onAddComment: asyncNoop,
-      onGenerateThreadPrompt: () => '',
-      onRemoveThread: noop,
+      onResolveThread: noop,
       onReplyToThread: asyncNoop,
       onRemoveMessage: noop,
       onUpdateMessage: noop,
@@ -681,8 +673,7 @@ describe('editing the reviewed code directly', () => {
             ]}
             mode="unified"
             onAddComment={asyncNoop}
-            onGenerateThreadPrompt={() => ''}
-            onRemoveThread={noop}
+            onResolveThread={noop}
             onReplyToThread={asyncNoop}
             onRemoveMessage={noop}
             onUpdateMessage={noop}

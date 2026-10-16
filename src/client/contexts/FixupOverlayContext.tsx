@@ -11,6 +11,7 @@ import type {
 import {
   deriveThreadReviewState,
   isOpenedByEdit,
+  isThreadResolved,
   pendingFixupFor,
 } from '../../utils/reviewDecisions';
 import { type EditRange, rangeOfLine, rangesOverlap } from '../utils/directEdit';
@@ -105,7 +106,7 @@ export function threadReviewControls(
 
 export function canAnswerByEdit(overlay: FixupOverlayState, thread: CommentThread): boolean {
   if (!overlay.directEdit || (thread.side ?? 'new') !== 'new' || thread.isOutdated) return false;
-  if (isOpenedByEdit(thread)) return false;
+  if (isOpenedByEdit(thread) || isThreadResolved(thread.id, overlay.decisions)) return false;
   const state = threadReviewControls(overlay, thread)?.state;
   return state === 'awaiting-fix' || state === 'rejected';
 }

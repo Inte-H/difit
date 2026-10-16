@@ -24,7 +24,11 @@ import {
   normalizeBaseMode,
   selectionAtCommit,
 } from '../utils/diffSelection';
-import { mergeReviewDecisions, selectOpenThreads } from '../utils/reviewDecisions';
+import {
+  isThreadResolved,
+  mergeReviewDecisions,
+  selectOpenThreads,
+} from '../utils/reviewDecisions';
 
 import { Checkbox } from './components/Checkbox';
 import { CommentsDropdown, type CopyAllNotice } from './components/CommentsDropdown';
@@ -156,6 +160,7 @@ function App() {
   const [diffMode, setDiffMode] = useState<DiffViewMode>(getInitialDiffViewMode);
   const [ignoreWhitespace, setIgnoreWhitespace] = useState(true);
   const [foldCommentChanges, setFoldCommentChanges] = useState(true);
+  const [showResolvedThreads, setShowResolvedThreads] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copyAllNotice, setCopyAllNotice] = useState<CopyAllNotice | null>(null);
@@ -222,11 +227,9 @@ function App() {
     undoApproval,
     addThread,
     replyToThread,
-    removeThread,
     removeMessage,
     updateMessage,
     clearAllComments,
-    generateThreadPrompt,
     generateAllCommentsPrompt,
   } = useDiffComments(
     resolvedSelection?.baseCommitish,
@@ -290,6 +293,18 @@ function App() {
   const openThreads = useMemo(
     () => selectOpenThreads(threads, fixupsByThread, decisions),
     [threads, fixupsByThread, decisions],
+  );
+  const resolvedThreadIds = useMemo(
+    () =>
+      new Set(
+        threads.filter((thread) => isThreadResolved(thread.id, decisions)).map(({ id }) => id),
+      ),
+    [threads, decisions],
+  );
+  if (resolvedThreadIds.size === 0 && !showResolvedThreads) setShowResolvedThreads(true);
+  const resolveThread = useCallback(
+    (threadId: string) => recordDecision(threadId, 'resolved', ''),
+    [recordDecision],
   );
   const [bootstrappedCommentsKey, setBootstrappedCommentsKey] = useState<string | null>(null);
   const hasBootstrappedComments =
@@ -605,9 +620,13 @@ function App() {
     () => hasMultipleCommentAuthors(normalizedThreads.flatMap((thread) => thread.messages)),
     [normalizedThreads],
   );
+  const unresolvedThreads = useMemo(
+    () => normalizedThreads.filter((thread) => !resolvedThreadIds.has(thread.id)),
+    [normalizedThreads, resolvedThreadIds],
+  );
   const threadsByFile = useMemo(() => {
     const map = new Map<string, CommentThread[]>();
-    normalizedThreads.forEach((thread) => {
+    (showResolvedThreads ? normalizedThreads : unresolvedThreads).forEach((thread) => {
       const entry = map.get(thread.file);
       if (entry) {
         entry.push(thread);
@@ -616,7 +635,7 @@ function App() {
       }
     });
     return map;
-  }, [normalizedThreads]);
+  }, [normalizedThreads, unresolvedThreads, showResolvedThreads]);
 
   // State to trigger comment creation from keyboard
   const [commentTrigger, setCommentTrigger] = useState<{
@@ -654,7 +673,7 @@ function App() {
   const { cursor, isHelpOpen, setIsHelpOpen, setCursorPosition, rememberFilePosition } =
     useKeyboardNavigation({
       files: navigableFiles,
-      comments: normalizedThreads,
+      comments: unresolvedThreads,
       viewMode: diffMode,
       reviewedFiles: viewedFiles,
       onToggleReviewed: toggleFileReviewed,
@@ -729,11 +748,6 @@ function App() {
   const handleCommentTriggerHandled = useCallback(() => {
     setCommentTrigger(null);
   }, [setCommentTrigger]);
-
-  const handleGenerateThreadPrompt = useCallback(
-    (thread: CommentThread) => generateThreadPrompt(thread.id),
-    [generateThreadPrompt],
-  );
 
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -1475,6 +1489,18 @@ function App() {
                   }
                 />
               )}
+              {resolvedThreadIds.size > 0 && (
+                <Checkbox
+                  checked={showResolvedThreads}
+                  onChange={setShowResolvedThreads}
+                  label="해결된 지적 보기"
+                  title={
+                    showResolvedThreads
+                      ? '해결된 지적을 diff에서 감추기'
+                      : '해결된 지적도 접어서 보이기'
+                  }
+                />
+              )}
               {fixupsByThread.size > 0 && (
                 <Checkbox
                   checked={showFixupOverlay}
@@ -1721,8 +1747,7 @@ function App() {
                       onToggleCollapsed={toggleFileCollapsed}
                       onToggleAllCollapsed={toggleAllFilesCollapsed}
                       onAddComment={handleAddComment}
-                      onGenerateThreadPrompt={handleGenerateThreadPrompt}
-                      onRemoveThread={removeThread}
+                      onResolveThread={resolveThread}
                       onReplyToThread={handleReplyToThread}
                       onRemoveMessage={removeMessage}
                       onUpdateMessage={updateMessage}
@@ -1825,9 +1850,9 @@ function App() {
           onClose={() => setIsCommentsListOpen(false)}
           onNavigate={handleNavigateToComment}
           comments={normalizedThreads}
+          fixupOverlay={fixupOverlay}
           showAuthorBadges={showAuthorBadges}
-          onRemoveThread={removeThread}
-          onGenerateThreadPrompt={handleGenerateThreadPrompt}
+          onResolveThread={resolveThread}
           onReplyToThread={handleReplyToThread}
           onRemoveMessage={removeMessage}
           onUpdateMessage={updateMessage}

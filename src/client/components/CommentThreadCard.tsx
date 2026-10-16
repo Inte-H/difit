@@ -8,9 +8,10 @@ import {
   REVIEWER_AUTHOR,
   REVIEWER_EDIT_AUTHOR,
 } from '../../types/diff';
+import { formatCommentPrompt } from '../../utils/commentFormatting';
 import { isSameCommit } from '../../utils/diffSelection';
-import { reviewStateLabel } from '../../utils/reviewDecisions';
-import type { ThreadReviewControls } from '../contexts/FixupOverlayContext';
+import { isThreadResolved, reviewStateLabel } from '../../utils/reviewDecisions';
+import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -20,33 +21,30 @@ import type { AppearanceSettings } from './SettingsModal';
 
 interface ThreadMessageItemProps {
   message: DiffCommentMessage;
-  isRootMessage?: boolean;
   showAuthorBadge: boolean;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   filename?: string;
   originalCode?: string;
   onUpdate: (newBody: string) => void;
-  onResolveOrDelete: () => void;
-  actionLabel: string;
-  confirmPrompt?: string;
+  onCopy: () => string;
+  onDelete?: () => void;
   onClick?: (e: React.MouseEvent) => void;
 }
 
 function ThreadMessageItem({
   message,
-  isRootMessage = false,
   showAuthorBadge,
   syntaxTheme,
   filename,
   originalCode,
   onUpdate,
-  onResolveOrDelete,
-  actionLabel,
-  confirmPrompt,
+  onCopy,
+  onDelete,
   onClick,
 }: ThreadMessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
   const confirmContainerRef = useRef<HTMLDivElement>(null);
   const confirmButtonRef = useRef<HTMLButtonElement>(null);
   const showAuthorHeader = showAuthorBadge && Boolean(message.author);
@@ -90,8 +88,19 @@ function ThreadMessageItem({
     return Promise.resolve();
   };
 
+  const handleCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await copyTextToClipboard(onCopy());
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy comment prompt:', error);
+    }
+  };
+
   return (
-    <div className={isEditing ? '' : 'flex min-w-0 items-start gap-3'} onClick={onClick}>
+    <div className={isEditing ? '' : 'group flex min-w-0 items-start gap-3'} onClick={onClick}>
       {!isEditing ? (
         <>
           <div className="min-w-0 flex-1">
@@ -110,73 +119,78 @@ function ThreadMessageItem({
               syntaxTheme={syntaxTheme}
             />
           </div>
-          {(isRootMessage || isUserAuthoredMessage) &&
-            (isConfirming ? (
-              <div
-                ref={confirmContainerRef}
-                className="flex shrink-0 items-center gap-1.5 pt-0.5"
-                onClick={(e) => e.stopPropagation()}
+          {isConfirming ? (
+            <div
+              ref={confirmContainerRef}
+              className="flex shrink-0 items-center gap-1.5 pt-0.5"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="whitespace-nowrap text-xs text-github-text-secondary">Delete?</span>
+              <button
+                ref={confirmButtonRef}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsConfirming(false);
+                  onDelete?.();
+                }}
+                className="whitespace-nowrap rounded border border-github-border bg-github-bg-tertiary px-2 py-1 text-xs font-medium text-github-danger transition-all hover:bg-github-bg-primary"
               >
-                <span className="whitespace-nowrap text-xs text-github-text-secondary">
-                  {confirmPrompt}
-                </span>
+                Delete
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsConfirming(false);
+                }}
+                className="whitespace-nowrap rounded border border-github-border bg-github-bg-tertiary px-2 py-1 text-xs text-github-text-primary transition-all hover:bg-github-bg-primary"
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex shrink-0 items-start gap-2 pt-0.5">
+              {/* Hidden until hover only where hovering is possible; touch screens keep it shown. */}
+              <button
+                type="button"
+                onClick={handleCopy}
+                className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 transition-all hover:bg-github-bg-primary focus-visible:opacity-100 group-hover:opacity-100 ${
+                  isCopied
+                    ? 'text-green-700'
+                    : 'text-github-text-primary [@media(hover:hover)]:opacity-0'
+                }`}
+                title={isCopied ? 'Copied!' : 'Copy prompt for AI coding agent'}
+                aria-label="Copy prompt"
+              >
+                {isCopied ? <Check size={12} /> : <Copy size={12} />}
+              </button>
+              {isUserAuthoredMessage && (
                 <button
-                  ref={confirmButtonRef}
+                  type="button"
+                  onClick={handleStartEdit}
+                  className="rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-text-primary transition-all hover:bg-github-bg-primary"
+                  title="Edit message"
+                >
+                  <Edit2 size={12} />
+                </button>
+              )}
+              {isUserAuthoredMessage && onDelete && (
+                <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setIsConfirming(false);
-                    onResolveOrDelete();
+                    setIsConfirming(true);
                   }}
-                  className={`whitespace-nowrap rounded border border-github-border bg-github-bg-tertiary px-2 py-1 text-xs font-medium transition-all hover:bg-github-bg-primary ${
-                    isRootMessage ? 'text-green-700 hover:text-green-800' : 'text-github-danger'
-                  }`}
+                  className="rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-danger transition-all hover:bg-github-bg-primary"
+                  title="Delete reply"
+                  aria-label="Delete reply"
                 >
-                  {isRootMessage ? 'Resolve' : 'Delete'}
+                  <Trash2 size={12} />
                 </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsConfirming(false);
-                  }}
-                  className="whitespace-nowrap rounded border border-github-border bg-github-bg-tertiary px-2 py-1 text-xs text-github-text-primary transition-all hover:bg-github-bg-primary"
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <div className="flex shrink-0 items-start gap-2 pt-0.5">
-                {isUserAuthoredMessage && (
-                  <button
-                    type="button"
-                    onClick={handleStartEdit}
-                    className="rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-text-primary transition-all hover:bg-github-bg-primary"
-                    title="Edit message"
-                  >
-                    <Edit2 size={12} />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirmPrompt) {
-                      setIsConfirming(true);
-                      return;
-                    }
-                    onResolveOrDelete();
-                  }}
-                  className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 transition-all hover:bg-github-bg-primary ${
-                    isRootMessage ? 'text-green-700 hover:text-green-800' : 'text-github-danger'
-                  }`}
-                  title={actionLabel}
-                  aria-label={actionLabel}
-                >
-                  {isRootMessage ? <Check size={12} /> : <Trash2 size={12} />}
-                </button>
-              </div>
-            ))}
+              )}
+            </div>
+          )}
         </>
       ) : (
         <CommentForm
@@ -205,9 +219,7 @@ interface CommentThreadCardProps {
   thread: CommentThread;
   review?: ThreadReviewControls;
   showAuthorBadges?: boolean;
-  confirmRootAction?: boolean;
-  onGeneratePrompt: (thread: CommentThread) => string;
-  onRemoveThread: (threadId: string) => void;
+  onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
@@ -221,9 +233,7 @@ export function CommentThreadCard({
   thread,
   review,
   showAuthorBadges = false,
-  confirmRootAction = true,
-  onGeneratePrompt,
-  onRemoveThread,
+  onResolveThread,
   onReplyToThread,
   onRemoveMessage,
   onUpdateMessage,
@@ -231,9 +241,15 @@ export function CommentThreadCard({
   onEditDirectly,
   syntaxTheme,
 }: CommentThreadCardProps) {
-  const [isCopied, setIsCopied] = useState(false);
   const [isReplying, setIsReplying] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const { decisions, recordDecision } = useFixupOverlay();
+  const isResolved = isThreadResolved(thread.id, decisions);
+  const [isCollapsed, setIsCollapsed] = useState(isResolved);
+  const [wasResolved, setWasResolved] = useState(isResolved);
+  if (wasResolved !== isResolved) {
+    setWasResolved(isResolved);
+    setIsCollapsed(isResolved);
+  }
   const answeredByEdit = thread.messages.some((message) => message.author === REVIEWER_EDIT_AUTHOR);
   const lineLabel = Array.isArray(thread.line)
     ? `${thread.line[0]}-${thread.line[1]}`
@@ -244,17 +260,14 @@ export function CommentThreadCard({
     setIsCollapsed((prev) => !prev);
   };
 
-  const handleCopyThread = async (e: React.MouseEvent) => {
+  const toggleResolved = (e: React.MouseEvent) => {
     e.stopPropagation();
-    try {
-      const prompt = onGeneratePrompt(thread);
-      await copyTextToClipboard(prompt);
-      setIsCopied(true);
-      setTimeout(() => setIsCopied(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy thread prompt:', error);
-    }
+    if (isResolved) recordDecision(thread.id, 'unresolved', '');
+    else onResolveThread(thread.id);
   };
+
+  const messagePrompt = (message: DiffCommentMessage) =>
+    formatCommentPrompt(thread.file, thread.line, message.body, thread.codeContent, thread.side);
 
   const anchorCommit =
     review &&
@@ -300,7 +313,15 @@ export function CommentThreadCard({
           >
             {thread.file}:{lineLabel}
           </span>
-          {review && (
+          {isResolved && (
+            <span
+              data-testid="resolved-chip"
+              className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-border px-2 text-[10px] font-medium text-github-text-secondary"
+            >
+              해결됨
+            </span>
+          )}
+          {review && !isResolved && (
             <span
               data-testid="review-state-chip"
               className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-border px-2 text-[10px] font-medium text-github-text-secondary"
@@ -345,41 +366,31 @@ export function CommentThreadCard({
             </button>
           )}
         </div>
-        {!isCollapsed && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleCopyThread}
-              className="whitespace-nowrap rounded px-2 py-1 text-xs transition-all"
-              style={{
-                backgroundColor: 'var(--color-yellow-btn-bg)',
-                color: 'var(--color-yellow-btn-text)',
-                border: '1px solid var(--color-yellow-btn-border)',
-              }}
-              title="Copy thread prompt for AI coding agent"
-            >
-              <span className="inline-flex items-center gap-1">
-                <Copy size={12} />
-                {isCopied ? 'Copied!' : 'Copy Prompt'}
-              </span>
-            </button>
-          </div>
-        )}
+        <button
+          type="button"
+          onClick={toggleResolved}
+          className={`shrink-0 rounded border p-1.5 transition-all ${
+            isResolved
+              ? 'border-green-700 bg-green-700 text-white hover:bg-green-800'
+              : 'border-github-border bg-github-bg-tertiary text-green-700 hover:bg-github-bg-primary hover:text-green-800'
+          }`}
+          title={isResolved ? 'Reopen thread' : 'Resolve thread'}
+          aria-label={isResolved ? 'Reopen thread' : 'Resolve thread'}
+        >
+          <Check size={12} />
+        </button>
       </div>
 
       {!isCollapsed && (
         <div className="space-y-3">
           <ThreadMessageItem
             message={rootMessage}
-            isRootMessage={true}
             showAuthorBadge={showAuthorBadges}
             syntaxTheme={syntaxTheme}
             filename={thread.file}
             originalCode={thread.codeContent}
             onUpdate={(newBody) => onUpdateMessage(thread.id, rootMessage.id, newBody)}
-            onResolveOrDelete={() => onRemoveThread(thread.id)}
-            actionLabel="Resolve thread"
-            confirmPrompt={confirmRootAction ? 'Resolve?' : undefined}
+            onCopy={() => messagePrompt(rootMessage)}
           />
 
           {thread.messages.slice(1).map((message) => (
@@ -391,53 +402,54 @@ export function CommentThreadCard({
                 filename={thread.file}
                 originalCode={thread.codeContent}
                 onUpdate={(newBody) => onUpdateMessage(thread.id, message.id, newBody)}
-                onResolveOrDelete={() => onRemoveMessage(thread.id, message.id)}
-                actionLabel="Delete reply"
-                confirmPrompt="Delete?"
+                onCopy={() => messagePrompt(message)}
+                onDelete={() => onRemoveMessage(thread.id, message.id)}
               />
             </div>
           ))}
 
-          {review && (review.state === 'awaiting-approval' || review.state === 'approved') && (
-            <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-              {review.state === 'awaiting-approval' && review.fixupSha && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => review.onDecide(thread.id, 'approved', review.fixupSha ?? '')}
-                    className="min-h-10 flex-1 rounded border border-github-accent bg-github-accent/20 px-3 text-sm font-medium text-github-text-primary"
-                  >
-                    승인
-                  </button>
+          {review &&
+            !isResolved &&
+            (review.state === 'awaiting-approval' || review.state === 'approved') && (
+              <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
+                {review.state === 'awaiting-approval' && review.fixupSha && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => review.onDecide(thread.id, 'approved', review.fixupSha ?? '')}
+                      className="min-h-10 flex-1 rounded border border-github-accent bg-github-accent/20 px-3 text-sm font-medium text-github-text-primary"
+                    >
+                      승인
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
+                      className="min-h-10 flex-1 rounded border border-github-danger bg-github-danger/20 px-3 text-sm font-medium text-github-text-primary"
+                    >
+                      거절
+                    </button>
+                  </>
+                )}
+                {review.state === 'approved' && answeredByEdit && review.fixupSha && (
                   <button
                     type="button"
                     onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
-                    className="min-h-10 flex-1 rounded border border-github-danger bg-github-danger/20 px-3 text-sm font-medium text-github-text-primary"
+                    className="min-h-10 flex-1 rounded border border-github-danger bg-github-bg-secondary px-3 text-sm text-github-text-primary"
                   >
-                    거절
+                    되돌리기
                   </button>
-                </>
-              )}
-              {review.state === 'approved' && answeredByEdit && review.fixupSha && (
-                <button
-                  type="button"
-                  onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
-                  className="min-h-10 flex-1 rounded border border-github-danger bg-github-bg-secondary px-3 text-sm text-github-text-primary"
-                >
-                  되돌리기
-                </button>
-              )}
-              {review.state === 'approved' && (
-                <button
-                  type="button"
-                  onClick={() => review.onUndoApproval(thread.id)}
-                  className="min-h-10 flex-1 rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-secondary"
-                >
-                  승인 취소
-                </button>
-              )}
-            </div>
-          )}
+                )}
+                {review.state === 'approved' && (
+                  <button
+                    type="button"
+                    onClick={() => review.onUndoApproval(thread.id)}
+                    className="min-h-10 flex-1 rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-secondary"
+                  >
+                    승인 취소
+                  </button>
+                )}
+              </div>
+            )}
 
           {onEditDirectly && (
             <button
@@ -474,6 +486,7 @@ export function CommentThreadCard({
               <CommentForm
                 onSubmit={async (body) => {
                   await onReplyToThread(thread.id, body);
+                  if (isResolved) recordDecision(thread.id, 'unresolved', '');
                   setIsReplying(false);
                 }}
                 onCancel={() => setIsReplying(false)}
@@ -482,7 +495,7 @@ export function CommentThreadCard({
                 filename={thread.file}
                 embedded={true}
                 title="Reply to thread"
-                submitLabel="Reply"
+                submitLabel={isResolved ? '답글 달고 다시 열기' : 'Reply'}
                 placeholder="Write a reply..."
               />
             ) : (
@@ -493,7 +506,7 @@ export function CommentThreadCard({
                 onClick={() => setIsReplying(true)}
                 className="w-full cursor-text rounded border border-github-border bg-github-bg-secondary px-3 py-1.5 text-left text-sm text-github-text-muted transition-colors hover:border-github-text-secondary"
               >
-                Write a reply...
+                {isResolved ? '답글 달고 다시 열기...' : 'Write a reply...'}
               </button>
             )}
           </div>
