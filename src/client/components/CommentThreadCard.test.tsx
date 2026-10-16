@@ -268,6 +268,64 @@ describe('CommentThreadCard', () => {
       expect(screen.getByText('해결됨')).toBeInTheDocument();
     });
 
+    describe('while a reply is being written and the resolution arrives from elsewhere', () => {
+      const replyingCard = (overlay: FixupOverlayState, onReplyToThread = vi.fn()) => (
+        <FixupOverlayProvider value={overlay}>
+          <CommentThreadCard
+            thread={mockThread}
+            onResolveThread={vi.fn()}
+            onReplyToThread={onReplyToThread}
+            onRemoveMessage={vi.fn()}
+            onUpdateMessage={vi.fn()}
+          />
+        </FixupOverlayProvider>
+      );
+
+      it('keeps the reply form and its draft open under the resolved chip', async () => {
+        const user = userEvent.setup();
+        const { rerender } = render(replyingCard(overlayWith([])));
+        await user.click(screen.getByRole('button', { name: 'Write a reply...' }));
+        await user.type(screen.getByPlaceholderText('Write a reply...'), 'Half-written');
+
+        rerender(replyingCard(overlayWith([resolution('resolved', '2026-01-01T00:00:00Z')])));
+
+        expect(screen.getByText('해결됨')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Write a reply...')).toHaveValue('Half-written');
+      });
+
+      it('sends the draft and reopens the thread', async () => {
+        const user = userEvent.setup();
+        const onReplyToThread = vi.fn().mockResolvedValue(undefined);
+        const recordDecision = vi.fn();
+        const { rerender } = render(replyingCard(overlayWith([], recordDecision), onReplyToThread));
+        await user.click(screen.getByRole('button', { name: 'Write a reply...' }));
+        await user.type(screen.getByPlaceholderText('Write a reply...'), 'Half-written');
+
+        rerender(
+          replyingCard(
+            overlayWith([resolution('resolved', '2026-01-01T00:00:00Z')], recordDecision),
+            onReplyToThread,
+          ),
+        );
+        await user.click(screen.getByRole('button', { name: '답글 달고 다시 열기' }));
+
+        expect(onReplyToThread).toHaveBeenCalledWith('thread-1', 'Half-written');
+        expect(recordDecision).toHaveBeenCalledWith('thread-1', 'unresolved', '');
+      });
+
+      it('collapses once the reply form is closed', async () => {
+        const user = userEvent.setup();
+        const { rerender } = render(replyingCard(overlayWith([])));
+        await user.click(screen.getByRole('button', { name: 'Write a reply...' }));
+
+        rerender(replyingCard(overlayWith([resolution('resolved', '2026-01-01T00:00:00Z')])));
+        await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+        expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Expand thread' })).toBeInTheDocument();
+      });
+    });
+
     it('reopens the thread with an unresolved record when the check is pressed again', async () => {
       const user = userEvent.setup();
       const recordDecision = vi.fn();

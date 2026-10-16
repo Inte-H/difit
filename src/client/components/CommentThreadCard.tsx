@@ -246,7 +246,7 @@ export function CommentThreadCard({
   const isResolved = isThreadResolved(thread.id, decisions);
   const [isCollapsed, setIsCollapsed] = useState(isResolved);
   const [wasResolved, setWasResolved] = useState(isResolved);
-  if (wasResolved !== isResolved) {
+  if (wasResolved !== isResolved && !(isResolved && isReplying)) {
     setWasResolved(isResolved);
     setIsCollapsed(isResolved);
   }
