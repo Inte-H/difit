@@ -31,12 +31,3 @@ export function parseSuggestionBlocks(body: string): SuggestionBlock[] {
 
   return blocks;
 }
-
-/**
- * Create a suggestion template with the given code
- */
-export function createSuggestionTemplate(code: string): string {
-  // Ensure code ends with a newline for proper formatting
-  const normalizedCode = code.endsWith('\n') ? code : code + '\n';
-  return `\`\`\`suggestion\n${normalizedCode}\`\`\``;
-}

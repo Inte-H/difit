@@ -27,6 +27,12 @@ describe('CommentForm', () => {
     expect(screen.getByRole('textbox')).toHaveValue('');
   });
 
+  it('offers no button that inserts a suggestion block, even with selected code', () => {
+    render(<CommentForm onSubmit={vi.fn()} onCancel={vi.fn()} selectedCode="const value = 1;" />);
+
+    expect(screen.queryByRole('button', { name: /suggestion/i })).toBeNull();
+  });
+
   describe('keyboard shortcuts', () => {
     it('submits on Enter without inserting a newline', () => {
       const { onSubmit, textarea } = renderWithBody('looks good');
