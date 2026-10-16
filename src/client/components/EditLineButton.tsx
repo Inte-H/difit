@@ -19,7 +19,7 @@ export const EditLineButton: React.FC<EditLineButtonProps> = React.memo(({ onCli
         e.stopPropagation();
         onClick(e);
       }}
-      title="직접 고치기 (Shift-클릭으로 범위)"
+      title="직접 고치기"
       aria-label="줄 직접 고치기"
     >
       <Pencil className="w-4 h-4" />

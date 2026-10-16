@@ -586,13 +586,30 @@ describe('editing the reviewed code directly', () => {
     fireEvent.click(screen.getByRole('button', { name: '저장' }));
   };
 
-  it('edits one line from its pencil and a range with shift-click', async () => {
+  it('edits only the line whose pencil was pressed, even with shift held', async () => {
     const { submit, hover } = renderEditable();
 
     hover(0);
     fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }));
     hover(2);
     fireEvent.click(screen.getByRole('button', { name: '줄 직접 고치기' }), { shiftKey: true });
+
+    expect(await screen.findByLabelText('고칠 코드')).toHaveValue('const third = 3;');
+    await commitEdit('const third = 30;');
+    await waitFor(() =>
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({ startLine: 12, endLine: 12, replacement: ['const third = 30;'] }),
+      ),
+    );
+  });
+
+  it('edits the picked lines from the selection bar', async () => {
+    const { submit, container } = renderEditable();
+    const rows = container.querySelectorAll('[data-diff-line-row="true"]');
+
+    selectText([codeCell('unified', rows[0]!), 'first'], [codeCell('unified', rows[2]!), 'third']);
+    fireEvent.click(await screen.findByRole('button', { name: '직접 고치기' }));
+    document.getSelection()?.removeAllRanges();
 
     expect(await screen.findByLabelText('고칠 코드')).toHaveValue(
       ['const first = 1;', 'const second = 2;', 'const third = 3;'].join('\n'),

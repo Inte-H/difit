@@ -641,7 +641,7 @@ export function SideBySideDiffChunk({
             const openNewSideInEditor = openInEditorAt(sideLine.newLineNumber);
             const editNewLine =
               editLine && sideLine.newLineNumber !== undefined
-                ? (e: React.MouseEvent) => editLine(sideLine.newLineNumber ?? 0, e.shiftKey)
+                ? () => editLine(sideLine.newLineNumber ?? 0)
                 : undefined;
 
             return (

@@ -547,7 +547,7 @@ export const DiffChunk = memo(function DiffChunk({
                   }
                   onEditLine={
                     editLine && line.type !== 'delete' && line.newLineNumber
-                      ? (e) => editLine(line.newLineNumber ?? 0, e.shiftKey)
+                      ? () => editLine(line.newLineNumber ?? 0)
                       : undefined
                   }
                   syntaxTheme={syntaxTheme}
