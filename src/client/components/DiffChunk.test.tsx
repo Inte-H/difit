@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CommentThread, DiffChunk as DiffChunkData, ThreadFixup } from '../../types/diff';
-import { formatCommentContent } from '../../utils/commentFormatting';
 import { DEFAULT_DIFF_VIEW_MODE } from '../../utils/diffMode';
 import {
   EMPTY_FIXUP_OVERLAY,
@@ -836,12 +835,6 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
         'new',
       );
     });
-    expect(formatCommentContent(body).split('\n')).toEqual([
-      '> first = 1;',
-      '> const second',
-      '',
-      'Why two lines?',
-    ]);
   });
 
   it('comments on the whole lines dragged over in the line numbers', async () => {

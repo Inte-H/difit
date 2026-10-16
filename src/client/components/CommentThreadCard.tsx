@@ -95,7 +95,7 @@ function ThreadMessageItem({
       setIsCopied(true);
       setTimeout(() => setIsCopied(false), 2000);
     } catch (error) {
-      console.error('Failed to copy comment prompt:', error);
+      console.error('Failed to copy comment:', error);
     }
   };
 

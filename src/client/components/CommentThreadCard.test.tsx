@@ -119,6 +119,7 @@ describe('CommentThreadCard', () => {
 
     await user.click(screen.getByRole('button', { name: 'Copy comment' }));
     const copied = vi.mocked(copyTextToClipboard).mock.calls[0]?.[0];
+    expect(copied).not.toContain(':L80');
     expect(copied).toContain('ORIGINAL:');
     expect(copied).toContain('const value = 1;');
     expect(copied).toContain('SUGGESTED:');
