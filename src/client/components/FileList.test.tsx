@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
-import type { DiffFile } from '../../types/diff';
+import type { CommentThread, DiffFile, ReviewDecision } from '../../types/diff';
 
 import { FileList } from './FileList';
 
@@ -15,6 +15,23 @@ const createFile = (
   additions: totals.additions ?? 1,
   deletions: totals.deletions ?? 1,
   chunks: [],
+});
+
+const createThread = (id: string, file: string): CommentThread => ({
+  id,
+  file,
+  line: 1,
+  side: 'new',
+  createdAt: '2026-01-01T00:00:00.000Z',
+  updatedAt: '2026-01-01T00:00:00.000Z',
+  messages: [],
+});
+
+const decide = (threadId: string, kind: 'resolved' | 'unresolved', at: string): ReviewDecision => ({
+  threadId,
+  kind,
+  fixupSha: '',
+  at,
 });
 
 function getTreeRow(title: string): HTMLElement {
@@ -37,6 +54,7 @@ describe('FileList', () => {
         ]}
         onScrollToFile={vi.fn()}
         comments={[]}
+        decisions={[]}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={vi.fn()}
@@ -60,6 +78,7 @@ describe('FileList', () => {
       files,
       onScrollToFile: vi.fn(),
       comments: [],
+      decisions: [],
       onToggleReviewed: vi.fn(),
       onToggleFolderReviewed: vi.fn(),
       selectedFileIndex: null,
@@ -101,6 +120,7 @@ describe('FileList', () => {
         ]}
         onScrollToFile={vi.fn()}
         comments={[]}
+        decisions={[]}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={onToggleFolderReviewed}
@@ -126,6 +146,7 @@ describe('FileList', () => {
         ]}
         onScrollToFile={onScrollToFile}
         comments={[]}
+        decisions={[]}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={vi.fn()}
@@ -152,6 +173,7 @@ describe('FileList', () => {
         files={[createFile('src/cli/index.ts'), createFile('src/client/App.tsx')]}
         onScrollToFile={vi.fn()}
         comments={[]}
+        decisions={[]}
         reviewedFiles={new Set(['src/cli/index.ts', 'src/client/App.tsx'])}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={onToggleFolderReviewed}
@@ -164,5 +186,33 @@ describe('FileList', () => {
 
     fireEvent.click(checkbox);
     expect(onToggleFolderReviewed).toHaveBeenCalledWith('src', false);
+  });
+
+  it('counts only unresolved threads, including reopened ones', () => {
+    render(
+      <FileList
+        files={[createFile('README.md'), createFile('calc.js')]}
+        onScrollToFile={vi.fn()}
+        comments={[
+          createThread('a', 'README.md'),
+          createThread('b', 'calc.js'),
+          createThread('c', 'calc.js'),
+          createThread('d', 'calc.js'),
+        ]}
+        decisions={[
+          decide('a', 'resolved', '2026-01-02T00:00:00.000Z'),
+          decide('b', 'resolved', '2026-01-02T00:00:00.000Z'),
+          decide('c', 'resolved', '2026-01-02T00:00:00.000Z'),
+          decide('c', 'unresolved', '2026-01-03T00:00:00.000Z'),
+        ]}
+        reviewedFiles={new Set()}
+        onToggleReviewed={vi.fn()}
+        onToggleFolderReviewed={vi.fn()}
+        selectedFileIndex={null}
+      />,
+    );
+
+    expect(getTreeRow('README.md')).toHaveTextContent(/^README\.md$/);
+    expect(getTreeRow('calc.js')).toHaveTextContent(/^calc\.js2$/);
   });
 });

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
-import type { CommentThread, DiffFile } from '../../types/diff';
+import type { CommentThread, DiffFile, ReviewDecision } from '../../types/diff';
 
 import { FileChips } from './FileChips';
 
@@ -24,6 +24,13 @@ const createThread = (id: string, file: string): CommentThread => ({
   messages: [],
 });
 
+const decide = (threadId: string, kind: 'resolved' | 'unresolved', at: string): ReviewDecision => ({
+  threadId,
+  kind,
+  fixupSha: '',
+  at,
+});
+
 describe('FileChips', () => {
   const files = [createFile('src/lib/strings.js'), createFile('calc.js')];
 
@@ -33,6 +40,7 @@ describe('FileChips', () => {
       <FileChips
         files={files}
         comments={[]}
+        decisions={[]}
         reviewedFiles={new Set()}
         selectedFileIndex={null}
         onScrollToFile={onScrollToFile}
@@ -54,6 +62,7 @@ describe('FileChips', () => {
       <FileChips
         files={files}
         comments={[createThread('a', 'calc.js'), createThread('b', 'calc.js')]}
+        decisions={[]}
         reviewedFiles={new Set(['src/lib/strings.js'])}
         selectedFileIndex={1}
         onScrollToFile={vi.fn()}
@@ -67,5 +76,35 @@ describe('FileChips', () => {
     expect(current).toHaveAttribute('aria-current', 'true');
     expect(within(current).getByLabelText('2 comments')).toHaveTextContent('2');
     expect(within(viewed).queryByLabelText(/comments/)).not.toBeInTheDocument();
+  });
+
+  it('counts only unresolved threads, including reopened ones', () => {
+    render(
+      <FileChips
+        files={files}
+        comments={[
+          createThread('a', 'src/lib/strings.js'),
+          createThread('b', 'calc.js'),
+          createThread('c', 'calc.js'),
+          createThread('d', 'calc.js'),
+        ]}
+        decisions={[
+          decide('a', 'resolved', '2026-01-02T00:00:00.000Z'),
+          decide('b', 'resolved', '2026-01-02T00:00:00.000Z'),
+          decide('c', 'resolved', '2026-01-02T00:00:00.000Z'),
+          decide('c', 'unresolved', '2026-01-03T00:00:00.000Z'),
+        ]}
+        reviewedFiles={new Set()}
+        selectedFileIndex={null}
+        onScrollToFile={vi.fn()}
+      />,
+    );
+
+    expect(
+      within(screen.getByTitle('src/lib/strings.js')).queryByLabelText(/comments/),
+    ).not.toBeInTheDocument();
+    expect(within(screen.getByTitle('calc.js')).getByLabelText('2 comments')).toHaveTextContent(
+      '2',
+    );
   });
 });

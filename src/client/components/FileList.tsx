@@ -14,13 +14,14 @@ import {
 } from 'lucide-react';
 import { memo, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 
-import { type DiffFile, type CommentThread } from '../../types/diff';
+import { type DiffFile, type CommentThread, type ReviewDecision } from '../../types/diff';
 import {
   combineChangeKinds,
   LEAVES_CODE_ALONE_LABEL,
   LEAVES_CODE_ALONE_TITLE,
   leavesCodeAlone,
 } from '../../utils/changeKind';
+import { isThreadResolved } from '../../utils/reviewDecisions';
 import { isSafariBrowser } from '../utils/browser';
 
 import { Checkbox } from './Checkbox';
@@ -30,6 +31,7 @@ interface FileListProps {
   onScrollToFile: (path: string) => void;
   onFileSelected?: () => void;
   comments: CommentThread[];
+  decisions: ReviewDecision[];
   reviewedFiles: Set<string>;
   onToggleReviewed: (path: string) => void;
   onToggleFolderReviewed: (path: string, reviewed: boolean) => void;
@@ -164,6 +166,7 @@ export const FileList = memo(function FileList({
   onScrollToFile,
   onFileSelected,
   comments,
+  decisions,
   reviewedFiles,
   onToggleReviewed,
   onToggleFolderReviewed,
@@ -189,10 +192,11 @@ export const FileList = memo(function FileList({
   const commentCountMap = useMemo(() => {
     const counts = new Map<string, number>();
     comments.forEach((comment) => {
+      if (isThreadResolved(comment.id, decisions)) return;
       counts.set(comment.file, (counts.get(comment.file) ?? 0) + 1);
     });
     return counts;
-  }, [comments]);
+  }, [comments, decisions]);
 
   const fileIndexMap = useMemo(() => {
     const indices = new Map<string, number>();
