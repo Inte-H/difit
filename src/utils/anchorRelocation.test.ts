@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { relocateAnchor } from './anchorRelocation';
+import { anchorMatchesAtItsLine, relocateAnchor } from './anchorRelocation';
 
 const fileLines = (lines: string[], firstLineNumber = 1) =>
   new Map(lines.map((content, index) => [firstLineNumber + index, content]));
@@ -95,5 +95,27 @@ describe('relocateAnchor', () => {
         lines,
       ),
     ).toEqual({ kind: 'located', line: { start: 1, end: 2 } });
+  });
+});
+
+describe('anchorMatchesAtItsLine', () => {
+  const lines = fileLines(['const a = 1;', 'const b = 2;  ', 'const c = 3;']);
+
+  it('matches only when every saved line sits at its own number', () => {
+    const range = { start: 2, end: 3 };
+    expect(
+      anchorMatchesAtItsLine({ line: range, content: 'const b = 2;\nconst c = 3;' }, lines),
+    ).toBe(true);
+    expect(anchorMatchesAtItsLine({ line: 1, content: 'const b = 2;' }, lines)).toBe(false);
+  });
+
+  it('does not match when the saved lines cover only part of the range', () => {
+    const range = { start: 1, end: 3 };
+    expect(anchorMatchesAtItsLine({ line: range, content: 'const a = 1;' }, lines)).toBe(false);
+  });
+
+  it('does not match past the end of the file', () => {
+    const range = { start: 3, end: 4 };
+    expect(anchorMatchesAtItsLine({ line: range, content: 'const c = 3;\n}' }, lines)).toBe(false);
   });
 });

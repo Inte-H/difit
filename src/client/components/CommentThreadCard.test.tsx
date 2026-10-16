@@ -75,6 +75,46 @@ describe('CommentThreadCard', () => {
     expect(copied).not.toContain('Root comment');
   });
 
+  it.each([
+    [
+      'a thread placed in the target',
+      mockThread,
+      '@src/client/components/CommentThreadCard.tsx#L80',
+    ],
+    [
+      'an outdated thread, by its anchor commit',
+      { ...mockThread, isOutdated: true, anchorCommit: '9999999' },
+      '9999999:src/client/components/CommentThreadCard.tsx:L80',
+    ],
+  ])('copies the location of %s from the refs read at the click', async (_, thread, location) => {
+    const user = userEvent.setup();
+    render(
+      <FixupOverlayProvider
+        value={{
+          ...EMPTY_FIXUP_OVERLAY,
+          readLocationRefs: () => ({
+            oldCommit: 'abcdef1',
+            newCommit: '1234567',
+            pathsChangedOnDisk: [],
+            renamedFrom: {},
+          }),
+        }}
+      >
+        <CommentThreadCard
+          thread={{ ...thread, anchorCommit: thread.anchorCommit ?? '1234567' }}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />
+      </FixupOverlayProvider>,
+    );
+
+    await user.click(screen.getAllByRole('button', { name: 'Copy prompt' })[0]!);
+
+    expect(vi.mocked(copyTextToClipboard).mock.calls[0]?.[0]).toBe(`${location}\nRoot comment`);
+  });
+
   it('offers no suggestion button in the reply or edit form', async () => {
     const user = userEvent.setup();
     render(

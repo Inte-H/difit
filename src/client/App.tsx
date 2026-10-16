@@ -55,6 +55,7 @@ import {
 } from './contexts/FixupOverlayContext';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
+import { useCommentLocationRefs } from './hooks/useCommentLocationRefs';
 import { useDiffComments } from './hooks/useDiffComments';
 import { useExpandedLines, type MergedChunk } from './hooks/useExpandedLines';
 import { useFileWatch } from './hooks/useFileWatch';
@@ -282,6 +283,7 @@ function App() {
   }, [diffData?.requestedTargetCommitish, resolvedSelection]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
   const [directEditCount, setDirectEditCount] = useState(0);
+  const [commentsChangedCount, setCommentsChangedCount] = useState(0);
   const {
     fixupsByThread,
     newerTarget,
@@ -289,6 +291,10 @@ function App() {
   } = useThreadFixups(
     diffData && targetCommit ? getCommentApiUrl('/api/fixups') : null,
     diffDataVersion + directEditCount,
+  );
+  const readLocationRefs = useCommentLocationRefs(
+    diffData ? getCommentApiUrl('/api/comment-location-refs') : null,
+    diffDataVersion + directEditCount + commentsChangedCount,
   );
   const openThreads = useMemo(
     () => selectOpenThreads(threads, fixupsByThread, decisions),
@@ -648,6 +654,7 @@ function App() {
     await fetchDiffDataRef.current?.();
   }, []);
   const handleCommentsChanged = useCallback(async () => {
+    setCommentsChangedCount((count) => count + 1);
     try {
       const { threads: serverThreads } = await fetchServerComments();
       skipNextCommentSyncRef.current = true;
@@ -1035,6 +1042,7 @@ function App() {
       undoApproval,
       openReviewAt,
       directEdit,
+      readLocationRefs,
     }),
     [
       showFixupOverlay,
@@ -1045,6 +1053,7 @@ function App() {
       undoApproval,
       openReviewAt,
       directEdit,
+      readLocationRefs,
     ],
   );
 
@@ -1255,6 +1264,7 @@ function App() {
           baseMode: normalizeBaseMode(diffData?.requestedBaseMode),
           resolvedBaseCommitish: diffData?.baseCommitish,
           resolvedTargetCommitish: diffData?.targetCommitish,
+          locationRefs: readLocationRefs(),
         },
         openThreads,
       );

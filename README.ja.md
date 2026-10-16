@@ -165,16 +165,25 @@ difitにはAIコーディングエージェントへフィードバックしや�
 ### コメントプロンプトフォーマット
 
 ```sh
-src/components/Button.tsx:L42   # この行が自動的に追加されます
+@src/components/Button.tsx#L42   # この行が自動的に追加されます
 ここの変数名をもっとわかりやすくして
 ```
 
 範囲指定した場合
 
 ```sh
-src/components/Button.tsx:L42-L48   # この行が自動的に追加されます
+@src/components/Button.tsx#L42-48   # この行が自動的に追加されます
 この部分は不要です
 ```
+
+位置の行は Claude Code のファイルメンションなので、Claude Code に貼り付けるとその行がメッセージに添付されます。メンションはいまディスクにあるファイルを添付するため、ファイルがレビューしたコードと同じときだけこの形になります。レビュー後にファイルが変わった場合や古いコミットをレビューしている場合は、`git show abc1234:src/components/Button.tsx` で読めるようにコミットを前に付けます。削除された行には比較元のコミットを付けます。
+
+```sh
+abc1234:src/components/Button.tsx:L42-L48     # レビュー後にファイルが変わった、または古いコミットをレビュー中
+9f8e7d6:src/components/Button.tsx:L42 (old)   # 削除された行
+```
+
+付けるコミットがない場合（ステージしていない変更が残ったままのステージのレビュー、`difit .` や `difit working` のレビュー中にコメントした行が変わった場合、`difit working` の削除行、stdin や `--pr` の diff）は、従来どおり `src/components/Button.tsx:L42` と書きます。空白や `#` を含むパスはメンションにしません。
 
 ## 🤖 エージェントからの呼び出し
 

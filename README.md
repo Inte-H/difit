@@ -170,16 +170,25 @@ difit includes a review comment system that makes it easy to provide feedback to
 ### Comment Prompt Format
 
 ```sh
-src/components/Button.tsx:L42   # This line is automatically added
+@src/components/Button.tsx#L42   # This line is automatically added
 Make this variable name more descriptive
 ```
 
 For range selections:
 
 ```sh
-src/components/Button.tsx:L42-L48   # This line is automatically added
+@src/components/Button.tsx#L42-48   # This line is automatically added
 This section is unnecessary
 ```
+
+The location line is a Claude Code file mention, so pasting the prompt into Claude Code attaches those lines. A mention attaches the file as it is on disk now, so it is written only while the file still matches the code under review. When the file has changed since, or an older commit is under review, the line names the commit instead, in the `commit:path` form that `git show abc1234:src/components/Button.tsx` reads. Deleted lines name the base commit.
+
+```sh
+abc1234:src/components/Button.tsx:L42-L48     # the file changed after the review, or an older commit is reviewed
+9f8e7d6:src/components/Button.tsx:L42 (old)   # a deleted line
+```
+
+When there is no commit to name (a staged review with unstaged edits on top, a `difit .` or `difit working` review whose commented lines have since changed, deleted lines in `difit working`, a diff from stdin or `--pr`), the line keeps the plain form `src/components/Button.tsx:L42`. Paths containing spaces or `#` are never written as mentions.
 
 ## 🍴 이 포크가 더한 기능 (포크)
 

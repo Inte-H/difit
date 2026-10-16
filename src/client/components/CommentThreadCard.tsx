@@ -242,7 +242,7 @@ export function CommentThreadCard({
   syntaxTheme,
 }: CommentThreadCardProps) {
   const [isReplying, setIsReplying] = useState(false);
-  const { decisions, recordDecision } = useFixupOverlay();
+  const { decisions, recordDecision, readLocationRefs } = useFixupOverlay();
   const isResolved = isThreadResolved(thread.id, decisions);
   const [isCollapsed, setIsCollapsed] = useState(isResolved);
   const [wasResolved, setWasResolved] = useState(isResolved);
@@ -266,8 +266,14 @@ export function CommentThreadCard({
     else onResolveThread(thread.id);
   };
 
+  // A thread placed by its snapshot is drawn at the target's line numbers; an outdated one keeps
+  // the numbers of its anchor commit.
   const messagePrompt = (message: DiffCommentMessage) =>
-    formatCommentPrompt(thread.file, thread.line, message.body, thread.codeContent, thread.side);
+    formatCommentPrompt(thread.file, thread.line, message.body, thread.codeContent, thread.side, {
+      refs: readLocationRefs(),
+      lineCommit: thread.isOutdated ? thread.anchorCommit : undefined,
+      threadId: thread.id,
+    });
 
   const anchorCommit =
     review &&

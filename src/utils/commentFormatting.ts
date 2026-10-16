@@ -1,10 +1,24 @@
-import type { BaseMode, Comment, CommentThread, DiffSide, ThreadReviewState } from '../types/diff';
+import type {
+  BaseMode,
+  Comment,
+  CommentLocationRefs,
+  CommentThread,
+  DiffSide,
+  ThreadReviewState,
+} from '../types/diff';
 
+import { isSameCommit } from './diffSelection.js';
 import { reviewStateLabel } from './reviewDecisions.js';
 import { hasSuggestionBlock, parseSuggestionBlocks } from './suggestionUtils.js';
 
-function getLineInfo(line: number | number[]): string {
-  return typeof line === 'number' ? `L${line}` : `L${line[0]}-L${line[1]}`;
+export const UNKNOWN_FILE_PATH = '<unknown file>';
+
+// A Claude Code mention ends its path at whitespace and reads `#` as the start of the lines.
+const UNMENTIONABLE_PATH = /[\s#]/;
+
+// A mention writes a range as `L42-48`.
+function getLineInfo(line: number | number[], rangeEndPrefix = 'L'): string {
+  return typeof line === 'number' ? `L${line}` : `L${line[0]}-${rangeEndPrefix}${line[1]}`;
 }
 
 export interface CommentPromptDiffContext {
@@ -13,17 +27,69 @@ export interface CommentPromptDiffContext {
   baseMode?: BaseMode;
   resolvedBaseCommitish?: string;
   resolvedTargetCommitish?: string;
+  locationRefs?: CommentLocationRefs | null;
+}
+
+export interface CommentLocationOptions {
+  refs?: CommentLocationRefs | null;
+  // The commit the line numbers were counted in, when it can differ from the review target.
+  lineCommit?: string;
+  threadId?: string;
+}
+
+interface CommentLocation {
+  file: string;
+  line: number | number[];
+  side?: DiffSide;
+  lineCommit?: string;
+  threadId?: string;
+}
+
+function matchesDisk(
+  { file, threadId }: CommentLocation,
+  refs: CommentLocationRefs | null | undefined,
+): boolean {
+  if (!refs || UNMENTIONABLE_PATH.test(file)) return false;
+  if (refs.threadsMatchingDisk) {
+    return threadId !== undefined && refs.threadsMatchingDisk.includes(threadId);
+  }
+  return !refs.pathsChangedOnDisk.includes(file);
+}
+
+// A mention attaches what is on disk now, so it is written only for lines that still match the
+// reviewed new side; otherwise the location names the commit to read the lines from, if any.
+function formatLocationRef(
+  location: CommentLocation,
+  refs: CommentLocationRefs | null | undefined,
+): string {
+  const { file, line, side, lineCommit } = location;
+  const lines = getLineInfo(line);
+  if (!file || file === UNKNOWN_FILE_PATH) {
+    return `${UNKNOWN_FILE_PATH}:${lines}${side === 'old' ? ' (old)' : ''}`;
+  }
+
+  const countedInTarget =
+    lineCommit === undefined ||
+    (refs?.newCommit !== undefined && isSameCommit(lineCommit, refs.newCommit));
+  if (side === 'old') {
+    const oldCommit = countedInTarget ? refs?.oldCommit : undefined;
+    if (!refs || !oldCommit) return `${file}:${lines} (old)`;
+    const oldPath = (Object.hasOwn(refs.renamedFrom, file) ? refs.renamedFrom[file] : null) ?? file;
+    return `${oldCommit}:${oldPath}:${lines} (old)`;
+  }
+
+  if (!countedInTarget) return `${lineCommit}:${file}:${lines}`;
+  if (matchesDisk(location, refs)) return `@${file}#${getLineInfo(line, '')}`;
+  return refs?.newCommit ? `${refs.newCommit}:${file}:${lines}` : `${file}:${lines}`;
 }
 
 function formatCommentLocation(
-  file: string,
-  line: number | number[],
-  side?: DiffSide,
+  location: CommentLocation,
+  refs: CommentLocationRefs | null | undefined,
   reviewState?: ThreadReviewState,
 ): string {
-  const filePath = file || '<unknown file>';
   const stateSuffix = reviewState ? ` [${reviewStateLabel(reviewState)}]` : '';
-  return `${filePath}:${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
+  return `${formatLocationRef(location, refs)}${stateSuffix}`;
 }
 
 function isNonRangeCommitish(commitish: string): boolean {
@@ -116,8 +182,10 @@ export function formatCommentPrompt(
   body: string,
   codeContent?: string,
   side?: DiffSide,
+  { refs, lineCommit, threadId }: CommentLocationOptions = {},
 ): string {
-  return `${formatCommentLocation(file, line, side)}\n${formatCommentContent(body, codeContent)}`;
+  const location = formatCommentLocation({ file, line, side, lineCommit, threadId }, refs);
+  return `${location}\n${formatCommentContent(body, codeContent)}`;
 }
 
 export function formatAllCommentsPrompt(comments: Comment[]): string {
@@ -139,10 +207,16 @@ export function formatAllCommentsPrompt(comments: Comment[]): string {
 export function formatCommentThreadPrompt(
   thread: CommentThread,
   reviewState?: ThreadReviewState,
+  refs?: CommentLocationRefs | null,
 ): string {
-  const sections: string[] = [
-    formatCommentLocation(thread.file, thread.line, thread.side, reviewState),
-  ];
+  const location = {
+    file: thread.file,
+    line: thread.line,
+    side: thread.side,
+    lineCommit: thread.anchorCommit,
+    threadId: thread.id,
+  };
+  const sections: string[] = [formatCommentLocation(location, refs, reviewState)];
 
   thread.messages.forEach((message, index) => {
     if (index === 0) {
@@ -167,7 +241,7 @@ export function formatAllCommentThreadsPrompt(
   if (threads.length === 0) return '';
 
   const sections = threads.map((thread) =>
-    formatCommentThreadPrompt(thread, reviewStates?.get(thread.id)),
+    formatCommentThreadPrompt(thread, reviewStates?.get(thread.id), context?.locationRefs),
   );
   if (context) {
     const header = formatDiffContextHeader(context);
@@ -182,9 +256,10 @@ export function formatAllCommentThreadsPrompt(
 export function formatCommentsOutput(
   input: Comment[] | CommentThread[],
   reviewStates?: ReadonlyMap<string, ThreadReviewState>,
+  locationRefs?: CommentLocationRefs | null,
 ): string {
   const threads = input.map((item) => ('messages' in item ? item : normalizeLegacyComment(item)));
-  const allPrompts = formatAllCommentThreadsPrompt(threads, undefined, reviewStates);
+  const allPrompts = formatAllCommentThreadsPrompt(threads, { locationRefs }, reviewStates);
 
   return [
     '\n📝 Comments from review session:',

@@ -100,6 +100,12 @@ vi.mock('./git-diff.js', () => {
     listThreadFixups = vi.fn().mockResolvedValue([]);
     classifyFixups = vi.fn(async (fixups: unknown[]) => fixups);
     findNewerTarget = vi.fn().mockResolvedValue(null);
+    readCommentLocationRefs = vi.fn().mockResolvedValue({
+      oldCommit: 'def4567',
+      newCommit: 'abc1234',
+      pathsChangedOnDisk: [],
+      renamedFrom: {},
+    });
     readThreadFixup = vi.fn(
       async (sha: string) =>
         ((await this.listThreadFixups()) as Array<{ sha: string }>).find(
@@ -164,9 +170,9 @@ describe('Server Integration Tests', () => {
         const outputResponse = await fetch(`http://localhost:${result.port}/api/comments-output`);
         const output = await outputResponse.text();
 
-        expect(output).toContain('src/App.tsx:L10');
+        expect(output).toContain('@src/App.tsx#L10');
         expect(output).toContain('Test comment');
-        expect(output).toContain('src/utils/helper.ts:L20-L30');
+        expect(output).toContain('@src/utils/helper.ts#L20-30');
         expect(output).toContain('Another comment');
         expect(output).not.toContain('undefined');
       } finally {
@@ -861,9 +867,8 @@ describe('Server Integration Tests', () => {
       expect(response.ok).toBe(true);
       expect(response.headers.get('Content-Type')).toContain('text/plain');
       expect(output).toContain('Comments from review session');
-      expect(output).toContain('test.js:L10 (old)');
-      expect(output).toContain('First comment');
-      expect(output).toContain('test.js:L20\nSecond comment');
+      expect(output).toContain('def4567:test.js:L10 (old)\nFirst comment');
+      expect(output).toContain('@test.js#L20\nSecond comment');
       expect(output).toContain('Second comment');
       expect(output).toContain('Total comments: 2');
     });
@@ -913,11 +918,11 @@ describe('Server Integration Tests', () => {
 
       const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
 
-      expect(output).toContain('test.js:L10 [수정 중]\nNo answer yet');
-      expect(output).toContain('test.js:L20 [승인 대기]\nAnswered');
-      expect(output).toContain('test.js:L30 [다시 수정 중]\nRejected');
-      expect(output).toContain('test.js:L40 [승인됨]\nApproved');
-      expect(output).toContain('test.js:L50 [접힘]\nFolded');
+      expect(output).toContain('@test.js#L10 [수정 중]\nNo answer yet');
+      expect(output).toContain('@test.js#L20 [승인 대기]\nAnswered');
+      expect(output).toContain('@test.js#L30 [다시 수정 중]\nRejected');
+      expect(output).toContain('@test.js#L40 [승인됨]\nApproved');
+      expect(output).toContain('@test.js#L50 [접힘]\nFolded');
     });
 
     it('GET /api/comments-output leaves out resolved threads but keeps their record', async () => {
@@ -976,7 +981,10 @@ describe('Server Integration Tests', () => {
     });
 
     it('GET /api/comments-output adds no review state for a working-tree review', async () => {
-      const query = '?base=HEAD&target=working';
+      const query = '?base=staged&target=working';
+      parserInstances
+        .at(-1)
+        .readCommentLocationRefs.mockResolvedValue({ pathsChangedOnDisk: [], renamedFrom: {} });
       await fetch(`http://localhost:${port}/api/comments${query}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -987,7 +995,7 @@ describe('Server Integration Tests', () => {
         await fetch(`http://localhost:${port}/api/comments-output${query}`)
       ).text();
 
-      expect(output).toContain('test.js:L10\nPlain review');
+      expect(output).toContain('\ntest.js:L10\nPlain review');
       expect(output).not.toContain('[수정 중]');
     });
 
@@ -1009,11 +1017,104 @@ describe('Server Integration Tests', () => {
       const output = await response.text();
 
       expect(response.ok).toBe(true);
-      expect(output).toContain('test.js:L10');
+      expect(output).toContain('@test.js#L10');
       expect(output).toContain('Single line comment');
-      expect(output).toContain('test.js:L15-L25');
+      expect(output).toContain('@test.js#L15-25');
       expect(output).toContain('Multi-line comment');
       expect(output).toContain('Total comments: 2');
+    });
+
+    it('GET /api/comments-output names the target commit for a file changed on disk since', async () => {
+      const parser = parserInstances.at(-1);
+      parser.readCommentLocationRefs.mockResolvedValueOnce({
+        oldCommit: 'def4567',
+        newCommit: 'abc1234',
+        pathsChangedOnDisk: ['edited.js'],
+        renamedFrom: {},
+      });
+      const comments = [
+        { file: 'test.js', line: 10, body: 'Same on disk' },
+        { file: 'edited.js', line: [15, 25], body: 'Edited since' },
+      ];
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments }),
+      });
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+
+      expect(output).toContain('@test.js#L10\nSame on disk');
+      expect(output).toContain('abc1234:edited.js:L15-L25\nEdited since');
+    });
+
+    it('GET /api/comments-output falls back to the plain location when the refs cannot be read', async () => {
+      const parser = parserInstances.at(-1);
+      parser.readCommentLocationRefs.mockRejectedValueOnce(new Error('git failed'));
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: [{ file: 'test.js', line: 10, body: 'Body' }] }),
+      });
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      consoleError.mockRestore();
+
+      expect(output).toContain('\ntest.js:L10\nBody');
+    });
+
+    it('mentions a working-tree thread only while its saved lines are still on disk', async () => {
+      const parser = parserInstances.at(-1);
+      parser.readCommentLocationRefs.mockResolvedValue({
+        oldCommit: 'def4567',
+        pathsChangedOnDisk: [],
+        renamedFrom: {},
+      });
+      parser.getBlobContent.mockResolvedValue(Buffer.from('one\ntwo\r\nthree\n'));
+      const query = '?base=def4567&target=.';
+      const comments = [
+        { id: 'kept', file: 'test.js', line: [2, 3], body: 'Kept', codeContent: 'two\nthree' },
+        { id: 'moved', file: 'test.js', line: 1, body: 'Moved', codeContent: 'zero' },
+        { id: 'bare', file: 'test.js', line: 2, body: 'No snapshot' },
+      ];
+      await fetch(`http://localhost:${port}/api/comments${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments }),
+      });
+
+      const refs = await (
+        await fetch(`http://localhost:${port}/api/comment-location-refs${query}`)
+      ).json();
+      const output = await (
+        await fetch(`http://localhost:${port}/api/comments-output${query}`)
+      ).text();
+
+      expect(refs).toMatchObject({ refs: { threadsMatchingDisk: ['kept'] } });
+      expect(parser.getBlobContent).toHaveBeenCalledTimes(2);
+      expect(output).toContain('@test.js#L2-3\nKept');
+      expect(output).toContain('\ntest.js:L1\nMoved');
+      expect(output).toContain('\ntest.js:L2\nNo snapshot');
+    });
+
+    it('GET /api/comment-location-refs reads the refs of the selected review', async () => {
+      const parser = parserInstances.at(-1);
+      const response = await fetch(
+        `http://localhost:${port}/api/comment-location-refs?base=def4567&target=abc1234`,
+      );
+
+      expect(await response.json()).toEqual({
+        refs: {
+          oldCommit: 'def4567',
+          newCommit: 'abc1234',
+          pathsChangedOnDisk: [],
+          renamedFrom: {},
+        },
+      });
+      expect(parser.readCommentLocationRefs).toHaveBeenLastCalledWith(
+        expect.objectContaining({ baseCommitish: 'def4567', targetCommitish: 'abc1234' }),
+      );
     });
 
     it('POST /api/comment-imports accepts valid comment imports', async () => {
@@ -1116,7 +1217,7 @@ describe('Server Integration Tests', () => {
       const outputResponse = await fetch(`http://localhost:${port}/api/comments-output`);
       const output = await outputResponse.text();
 
-      expect(output).toContain('src/example.ts:L42');
+      expect(output).toContain('@src/example.ts#L42');
       expect(output).toContain('Merged server-side comment');
     });
 
@@ -1426,6 +1527,27 @@ describe('Server Integration Tests', () => {
       expect(response.ok).toBe(true);
       expect(data).toHaveProperty('openInEditorAvailable', false);
       expect(data).toHaveProperty('symbolSearchAvailable', false);
+    });
+
+    it('writes plain locations for a stdin diff, which has no commits or files to point at', async () => {
+      const stdinServer = await startServer({
+        stdinDiff: 'diff --git a/stdin-test.js b/stdin-test.js',
+        preferredPort: 9037,
+      });
+      servers.push(stdinServer.server);
+      const base = `http://localhost:${stdinServer.port}`;
+      await fetch(`${base}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comments: [{ file: 'stdin-test.js', line: 3, body: 'Body' }] }),
+      });
+
+      expect(await (await fetch(`${base}/api/comment-location-refs`)).json()).toEqual({
+        refs: null,
+      });
+      expect(await (await fetch(`${base}/api/comments-output`)).text()).toContain(
+        '\nstdin-test.js:L3\nBody',
+      );
     });
 
     it('GET /api/generated-status/* returns 400 for stdin diff', async () => {
@@ -2092,7 +2214,7 @@ describe('Server Integration Tests', () => {
       const output = await (
         await fetch(`http://localhost:${port}/api/comments-output${PINNED}`)
       ).text();
-      expect(output).toContain('test.js:L3-L4 [승인됨]');
+      expect(output).toContain('@test.js#L3-4 [승인됨]');
     });
 
     it('answers an existing comment with the edit and approves it', async () => {

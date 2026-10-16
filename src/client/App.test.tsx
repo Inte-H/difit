@@ -244,8 +244,48 @@ describe('App Component - Clear Comments Functionality', () => {
             baseMode: 'merge-base',
             resolvedBaseCommitish: 'abcdef1',
             resolvedTargetCommitish: '1234567',
+            locationRefs: null,
           },
           mockComments,
+        );
+      });
+    });
+
+    it('passes the location refs read from the server to Copy All Prompt', async () => {
+      mockComments = [
+        createMockThread({ id: 'test-1', filePath: 'test.ts', line: 10, body: 'Test comment' }),
+      ];
+      const refs = {
+        oldCommit: 'abcdef1',
+        newCommit: '1234567',
+        pathsChangedOnDisk: ['test.ts'],
+        renamedFrom: {},
+      };
+      const diffResponse = {
+        ...mockDiffResponse,
+        baseCommitish: 'abcdef1',
+        targetCommitish: '1234567',
+        requestedBaseCommitish: 'main',
+        requestedTargetCommitish: 'feature/docs-update',
+      };
+      vi.mocked(global.fetch).mockImplementation((input) => {
+        const url = String(input);
+        const body = url.startsWith('/api/comment-location-refs')
+          ? { refs }
+          : url.startsWith('/api/revisions')
+            ? { specialOptions: [], branches: [], commits: [] }
+            : diffResponse;
+        return Promise.resolve({ ok: true, json: async () => body } as Response);
+      });
+
+      renderApp();
+      const copyAll = await screen.findByText(/Copy All Prompt/);
+
+      await waitFor(() => {
+        fireEvent.click(copyAll);
+        expect(mockGenerateAllCommentsPrompt).toHaveBeenCalledWith(
+          expect.objectContaining({ locationRefs: refs }),
+          expect.anything(),
         );
       });
     });

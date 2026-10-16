@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 
 import type {
+  CommentLocationRefs,
   CommentThread,
   DirectEditRequest,
   ReviewDecision,
@@ -37,6 +38,7 @@ export interface FixupOverlayState {
   openReviewAt: (commit: string) => void;
   // Null when this review cannot take edits.
   directEdit: DirectEditControls | null;
+  readLocationRefs: () => CommentLocationRefs | null;
 }
 
 export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
@@ -48,6 +50,7 @@ export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
   undoApproval: () => {},
   openReviewAt: () => {},
   directEdit: null,
+  readLocationRefs: () => null,
 };
 
 const FixupOverlayContext = createContext<FixupOverlayState>(EMPTY_FIXUP_OVERLAY);

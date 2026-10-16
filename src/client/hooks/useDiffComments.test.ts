@@ -1,10 +1,17 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import type { DiffContextStorage } from '../../types/diff';
+import type { CommentLocationRefs, DiffContextStorage } from '../../types/diff';
 import { storageService } from '../services/StorageService';
 
 import { useDiffComments } from './useDiffComments';
+
+const UNCHANGED_ON_DISK: CommentLocationRefs = {
+  oldCommit: 'abc1234',
+  newCommit: 'def5678',
+  pathsChangedOnDisk: [],
+  renamedFrom: {},
+};
 
 // Mock StorageService
 let mockDiffContextData: DiffContextStorage | null = null;
@@ -59,7 +66,7 @@ describe('useDiffComments', () => {
 
   describe('generatePrompt', () => {
     it('should format single line comment correctly', () => {
-      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const { result } = renderHook(() => useDiffComments('abc1234', 'def5678', 'abc123'));
 
       act(() => {
         result.current.addComment({
@@ -72,13 +79,13 @@ describe('useDiffComments', () => {
 
       const comment = result.current.comments[0];
       expect(comment).toBeDefined();
-      const prompt = result.current.generatePrompt(comment!.id);
+      const prompt = result.current.generatePrompt(comment!.id, UNCHANGED_ON_DISK);
 
-      expect(prompt).toBe('src/client/components/CommentForm.tsx:L42\nコメント内容');
+      expect(prompt).toBe('@src/client/components/CommentForm.tsx#L42\nコメント内容');
     });
 
     it('should format multi-line comment correctly', () => {
-      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const { result } = renderHook(() => useDiffComments('abc1234', 'def5678', 'abc123'));
 
       act(() => {
         result.current.addComment({
@@ -91,9 +98,26 @@ describe('useDiffComments', () => {
 
       const comment = result.current.comments[0];
       expect(comment).toBeDefined();
-      const prompt = result.current.generatePrompt(comment!.id);
+      const prompt = result.current.generatePrompt(comment!.id, UNCHANGED_ON_DISK);
 
-      expect(prompt).toBe('src/client/components/CommentForm.tsx:L36-L39\n複数行');
+      expect(prompt).toBe('@src/client/components/CommentForm.tsx#L36-39\n複数行');
+    });
+
+    it('names the commit the comment was written on until the refs are known', () => {
+      const { result } = renderHook(() => useDiffComments('abc1234', 'def5678', 'abc123'));
+
+      act(() => {
+        result.current.addComment({
+          filePath: 'src/client/components/CommentForm.tsx',
+          body: 'コメント内容',
+          side: 'new',
+          line: 42,
+        });
+      });
+
+      expect(result.current.generatePrompt(result.current.comments[0]!.id)).toBe(
+        'def5678:src/client/components/CommentForm.tsx:L42\nコメント内容',
+      );
     });
 
     it('should return empty string for non-existent comment', () => {
@@ -113,7 +137,7 @@ describe('useDiffComments', () => {
     });
 
     it('should format multiple comments with separator', () => {
-      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const { result } = renderHook(() => useDiffComments('abc1234', 'def5678', 'abc123'));
 
       act(() => {
         result.current.addComment({
@@ -139,6 +163,7 @@ describe('useDiffComments', () => {
         baseMode: 'merge-base',
         resolvedBaseCommitish: 'abc1234',
         resolvedTargetCommitish: 'def5678',
+        locationRefs: UNCHANGED_ON_DISK,
       });
 
       // Check if comments are in the correct order
@@ -148,17 +173,17 @@ describe('useDiffComments', () => {
 
       const expected = `diff main...feature-branch (abc1234...def5678)
 =====
-src/client/components/CommentForm.tsx:L36-L39
+@src/client/components/CommentForm.tsx#L36-39
 複数行
 =====
-src/client/components/CommentForm.tsx:L42
+@src/client/components/CommentForm.tsx#L42
 コメント内容`;
 
       expect(prompt).toBe(expected);
     });
 
     it('should handle comments from different files', () => {
-      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const { result } = renderHook(() => useDiffComments('abc1234', 'def5678', 'abc123'));
 
       act(() => {
         result.current.addComment({
@@ -178,24 +203,26 @@ src/client/components/CommentForm.tsx:L42
         });
       });
 
-      const prompt = result.current.generateAllCommentsPrompt();
+      const prompt = result.current.generateAllCommentsPrompt({
+        locationRefs: { ...UNCHANGED_ON_DISK, pathsChangedOnDisk: ['src/server/server.ts'] },
+      });
 
       // Check if comments are in the correct order
       expect(result.current.comments).toHaveLength(2);
       expect(result.current.comments[0]?.filePath).toBe('src/client/App.tsx');
       expect(result.current.comments[1]?.filePath).toBe('src/server/server.ts');
 
-      const expected = `src/client/App.tsx:L10
+      const expected = `@src/client/App.tsx#L10
 App comment
 =====
-src/server/server.ts:L20-L25
+def5678:src/server/server.ts:L20-L25
 Server comment`;
 
       expect(prompt).toBe(expected);
     });
 
     it('should include ORIGINAL section for suggestion comments with code snapshot', () => {
-      const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+      const { result } = renderHook(() => useDiffComments('abc1234', 'def5678', 'abc123'));
 
       act(() => {
         result.current.addComment({
@@ -214,7 +241,7 @@ const next = true;
 
       const prompt = result.current.generateAllCommentsPrompt();
 
-      expect(prompt).toContain('src/client/components/Button.tsx:L12');
+      expect(prompt).toContain('def5678:src/client/components/Button.tsx:L12');
       expect(prompt).toContain('ORIGINAL:');
       expect(prompt).toContain('const prev = false;');
       expect(prompt).toContain('SUGGESTED:');

@@ -11,7 +11,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
 import { type DiffMode } from '../types/watch.js';
-import { formatCommentsOutput } from '../utils/commentFormatting.js';
+import { anchorMatchesAtItsLine } from '../utils/anchorRelocation.js';
+import { formatCommentsOutput, UNKNOWN_FILE_PATH } from '../utils/commentFormatting.js';
 import {
   mergeCommentImports,
   mergeCommentThreads,
@@ -50,6 +51,8 @@ import {
   type ChangeKindsResponse,
   type CommentImport,
   type Comment,
+  type CommentLocationRefs,
+  type CommentLocationRefsResponse,
   type CommentThread,
   type DiffCommentThread,
   type DiffResponse,
@@ -731,7 +734,9 @@ export async function startServer(options: ServerOptions): Promise<{
         ? comment.id
         : createHash('sha256').update(JSON.stringify(comment)).digest('hex').slice(0, 12);
     const filePath =
-      typeof comment.file === 'string' && comment.file.length > 0 ? comment.file : '<unknown file>';
+      typeof comment.file === 'string' && comment.file.length > 0
+        ? comment.file
+        : UNKNOWN_FILE_PATH;
 
     return {
       id: threadId,
@@ -772,6 +777,7 @@ export async function startServer(options: ServerOptions): Promise<{
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
       codeContent: thread.codeSnapshot?.content,
+      anchorCommit: thread.codeSnapshot?.commit,
       messages: thread.messages,
     };
   }
@@ -812,7 +818,7 @@ export async function startServer(options: ServerOptions): Promise<{
     return {
       id: threadId,
       filePath:
-        typeof thread.file === 'string' && thread.file.length > 0 ? thread.file : '<unknown file>',
+        typeof thread.file === 'string' && thread.file.length > 0 ? thread.file : UNKNOWN_FILE_PATH,
       createdAt: thread.createdAt || firstMessage?.createdAt || now,
       updatedAt: thread.updatedAt || lastMessage?.updatedAt || thread.createdAt || now,
       position: {
@@ -1333,14 +1339,75 @@ export async function startServer(options: ServerOptions): Promise<{
       (thread) => !isThreadResolved(thread.id, session.decisions),
     );
     if (threads.length === 0) return '';
-    const reviewStates = await threadReviewStatesFor(selection);
-    return formatCommentsOutput(threads.map(toCommentThread), reviewStates);
+    const [reviewStates, locationRefs] = await Promise.all([
+      threadReviewStatesFor(selection),
+      commentLocationRefsFor(selection).catch((error: unknown) => {
+        console.error('Error reading comment locations:', error);
+        return null;
+      }),
+    ]);
+    return formatCommentsOutput(threads.map(toCommentThread), reviewStates, locationRefs);
+  }
+
+  async function commentLocationRefsFor(
+    selection: DiffSelection,
+  ): Promise<CommentLocationRefs | null> {
+    if (options.stdinDiff) return null;
+    const refs = await parser.readCommentLocationRefs(selection);
+    const { targetCommitish } = selection;
+    if (targetCommitish !== '.' && targetCommitish !== 'working') return refs;
+    return { ...refs, threadsMatchingDisk: await threadsMatchingDisk(selection) };
+  }
+
+  async function threadsMatchingDisk(selection: DiffSelection): Promise<string[]> {
+    const fileLines = new Map<string, Promise<Map<number, string> | null>>();
+    const linesOf = (path: string) => {
+      let lines = fileLines.get(path);
+      if (!lines) {
+        lines = parser.getBlobContent(path, 'working').then(
+          (content) =>
+            new Map(
+              content
+                .toString('utf8')
+                .split('\n')
+                .map((line, index) => [index + 1, line.replace(/\r$/, '')]),
+            ),
+          () => null,
+        );
+        fileLines.set(path, lines);
+      }
+      return lines;
+    };
+    const matching = await Promise.all(
+      getOrCreateCommentSession(selection).threads.map(async (thread) => {
+        const content = thread.codeSnapshot?.content;
+        if (thread.position.side !== 'new' || !content) return null;
+        const lines = await linesOf(thread.filePath);
+        return lines && anchorMatchesAtItsLine({ line: thread.position.line, content }, lines)
+          ? thread.id
+          : null;
+      }),
+    );
+    return matching.filter((id): id is string => id !== null);
   }
 
   app.get('/api/comments-output', async (req, res) => {
     const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
     res.type('text/plain');
     res.send(await renderCommentsOutput(selection));
+  });
+
+  app.get('/api/comment-location-refs', async (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    try {
+      const refs = await commentLocationRefsFor(selection);
+      res.json({ refs } satisfies CommentLocationRefsResponse);
+    } catch (error) {
+      console.error('Error reading comment locations:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to read comment locations',
+      });
+    }
   });
 
   app.get('/api/user-settings', async (_req, res) => {

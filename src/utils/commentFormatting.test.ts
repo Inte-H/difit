@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import type { Comment, CommentThread } from '../types/diff';
+import type { Comment, CommentLocationRefs, CommentThread } from '../types/diff';
 
 import {
   formatCommentPrompt,
@@ -9,6 +9,13 @@ import {
   formatAllCommentThreadsPrompt,
   formatCommentsOutput,
 } from './commentFormatting';
+
+const COMMIT_REFS: CommentLocationRefs = {
+  oldCommit: 'abcdef1',
+  newCommit: '1234567',
+  pathsChangedOnDisk: [],
+  renamedFrom: {},
+};
 
 describe('commentFormatting', () => {
   describe('formatCommentPrompt', () => {
@@ -413,6 +420,123 @@ Related entries are below.`);
         'This is a complex issue that\nspans multiple lines\nand needs attention',
       );
       expect(result).toContain('Total comments: 1');
+    });
+
+    it('should write the locations from the refs it is given', () => {
+      const comments: Comment[] = [
+        { id: '1', file: 'src/App.tsx', line: 10, body: 'Same', timestamp: '2024-01-01' },
+        { id: '2', file: 'src/edited.ts', line: [3, 4], body: 'Edited', timestamp: '2024-01-01' },
+      ];
+      const result = formatCommentsOutput(comments, undefined, {
+        ...COMMIT_REFS,
+        pathsChangedOnDisk: ['src/edited.ts'],
+      });
+
+      expect(result).toContain('@src/App.tsx#L10\nSame');
+      expect(result).toContain('1234567:src/edited.ts:L3-L4\nEdited');
+    });
+  });
+
+  describe('location line', () => {
+    const prompt = (
+      file: string,
+      line: number | [number, number],
+      side: 'old' | 'new',
+      refs: CommentLocationRefs | null,
+      lineCommit?: string,
+      threadId?: string,
+    ) =>
+      formatCommentPrompt(file, line, 'Body', undefined, side, {
+        refs,
+        lineCommit,
+        threadId,
+      }).split('\n')[0];
+
+    it('mentions the lines when the file on disk still matches the reviewed side', () => {
+      expect(prompt('src/a.ts', 42, 'new', COMMIT_REFS)).toBe('@src/a.ts#L42');
+      expect(prompt('src/a.ts', [42, 48], 'new', COMMIT_REFS)).toBe('@src/a.ts#L42-48');
+    });
+
+    it('names the target commit when the file on disk has changed since', () => {
+      const refs = { ...COMMIT_REFS, pathsChangedOnDisk: ['src/a.ts'] };
+      expect(prompt('src/a.ts', 42, 'new', refs)).toBe('1234567:src/a.ts:L42');
+      expect(prompt('src/a.ts', [42, 48], 'new', refs)).toBe('1234567:src/a.ts:L42-L48');
+      expect(prompt('src/b.ts', 42, 'new', refs)).toBe('@src/b.ts#L42');
+    });
+
+    it('names the base commit for old-side lines, at the path the file had there', () => {
+      expect(prompt('src/a.ts', 7, 'old', COMMIT_REFS)).toBe('abcdef1:src/a.ts:L7 (old)');
+      expect(prompt('src/a.ts', [7, 9], 'old', COMMIT_REFS)).toBe('abcdef1:src/a.ts:L7-L9 (old)');
+      const renamed = { ...COMMIT_REFS, renamedFrom: { 'src/new.ts': 'src/old.ts' } };
+      expect(prompt('src/new.ts', 7, 'old', renamed)).toBe('abcdef1:src/old.ts:L7 (old)');
+      expect(prompt('src/new.ts', 8, 'new', renamed)).toBe('@src/new.ts#L8');
+    });
+
+    it('mentions a working-tree thread only while its saved lines are still on disk', () => {
+      const working: CommentLocationRefs = {
+        pathsChangedOnDisk: [],
+        renamedFrom: {},
+        threadsMatchingDisk: ['kept'],
+      };
+      expect(prompt('src/a.ts', [8, 9], 'new', working, undefined, 'kept')).toBe('@src/a.ts#L8-9');
+      expect(prompt('src/a.ts', 8, 'new', working, undefined, 'moved')).toBe('src/a.ts:L8');
+      expect(prompt('src/a.ts', 8, 'new', working)).toBe('src/a.ts:L8');
+    });
+
+    it('falls back to the plain location when the side was not read from a commit', () => {
+      // A review of the index against the working tree: the old side is the index.
+      const working: CommentLocationRefs = {
+        pathsChangedOnDisk: [],
+        renamedFrom: {},
+        threadsMatchingDisk: [],
+      };
+      expect(prompt('src/a.ts', 7, 'old', working)).toBe('src/a.ts:L7 (old)');
+
+      const staged: CommentLocationRefs = {
+        oldCommit: 'abcdef1',
+        pathsChangedOnDisk: ['src/a.ts'],
+        renamedFrom: {},
+      };
+      expect(prompt('src/a.ts', [8, 9], 'new', staged)).toBe('src/a.ts:L8-L9');
+    });
+
+    it('falls back to the plain location when there are no refs', () => {
+      expect(prompt('src/a.ts', 42, 'new', null)).toBe('src/a.ts:L42');
+      expect(prompt('src/a.ts', [42, 48], 'new', null)).toBe('src/a.ts:L42-L48');
+      expect(prompt('src/a.ts', 7, 'old', null)).toBe('src/a.ts:L7 (old)');
+    });
+
+    it('does not mention a path a mention cannot hold', () => {
+      expect(prompt('docs/my notes.md', 3, 'new', COMMIT_REFS)).toBe('1234567:docs/my notes.md:L3');
+      expect(prompt('src/#private.ts', 3, 'new', COMMIT_REFS)).toBe('1234567:src/#private.ts:L3');
+      const staged: CommentLocationRefs = { pathsChangedOnDisk: [], renamedFrom: {} };
+      expect(prompt('docs/my notes.md', 3, 'new', staged)).toBe('docs/my notes.md:L3');
+    });
+
+    it('names the commit the line numbers were counted in when it is not the target', () => {
+      expect(prompt('src/a.ts', 42, 'new', COMMIT_REFS, '9999999')).toBe('9999999:src/a.ts:L42');
+      expect(prompt('src/a.ts', 42, 'new', COMMIT_REFS, '1234567abcdef')).toBe('@src/a.ts#L42');
+      expect(prompt('src/a.ts', 7, 'old', COMMIT_REFS, '9999999')).toBe('src/a.ts:L7 (old)');
+      expect(prompt('src/a.ts', 42, 'new', null, '9999999')).toBe('9999999:src/a.ts:L42');
+    });
+
+    it('reads a thread prompt line in the thread anchor commit', () => {
+      const thread: CommentThread = {
+        id: 't',
+        file: 'src/a.ts',
+        line: [3, 4],
+        side: 'new',
+        anchorCommit: '9999999',
+        createdAt: '2024-01-01',
+        updatedAt: '2024-01-01',
+        messages: [{ id: 'm', body: 'Body', createdAt: '2024-01-01', updatedAt: '2024-01-01' }],
+      };
+      expect(formatCommentThreadPrompt(thread, 'awaiting-fix', COMMIT_REFS)).toBe(
+        '9999999:src/a.ts:L3-L4 [수정 중]\nBody',
+      );
+      expect(
+        formatCommentThreadPrompt({ ...thread, anchorCommit: '1234567' }, 'approved', COMMIT_REFS),
+      ).toBe('@src/a.ts#L3-4 [승인됨]\nBody');
     });
   });
 });

@@ -3,6 +3,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   type BaseMode,
   type CommentImport,
+  type CommentLocationRefs,
   type CommentThread,
   type DiffContextStorage,
   type DiffCommentThread,
@@ -61,7 +62,7 @@ interface UseDiffCommentsReturn {
   updateMessage: (threadId: string, messageId: string, newBody: string) => void;
   clearAllComments: (options?: { resetAppliedCommentImportIds?: boolean }) => void;
   applyCommentImports: (imports: CommentImport[], importId: string) => string[];
-  generatePrompt: (commentId: string) => string;
+  generatePrompt: (commentId: string, locationRefs?: CommentLocationRefs | null) => string;
   generateAllCommentsPrompt: (
     context?: CommentPromptDiffContext,
     only?: DiffCommentThread[],
@@ -80,6 +81,7 @@ function normalizeThread(thread: DiffCommentThread): CommentThread {
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     codeContent: thread.codeSnapshot?.content,
+    anchorCommit: thread.codeSnapshot?.commit,
     messages: thread.messages,
   };
 }
@@ -525,18 +527,18 @@ export function useDiffComments(
   );
 
   const generateThreadPrompt = useCallback(
-    (threadId: string): string => {
+    (threadId: string, locationRefs?: CommentLocationRefs | null): string => {
       const thread = threads.find((item) => item.id === threadId);
       if (!thread) return '';
 
-      return formatCommentThreadPrompt(normalizeThread(thread));
+      return formatCommentThreadPrompt(normalizeThread(thread), undefined, locationRefs);
     },
     [threads],
   );
 
   const generatePrompt = useCallback(
-    (commentId: string): string => {
-      return generateThreadPrompt(commentId);
+    (commentId: string, locationRefs?: CommentLocationRefs | null): string => {
+      return generateThreadPrompt(commentId, locationRefs);
     },
     [generateThreadPrompt],
   );

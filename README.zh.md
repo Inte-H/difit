@@ -165,16 +165,25 @@ difit 包含一个审查评论系统，便于向 AI 编码代理提供反馈：
 ### 评论提示格式
 
 ```sh
-src/components/Button.tsx:L42   # 此行自动添加
+@src/components/Button.tsx#L42   # 此行自动添加
 使此变量名更具描述性
 ```
 
 对于范围选择：
 
 ```sh
-src/components/Button.tsx:L42-L48   # 此行自动添加
+@src/components/Button.tsx#L42-48   # 此行自动添加
 此部分是不必要的
 ```
+
+位置行是 Claude Code 的文件提及（mention），粘贴到 Claude Code 后会附上这些行。提及附上的是磁盘上当前的文件，因此只在文件与所审查的代码一致时才这样写。如果审查后文件已改动，或正在审查较早的提交，则在前面加上提交，以便用 `git show abc1234:src/components/Button.tsx` 读取；被删除的行加上比较基准提交。
+
+```sh
+abc1234:src/components/Button.tsx:L42-L48     # 审查后文件已改动，或正在审查较早的提交
+9f8e7d6:src/components/Button.tsx:L42 (old)   # 被删除的行
+```
+
+没有可加的提交时（审查暂存区但仍有未暂存的修改、用 `difit .` 或 `difit working` 审查时评论过的行已改动、`difit working` 中被删除的行、来自 stdin 或 `--pr` 的 diff），仍写成 `src/components/Button.tsx:L42`。包含空格或 `#` 的路径不会写成提及。
 
 ## 🤖 从代理调用
 

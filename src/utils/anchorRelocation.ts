@@ -26,6 +26,24 @@ export function noVisibleLineContradictsAnchor(
   });
 }
 
+const matchesAt = (expected: string[], lines: ReadonlyMap<number, string>, start: number) =>
+  expected.every((content, offset) => {
+    const current = lines.get(start + offset);
+    return current !== undefined && trimTrailingWhitespace(current) === content;
+  });
+
+export function anchorMatchesAtItsLine(
+  anchor: ThreadAnchor,
+  lines: ReadonlyMap<number, string>,
+): boolean {
+  const [start, end] =
+    typeof anchor.line === 'number'
+      ? [anchor.line, anchor.line]
+      : [anchor.line.start, anchor.line.end];
+  const expected = splitContent(anchor.content);
+  return expected.length === end - start + 1 && matchesAt(expected, lines, start);
+}
+
 // Moves only to an exact match that occurs exactly once; never fits by surrounding context.
 // At the anchor's own commit the stored line numbers are exact, so the stored position wins
 // unless a visible line contradicts it.
@@ -39,13 +57,7 @@ export function relocateAnchor(
   }
 
   const expected = splitContent(anchor.content);
-  const matchesAt = (start: number) =>
-    expected.every((content, offset) => {
-      const current = lines.get(start + offset);
-      return current !== undefined && trimTrailingWhitespace(current) === content;
-    });
-
-  const [start, ...others] = [...lines.keys()].filter(matchesAt);
+  const [start, ...others] = [...lines.keys()].filter((key) => matchesAt(expected, lines, key));
   if (start === undefined) return { kind: 'stale', reason: 'missing' };
   if (others.length > 0) return { kind: 'stale', reason: 'ambiguous' };
 

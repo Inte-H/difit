@@ -9,6 +9,7 @@ import {
   createCommitRangeString,
 } from '../cli/utils.js';
 import {
+  type CommentLocationRefs,
   type DiffChunk,
   type DiffFile,
   type DiffLine,
@@ -45,6 +46,24 @@ function patchIdOf(sha: string, files: ThreadFixup['files']): string {
     }
   }
   return changedLines > 0 ? hash.digest('hex') : sha;
+}
+
+// Reads `git diff --name-status -z`, where a rename or copy is followed by two paths.
+function parseRenames(output: string): Record<string, string> {
+  const fields = output.split('\0');
+  const renamedFrom: Record<string, string> = {};
+  for (let index = 0; index < fields.length; ) {
+    const status = fields[index] ?? '';
+    if (status.startsWith('R') || status.startsWith('C')) {
+      const oldPath = fields[index + 1];
+      const newPath = fields[index + 2];
+      if (status.startsWith('R') && oldPath && newPath) renamedFrom[newPath] = oldPath;
+      index += 3;
+    } else {
+      index += 2;
+    }
+  }
+  return renamedFrom;
 }
 
 const FIXUP_LOG_FORMAT = `--format=%x00%H%x00%P%x00%s%x00%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)%x00`;
@@ -837,6 +856,48 @@ export class GitDiffParser {
     const baseHash = (await this.git.revparse([await this.resolveBaseCommitish(selection)])).trim();
     if (targetCommitish === 'staged' || targetCommitish === '.') return [baseHash, targetCommitish];
     return [baseHash, (await this.git.revparse([targetCommitish])).trim()];
+  }
+
+  async readCommentLocationRefs(selection: DiffSelection): Promise<CommentLocationRefs> {
+    const { targetCommitish, baseCommitish } = selection;
+    const validation = validateDiffArguments(targetCommitish, baseCommitish);
+    if (!validation.valid) throw new Error(validation.error);
+    if (targetCommitish === 'working') {
+      return { pathsChangedOnDisk: [], renamedFrom: {} };
+    }
+
+    const commitOf = async (ref: string) =>
+      shortHash((await this.git.revparse(['--verify', `${ref}^{commit}`])).trim());
+    const oldCommit = await commitOf(await this.resolveBaseCommitish(selection));
+    const newCommit = isCommitTarget(targetCommitish) ? await commitOf(targetCommitish) : undefined;
+    // The same comparison parseDiff makes, so renames are found the way the diff shows them.
+    const diffArgs =
+      newCommit !== undefined
+        ? [oldCommit, newCommit]
+        : targetCommitish === 'staged'
+          ? ['--cached', oldCommit]
+          : [oldCommit];
+    const [renames, changedOnDisk] = await Promise.all([
+      this.git.raw(['diff', '--name-status', '-z', '--no-ext-diff', ...diffArgs, '--']),
+      targetCommitish === '.'
+        ? ''
+        : this.git.raw([
+            'diff',
+            '--name-only',
+            '-z',
+            '--no-renames',
+            '--no-ext-diff',
+            ...(newCommit !== undefined ? [newCommit] : []),
+            '--',
+          ]),
+    ]);
+
+    return {
+      oldCommit,
+      ...(newCommit !== undefined ? { newCommit } : {}),
+      pathsChangedOnDisk: changedOnDisk.split('\0').filter(Boolean),
+      renamedFrom: parseRenames(renames),
+    };
   }
 
   async classifyDiffFile<File extends ClassifiableFile>(

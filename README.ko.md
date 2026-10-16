@@ -165,16 +165,25 @@ difit은 AI 코딩 에이전트에 피드백을 쉽게 제공할 수 있는 리�
 ### 코멘트 프롬프트 형식
 
 ```sh
-src/components/Button.tsx:L42   # 이 줄은 자동으로 추가됩니다
+@src/components/Button.tsx#L42   # 이 줄은 자동으로 추가됩니다
 이 변수 이름을 더 설명적으로 만드세요
 ```
 
 범위 선택의 경우:
 
 ```sh
-src/components/Button.tsx:L42-L48   # 이 줄은 자동으로 추가됩니다
+@src/components/Button.tsx#L42-48   # 이 줄은 자동으로 추가됩니다
 이 부분은 불필요합니다
 ```
+
+위치 줄은 Claude Code의 파일 멘션이어서, Claude Code에 붙여 넣으면 그 줄들이 메시지에 함께 들어갑니다. 멘션은 지금 디스크에 있는 파일을 가져오므로, 파일이 리뷰한 코드와 같을 때만 이렇게 씁니다. 리뷰한 뒤 파일이 바뀌었거나 이전 커밋을 리뷰하고 있으면 `git show abc1234:src/components/Button.tsx`로 읽을 수 있게 커밋을 앞에 붙입니다. 지워진 줄에는 비교 기준 커밋을 붙입니다.
+
+```sh
+abc1234:src/components/Button.tsx:L42-L48     # 리뷰한 뒤 파일이 바뀌었거나, 이전 커밋을 리뷰하는 경우
+9f8e7d6:src/components/Button.tsx:L42 (old)   # 지워진 줄
+```
+
+붙일 커밋이 없으면(스테이징하지 않은 수정이 남은 채로 스테이징 영역을 리뷰할 때, `difit .`이나 `difit working`으로 리뷰하는 중에 코멘트를 단 줄이 바뀌었을 때, `difit working`에서 지워진 줄, stdin이나 `--pr`로 받은 diff) 예전처럼 `src/components/Button.tsx:L42`로 씁니다. 공백이나 `#`이 들어간 경로는 멘션으로 쓰지 않습니다.
 
 ## 🤖 에이전트에서 호출
 

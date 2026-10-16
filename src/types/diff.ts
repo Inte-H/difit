@@ -45,6 +45,24 @@ export interface DiffCommentCodeSnapshot {
   commit?: string;
 }
 
+export interface CommentLocationRefs {
+  // The commit each side was read from; absent when that side is the index or the working tree.
+  oldCommit?: string;
+  newCommit?: string;
+  // Files whose new side no longer matches the working tree.
+  pathsChangedOnDisk: string[];
+  // The old path of each renamed file, by its new path.
+  renamedFrom: Record<string, string>;
+  // Set when the new side is the working tree itself, which has no older copy to compare files
+  // against: the threads whose saved lines are still on disk where they were written.
+  threadsMatchingDisk?: string[];
+}
+
+export interface CommentLocationRefsResponse {
+  // Null when the review is not read from the repository, as with stdin.
+  refs: CommentLocationRefs | null;
+}
+
 export type BaseMode = 'direct' | 'merge-base';
 
 export interface DiffSelection {
