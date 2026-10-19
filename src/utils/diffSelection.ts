@@ -5,6 +5,8 @@ import type {
   DiffSelection,
   ReviewCommit,
   ReviewScope,
+  ReviewView,
+  ReviewViewAction,
 } from '../types/diff.js';
 
 export function normalizeBaseMode(baseMode?: BaseMode): BaseMode {
@@ -114,14 +116,87 @@ export function commitsOfView(
   return isSameView(view, review.selection) ? review.commits : commitsBetween(view, review.commits);
 }
 
+export function reviewViewShown(
+  view: DiffSelection,
+  review: Pick<ReviewScope, 'selection' | 'commits'>,
+): ReviewView | undefined {
+  if (diffSelectionsEqual(view, review.selection)) return { kind: 'all' };
+  const run = commitsBetween(view, review.commits);
+  const first = run[0];
+  const last = run.at(-1);
+  if (!first || !last) return undefined;
+  return first === last
+    ? { kind: 'commit', sha: last.sha }
+    : { kind: 'range', startSha: first.sha, endSha: last.sha };
+}
+
 // The review itself, or the diff from just before one of its commits to that or a later one.
 export function isViewOfReview(
   view: DiffSelection,
   review: Pick<ReviewScope, 'selection' | 'commits'>,
 ): boolean {
-  return (
-    diffSelectionsEqual(view, review.selection) || commitsBetween(view, review.commits).length > 0
-  );
+  return reviewViewShown(view, review) !== undefined;
+}
+
+export interface ReviewViewChoice {
+  view: ReviewView;
+  selection: DiffSelection;
+  anchor: string | null;
+}
+
+export function selectReviewView(
+  review: Pick<ReviewScope, 'requested' | 'commits'>,
+  current: Pick<ReviewViewChoice, 'view' | 'anchor'>,
+  action: ReviewViewAction,
+): ReviewViewChoice | null {
+  const { commits } = review;
+  const indexOf = (sha: string) => commits.findIndex((commit) => isSameCommit(commit.sha, sha));
+  const whole = (anchor: string | null): ReviewViewChoice => ({
+    view: { kind: 'all' },
+    selection: review.requested,
+    anchor,
+  });
+  const runOf = (from: number, to: number, anchor: string): ReviewViewChoice | null => {
+    const first = commits[Math.min(from, to)];
+    const last = commits[Math.max(from, to)];
+    if (!first || !last) return null;
+    if (first === commits[0] && last === commits.at(-1)) return whole(anchor);
+    return {
+      view:
+        first === last
+          ? { kind: 'commit', sha: first.sha }
+          : { kind: 'range', startSha: first.sha, endSha: last.sha },
+      selection: createDiffSelection(first.parentSha, last.sha),
+      anchor,
+    };
+  };
+  const commitAt = (index: number) => {
+    const commit = commits[index];
+    return commit ? runOf(index, index, commit.sha) : null;
+  };
+  const { view } = current;
+
+  switch (action.kind) {
+    case 'all':
+      return whole(null);
+    case 'click':
+      return commitAt(indexOf(action.sha));
+    case 'shift-click': {
+      const anchor =
+        current.anchor ??
+        (view.kind === 'commit' ? view.sha : view.kind === 'range' ? view.startSha : null);
+      if (anchor === null) return commitAt(indexOf(action.sha));
+      return runOf(indexOf(anchor), indexOf(action.sha), anchor);
+    }
+    case 'drop':
+      return runOf(indexOf(action.fromSha), indexOf(action.toSha), action.fromSha);
+    case 'next':
+      if (view.kind === 'all') return commitAt(0);
+      return commitAt(indexOf(view.kind === 'commit' ? view.sha : view.endSha) + 1);
+    case 'previous':
+      if (view.kind === 'all') return commitAt(commits.length - 1);
+      return commitAt(indexOf(view.kind === 'commit' ? view.sha : view.startSha) - 1);
+  }
 }
 
 export interface ViewBinding {
