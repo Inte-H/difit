@@ -66,6 +66,20 @@ export interface ReviewScope {
   commits: ReviewCommit[];
 }
 
+// Shas are the full ones of the review's commits.
+export type ReviewView =
+  | { kind: 'all' }
+  | { kind: 'commit'; sha: string }
+  | { kind: 'range'; startSha: string; endSha: string };
+
+export type ReviewViewAction =
+  | { kind: 'click'; sha: string }
+  | { kind: 'shift-click'; sha: string }
+  | { kind: 'drop'; fromSha: string; toSha: string }
+  | { kind: 'previous' }
+  | { kind: 'next' }
+  | { kind: 'all' };
+
 export interface DiffResponse {
   commit: string;
   files: DiffFile[];

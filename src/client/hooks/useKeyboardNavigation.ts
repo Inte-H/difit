@@ -34,6 +34,8 @@ export function useKeyboardNavigation({
   onDeleteAllComments,
   onShowCommentsList,
   onRefresh,
+  onPreviousCommit,
+  onNextCommit,
   getHoveredFileIndex,
 }: UseKeyboardNavigationProps): UseKeyboardNavigationReturn {
   const [cursor, setCursor] = useState<CursorPosition | null>(null);
@@ -402,6 +404,25 @@ export function useKeyboardNavigation({
     },
     { ...hotkeyOptions, useKey: true },
     [files, viewMode, scrollToElement],
+  );
+
+  useHotkeys(
+    '<',
+    () => onPreviousCommit?.(),
+    { ...hotkeyOptions, useKey: true, enabled: onPreviousCommit !== undefined },
+    [onPreviousCommit],
+  );
+  useHotkeys(
+    '>',
+    () => onNextCommit?.(),
+    {
+      ...hotkeyOptions,
+      useKey: true,
+      // Without this, '>' is taken as a sequence separator and never fires.
+      sequenceSplitKey: '|',
+      enabled: onNextCommit !== undefined,
+    },
+    [onNextCommit],
   );
 
   // Side switching (split mode only)

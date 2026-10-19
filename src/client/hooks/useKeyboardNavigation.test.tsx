@@ -581,6 +581,69 @@ describe('useKeyboardNavigation', () => {
     });
   });
 
+  describe('Commit Navigation (</>)', () => {
+    const renderWithCommits = (handlers: {
+      onPreviousCommit?: () => void;
+      onNextCommit?: () => void;
+    }) =>
+      renderHook(
+        () =>
+          useKeyboardNavigation({
+            files: mockFiles,
+            comments: [],
+            viewMode: 'unified',
+            onToggleReviewed: vi.fn(),
+            reviewedFiles: new Set<string>(),
+            ...handlers,
+          }),
+        { wrapper },
+      );
+
+    it('calls onPreviousCommit on the less-than key', async () => {
+      const user = userEvent.setup();
+      const onPreviousCommit = vi.fn();
+      const onNextCommit = vi.fn();
+      renderWithCommits({ onPreviousCommit, onNextCommit });
+
+      await user.keyboard('{Shift>}<{/Shift}');
+
+      expect(onPreviousCommit).toHaveBeenCalledTimes(1);
+      expect(onNextCommit).not.toHaveBeenCalled();
+    });
+
+    it('calls onNextCommit on the greater-than key', async () => {
+      const user = userEvent.setup();
+      const onPreviousCommit = vi.fn();
+      const onNextCommit = vi.fn();
+      renderWithCommits({ onPreviousCommit, onNextCommit });
+
+      await user.keyboard('{Shift>}>{/Shift}');
+
+      expect(onNextCommit).toHaveBeenCalledTimes(1);
+      expect(onPreviousCommit).not.toHaveBeenCalled();
+    });
+
+    it('does not move the cursor to the centre on the greater-than key', async () => {
+      const user = userEvent.setup();
+      const { result } = renderWithCommits({ onNextCommit: vi.fn() });
+
+      await user.keyboard('{Shift>}>{/Shift}');
+
+      expect(result.current.cursor).toBeNull();
+    });
+
+    it('does nothing on these keys without commit handlers', async () => {
+      const user = userEvent.setup();
+      const { result } = renderWithCommits({});
+
+      await user.keyboard('{Shift>}<{/Shift}');
+      await user.keyboard('{Shift>}>{/Shift}');
+
+      expect(result.current.cursor).toBeNull();
+      expect(result.current.isHelpOpen).toBe(false);
+    });
+  });
+
   describe('Help Modal (?)', () => {
     it('should toggle help modal with ? key', async () => {
       const user = userEvent.setup();

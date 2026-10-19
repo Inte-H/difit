@@ -13,6 +13,8 @@ import {
   type LineNumber,
   type CommentThread,
   type RevisionsResponse,
+  type ReviewView,
+  type ReviewViewAction,
 } from '../types/diff';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
 import { mergeCommentThreads } from '../utils/commentImports';
@@ -25,7 +27,8 @@ import {
   isCommitHash,
   madeViewElsewhere,
   normalizeBaseMode,
-  reviewCommitViewed,
+  reviewViewShown,
+  selectReviewView,
   selectionAtCommit,
 } from '../utils/diffSelection';
 import {
@@ -40,7 +43,7 @@ import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
-import { CommitList, type ShownPart } from './components/CommitList';
+import { CommitList } from './components/CommitList';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
@@ -225,18 +228,26 @@ function App() {
     review !== undefined &&
     resolvedSelection !== null &&
     !diffSelectionsEqual(resolvedSelection, review.selection);
-  const shownPart: ShownPart =
-    review && resolvedSelection && showsPartOfReview
-      ? (reviewCommitViewed(resolvedSelection, review.commits) ?? {
-          from: resolvedSelection.baseCommitish,
-          to: resolvedSelection.targetCommitish,
-        })
-      : 'all';
-  const takesComments = shownPart === 'all' || 'sha' in shownPart;
+  const shownView: ReviewView = useMemo(
+    () =>
+      (review && resolvedSelection && reviewViewShown(resolvedSelection, review)) || {
+        kind: 'all',
+      },
+    [review, resolvedSelection],
+  );
+  const [viewAnchor, setViewAnchor] = useState<{ view: ReviewView; sha: string | null } | null>(
+    null,
+  );
+  const shownAnchor =
+    viewAnchor && JSON.stringify(viewAnchor.view) === JSON.stringify(shownView)
+      ? viewAnchor.sha
+      : null;
+  const takesComments = !showsPartOfReview || shownView.kind === 'commit';
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
   const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
+  const showsCommitList = !isMobile && review !== undefined && review.commits.length > 1;
 
   // New diff-aware comment system
   const {
@@ -755,6 +766,10 @@ function App() {
       onRefresh: () => {
         reload();
       },
+      ...(showsCommitList && {
+        onPreviousCommit: () => selectView({ kind: 'previous' }),
+        onNextCommit: () => selectView({ kind: 'next' }),
+      }),
     });
 
   // Viewed button in the diff header: silently remember the toggled file as
@@ -1036,6 +1051,16 @@ function App() {
       void handleRevisionChange(nextSelection);
     },
     [handleRevisionChange, recordReviewJump, selectedRevision],
+  );
+  const selectView = useCallback(
+    (action: ReviewViewAction) => {
+      if (!review) return;
+      const chosen = selectReviewView(review, { view: shownView, anchor: shownAnchor }, action);
+      if (!chosen) return;
+      setViewAnchor({ view: chosen.view, sha: chosen.anchor });
+      showDiff(chosen.selection);
+    },
+    [review, shownView, shownAnchor, showDiff],
   );
   const openReviewAt = useCallback(
     (commit: string) => showDiff(selectionAtCommit(selectedRevision, commit)),
@@ -1739,15 +1764,8 @@ function App() {
                   : undefined,
               }}
             >
-              {!isMobile && review && review.commits.length > 1 && (
-                <CommitList
-                  commits={review.commits}
-                  shown={shownPart}
-                  onShowAll={() => showDiff(review.requested)}
-                  onShowCommit={(commit) =>
-                    showDiff(createDiffSelection(commit.parentSha, commit.sha))
-                  }
-                />
+              {showsCommitList && (
+                <CommitList review={review} shown={shownView} onSelect={selectView} />
               )}
               <div className="flex-1 overflow-y-auto">
                 <FileList

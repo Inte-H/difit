@@ -10,6 +10,8 @@ import {
   isViewOfReview,
   madeViewElsewhere,
   reviewCommitViewed,
+  reviewViewShown,
+  selectReviewView,
   selectionAtCommit,
 } from './diffSelection';
 
@@ -199,5 +201,233 @@ describe('views of a review', () => {
   it('names the commit a fix goes into by its short hash and subject', () => {
     expect(fixupCommitOf(sha('2'), commits)).toEqual({ shortSha: '2222222', subject: 'second' });
     expect(fixupCommitOf(sha('9'), commits)).toEqual({ shortSha: '9999999' });
+  });
+
+  it('names the whole review, one commit, or a run from the resolved short shas', () => {
+    expect(reviewViewShown(review.selection, review)).toEqual({ kind: 'all' });
+    expect(
+      reviewViewShown({ baseCommitish: '1111111', targetCommitish: '2222222' }, review),
+    ).toEqual({ kind: 'commit', sha: sha('2') });
+    expect(
+      reviewViewShown({ baseCommitish: '0000000', targetCommitish: '2222222' }, review),
+    ).toEqual({ kind: 'range', startSha: sha('1'), endSha: sha('2') });
+  });
+
+  it('names nothing for a pair outside the review or a merge-base pair', () => {
+    expect(
+      reviewViewShown({ baseCommitish: 'fffffff', targetCommitish: '2222222' }, review),
+    ).toBeUndefined();
+    expect(
+      reviewViewShown(
+        { baseCommitish: '1111111', targetCommitish: '2222222', baseMode: 'merge-base' },
+        review,
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe('selectReviewView', () => {
+  const sha = (digit: string) => digit.repeat(40);
+  const commits = ['1', '2', '3', '4'].map((digit) => ({
+    sha: sha(digit),
+    shortSha: digit.repeat(7),
+    parentSha: sha(String(Number(digit) - 1)),
+    subject: `commit ${digit}`,
+  }));
+  const review = {
+    selection: { baseCommitish: '0000000', targetCommitish: '4444444' },
+    requested: { baseCommitish: sha('0'), targetCommitish: sha('4') },
+    commits,
+  };
+  const all = { view: { kind: 'all' as const }, anchor: null };
+  const commitView = (digit: string, anchor: string | null = sha(digit)) => ({
+    view: { kind: 'commit' as const, sha: sha(digit) },
+    anchor,
+  });
+  const run = (start: string, end: string) => ({
+    kind: 'range' as const,
+    startSha: sha(start),
+    endSha: sha(end),
+  });
+
+  it('shows one commit on a click and anchors there', () => {
+    expect(selectReviewView(review, all, { kind: 'click', sha: sha('2') })).toEqual({
+      view: { kind: 'commit', sha: sha('2') },
+      selection: { baseCommitish: sha('1'), targetCommitish: sha('2') },
+      anchor: sha('2'),
+    });
+  });
+
+  it('shows the run from the anchor to a later commit on a Shift+click', () => {
+    expect(
+      selectReviewView(review, commitView('1'), { kind: 'shift-click', sha: sha('3') }),
+    ).toEqual({
+      view: run('1', '3'),
+      selection: { baseCommitish: sha('0'), targetCommitish: sha('3') },
+      anchor: sha('1'),
+    });
+  });
+
+  it('shows the same run when the Shift+click lands on an earlier commit', () => {
+    expect(
+      selectReviewView(review, commitView('3'), { kind: 'shift-click', sha: sha('1') }),
+    ).toEqual({
+      view: run('1', '3'),
+      selection: { baseCommitish: sha('0'), targetCommitish: sha('3') },
+      anchor: sha('3'),
+    });
+  });
+
+  it('treats a Shift+click with nothing anchored as a click', () => {
+    expect(selectReviewView(review, all, { kind: 'shift-click', sha: sha('2') })).toEqual(
+      selectReviewView(review, all, { kind: 'click', sha: sha('2') }),
+    );
+  });
+
+  it('keeps the anchor so a second Shift+click resizes the run from it', () => {
+    const first = selectReviewView(review, commitView('2'), {
+      kind: 'shift-click',
+      sha: sha('4'),
+    });
+    expect(first?.view).toEqual(run('2', '4'));
+
+    const second = selectReviewView(review, first!, { kind: 'shift-click', sha: sha('1') });
+    expect(second?.view).toEqual(run('1', '2'));
+    expect(second?.anchor).toBe(sha('2'));
+  });
+
+  it('starts a Shift+click from the shown commit or the start of a run shown without an anchor', () => {
+    expect(
+      selectReviewView(review, commitView('2', null), { kind: 'shift-click', sha: sha('3') })?.view,
+    ).toEqual(run('2', '3'));
+    expect(
+      selectReviewView(
+        review,
+        { view: run('2', '3'), anchor: null },
+        { kind: 'shift-click', sha: sha('4') },
+      )?.view,
+    ).toEqual(run('2', '4'));
+  });
+
+  it('shows one commit when a Shift+click or a drop lands on the anchor', () => {
+    expect(
+      selectReviewView(review, commitView('2'), { kind: 'shift-click', sha: sha('2') })?.view,
+    ).toEqual({ kind: 'commit', sha: sha('2') });
+    expect(
+      selectReviewView(review, all, { kind: 'drop', fromSha: sha('3'), toSha: sha('3') })?.view,
+    ).toEqual({ kind: 'commit', sha: sha('3') });
+  });
+
+  it('shows the run between the drag start and the drop in either direction', () => {
+    expect(
+      selectReviewView(review, all, { kind: 'drop', fromSha: sha('2'), toSha: sha('3') }),
+    ).toEqual({
+      view: run('2', '3'),
+      selection: { baseCommitish: sha('1'), targetCommitish: sha('3') },
+      anchor: sha('2'),
+    });
+    expect(
+      selectReviewView(review, commitView('1'), {
+        kind: 'drop',
+        fromSha: sha('3'),
+        toSha: sha('2'),
+      }),
+    ).toEqual({
+      view: run('2', '3'),
+      selection: { baseCommitish: sha('1'), targetCommitish: sha('3') },
+      anchor: sha('3'),
+    });
+  });
+
+  it('shows the whole review when the run covers every commit', () => {
+    expect(
+      selectReviewView(review, commitView('4'), { kind: 'shift-click', sha: sha('1') }),
+    ).toEqual({ view: { kind: 'all' }, selection: review.requested, anchor: sha('4') });
+    expect(
+      selectReviewView(review, all, { kind: 'drop', fromSha: sha('1'), toSha: sha('4') })?.view,
+    ).toEqual({ kind: 'all' });
+  });
+
+  it('goes from the whole review to the first commit on next and the last on previous', () => {
+    expect(selectReviewView(review, all, { kind: 'next' })).toEqual({
+      view: { kind: 'commit', sha: sha('1') },
+      selection: { baseCommitish: sha('0'), targetCommitish: sha('1') },
+      anchor: sha('1'),
+    });
+    expect(selectReviewView(review, all, { kind: 'previous' })?.view).toEqual({
+      kind: 'commit',
+      sha: sha('4'),
+    });
+  });
+
+  it('moves to the neighbouring commit on previous and next', () => {
+    expect(selectReviewView(review, commitView('2'), { kind: 'next' })).toEqual({
+      view: { kind: 'commit', sha: sha('3') },
+      selection: { baseCommitish: sha('2'), targetCommitish: sha('3') },
+      anchor: sha('3'),
+    });
+    expect(selectReviewView(review, commitView('2'), { kind: 'previous' })?.view).toEqual({
+      kind: 'commit',
+      sha: sha('1'),
+    });
+  });
+
+  it('stays put on previous at the first commit and next at the last', () => {
+    expect(selectReviewView(review, commitView('1'), { kind: 'previous' })).toBeNull();
+    expect(selectReviewView(review, commitView('4'), { kind: 'next' })).toBeNull();
+  });
+
+  it('leaves a run for the commit just past its end or just before its start', () => {
+    const shown = { view: run('2', '3'), anchor: sha('2') };
+    expect(selectReviewView(review, shown, { kind: 'next' })?.view).toEqual({
+      kind: 'commit',
+      sha: sha('4'),
+    });
+    expect(selectReviewView(review, shown, { kind: 'previous' })?.view).toEqual({
+      kind: 'commit',
+      sha: sha('1'),
+    });
+    expect(
+      selectReviewView(review, { view: run('1', '2'), anchor: null }, { kind: 'previous' }),
+    ).toBeNull();
+    expect(
+      selectReviewView(review, { view: run('3', '4'), anchor: null }, { kind: 'next' }),
+    ).toBeNull();
+  });
+
+  it('shows the whole review and drops the anchor on all', () => {
+    expect(selectReviewView(review, commitView('2'), { kind: 'all' })).toEqual({
+      view: { kind: 'all' },
+      selection: review.requested,
+      anchor: null,
+    });
+  });
+
+  it('produces only pairs the server counts as views of the review', () => {
+    const shownViews = [
+      all,
+      commitView('1'),
+      commitView('4'),
+      { view: run('2', '3'), anchor: null },
+    ];
+    const actions = [
+      ...commits.flatMap((commit) => [
+        { kind: 'click' as const, sha: commit.sha },
+        { kind: 'shift-click' as const, sha: commit.sha },
+        ...commits.map((to) => ({ kind: 'drop' as const, fromSha: commit.sha, toSha: to.sha })),
+      ]),
+      { kind: 'previous' as const },
+      { kind: 'next' as const },
+      { kind: 'all' as const },
+    ];
+    for (const shown of shownViews) {
+      for (const action of actions) {
+        const chosen = selectReviewView(review, shown, action);
+        if (!chosen) continue;
+        expect(isViewOfReview(chosen.selection, review)).toBe(true);
+        if (chosen.view.kind === 'all') expect(chosen.selection).toBe(review.requested);
+        else expect(reviewViewShown(chosen.selection, review)).toEqual(chosen.view);
+      }
+    }
   });
 });
