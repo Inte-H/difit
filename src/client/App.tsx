@@ -65,6 +65,7 @@ import {
   reviewTargetRestoredByHistory,
   useReviewTargetHistory,
 } from './hooks/useReviewTargetHistory';
+import { useScrollVisibleFile } from './hooks/useScrollVisibleFile';
 import { useSymbolPeek } from './hooks/useSymbolPeek';
 import { useViewedFiles } from './hooks/useViewedFiles';
 import { useThreadFixups } from './hooks/useThreadFixups';
@@ -425,6 +426,10 @@ function App() {
     setDiffData,
   });
   useChunkChangeKinds({ diffData, renderedFilePaths, setDiffData });
+  const scrollVisibleFileIndex = useScrollVisibleFile({
+    diffScrollContainerRef,
+    files: diffData?.files,
+  });
 
   const toggleFileReviewed = useCallback(
     async (filePath: string) => {
@@ -1609,6 +1614,7 @@ function App() {
             decisions={decisions}
             reviewedFiles={viewedFiles}
             selectedFileIndex={cursor?.fileIndex ?? null}
+            scrollVisibleFileIndex={scrollVisibleFileIndex}
             onScrollToFile={scrollFileIntoDiffContainer}
           />
         )}
@@ -1671,6 +1677,7 @@ function App() {
                   onToggleReviewed={toggleFileReviewed}
                   onToggleFolderReviewed={toggleFolderReviewed}
                   selectedFileIndex={cursor?.fileIndex ?? null}
+                  scrollVisibleFileIndex={scrollVisibleFileIndex}
                 />
               </div>
               {!isMobile && (

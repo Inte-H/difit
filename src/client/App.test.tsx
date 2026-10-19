@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom';
@@ -13,6 +14,7 @@ import App from './App';
 import { useDiffComments } from './hooks/useDiffComments';
 import { useViewedFiles } from './hooks/useViewedFiles';
 import { useViewport } from './hooks/useViewport';
+import { getFileElementId } from './utils/domUtils';
 
 // Mock the useViewport hook
 vi.mock('./hooks/useViewport', () => ({
@@ -1780,5 +1782,90 @@ describe('App Component - Direct edit', () => {
 
     expect(screen.queryByRole('button', { name: 'Add a comment' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '줄 직접 고치기' })).not.toBeInTheDocument();
+  });
+});
+
+describe('App Component - File at the top of the diff', () => {
+  const twoFileResponse: DiffResponse = {
+    ...mockDiffResponse,
+    files: ['first.ts', 'second.ts'].map((path) => ({
+      path,
+      status: 'modified',
+      additions: 1,
+      deletions: 0,
+      chunks: [
+        {
+          header: '@@ -1,1 +1,2 @@',
+          oldStart: 1,
+          oldLines: 1,
+          newStart: 1,
+          newLines: 2,
+          lines: [
+            { type: 'normal', content: 'const a = 1;', oldLineNumber: 1, newLineNumber: 1 },
+            { type: 'add', content: 'const b = 2;', newLineNumber: 2 },
+          ],
+        },
+      ],
+    })),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockConfirm.mockReturnValue(false);
+    mockFetch(twoFileResponse);
+  });
+
+  afterEach(() => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+  });
+
+  function stubTop(element: HTMLElement, top: number) {
+    element.getBoundingClientRect = () =>
+      ({ top, bottom: top + 600, left: 0, right: 0, width: 0, height: 600 }) as DOMRect;
+  }
+
+  async function putCursorOnFirstFileThenScrollToSecond() {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findAllByTitle('second.ts');
+
+    await user.keyboard('j');
+
+    const main = document.querySelector('main')!;
+    const first = document.getElementById(getFileElementId('first.ts'))!;
+    const second = document.getElementById(getFileElementId('second.ts'))!;
+    stubTop(main, 0);
+    main.scrollTop = 700;
+    stubTop(first, -700);
+    stubTop(second, -100);
+    fireEvent.scroll(main);
+  }
+
+  it('marks the file at the top in the file list and leaves the cursor where it was', async () => {
+    await putCursorOnFirstFileThenScrollToSecond();
+
+    const fileTree = document.getElementById('file-tree-panel')!;
+    const rowOf = (title: string) =>
+      within(fileTree).getByTitle(title).closest<HTMLElement>('[data-file-row="true"]')!;
+    await waitFor(() => {
+      expect(rowOf('second.ts')).toHaveAttribute('data-scroll-visible', 'true');
+    });
+    expect(rowOf('second.ts')).not.toHaveAttribute('aria-current');
+    expect(rowOf('first.ts')).toHaveAttribute('aria-current', 'true');
+    expect(rowOf('first.ts')).not.toHaveAttribute('data-scroll-visible');
+  });
+
+  it('marks the file at the top among the phone chips the same way', async () => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+
+    await putCursorOnFirstFileThenScrollToSecond();
+
+    const chips = screen.getByRole('navigation', { name: 'Changed files' });
+    await waitFor(() => {
+      expect(within(chips).getByTitle('second.ts')).toHaveAttribute('data-scroll-visible', 'true');
+    });
+    expect(within(chips).getByTitle('second.ts')).not.toHaveAttribute('aria-current');
+    expect(within(chips).getByTitle('first.ts')).toHaveAttribute('aria-current', 'true');
   });
 });

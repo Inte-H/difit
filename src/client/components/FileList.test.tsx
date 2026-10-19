@@ -215,4 +215,179 @@ describe('FileList', () => {
     expect(getTreeRow('README.md')).toHaveTextContent(/^README\.md$/);
     expect(getTreeRow('calc.js')).toHaveTextContent(/^calc\.js2$/);
   });
+  describe('file at the top of the diff', () => {
+    const baseProps = {
+      onScrollToFile: vi.fn(),
+      comments: [],
+      decisions: [],
+      reviewedFiles: new Set<string>(),
+      onToggleReviewed: vi.fn(),
+      onToggleFolderReviewed: vi.fn(),
+    };
+
+    function stubBox(element: HTMLElement, top: number, height: number) {
+      element.getBoundingClientRect = () =>
+        ({ top, bottom: top + height, left: 0, right: 0, width: 0, height }) as DOMRect;
+    }
+
+    function stubListViewport(scrollTop: number) {
+      const list = document
+        .querySelector<HTMLElement>('[data-tree-row="true"]')!
+        .closest<HTMLElement>('.overflow-y-auto')!;
+      stubBox(list, 100, 200);
+      Object.defineProperty(list, 'clientHeight', { configurable: true, value: 200 });
+      list.scrollTop = scrollTop;
+      return list;
+    }
+
+    it('marks the file at the top apart from the cursor file', () => {
+      render(
+        <FileList
+          {...baseProps}
+          files={[createFile('README.md'), createFile('calc.js')]}
+          selectedFileIndex={0}
+          scrollVisibleFileIndex={1}
+        />,
+      );
+
+      const cursorRow = getTreeRow('README.md');
+      const visibleRow = getTreeRow('calc.js');
+      expect(cursorRow).toHaveAttribute('aria-current', 'true');
+      expect(cursorRow).toHaveClass('bg-github-bg-tertiary');
+      expect(cursorRow).not.toHaveAttribute('data-scroll-visible');
+      expect(visibleRow).toHaveAttribute('data-scroll-visible', 'true');
+      expect(visibleRow).not.toHaveAttribute('aria-current');
+      expect(visibleRow).not.toHaveClass('bg-github-bg-tertiary');
+    });
+
+    it('shows both marks on one row when they point at the same file', () => {
+      render(
+        <FileList
+          {...baseProps}
+          files={[createFile('README.md'), createFile('calc.js')]}
+          selectedFileIndex={1}
+          scrollVisibleFileIndex={1}
+        />,
+      );
+
+      const row = getTreeRow('calc.js');
+      expect(row).toHaveAttribute('aria-current', 'true');
+      expect(row).toHaveAttribute('data-scroll-visible', 'true');
+      expect(getTreeRow('README.md')).not.toHaveAttribute('data-scroll-visible');
+    });
+
+    const flatFiles = ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'].map((path) =>
+      createFile(path),
+    );
+
+    it('scrolls the list down until the marked row fits', () => {
+      const { rerender } = render(
+        <FileList {...baseProps} files={flatFiles} selectedFileIndex={null} />,
+      );
+      const list = stubListViewport(0);
+      stubBox(getTreeRow('f.ts'), 500, 36);
+
+      rerender(
+        <FileList
+          {...baseProps}
+          files={flatFiles}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={5}
+        />,
+      );
+
+      expect(list.scrollTop).toBe(236);
+    });
+
+    it('leaves the list alone when the marked row is already in view', () => {
+      const { rerender } = render(
+        <FileList {...baseProps} files={flatFiles} selectedFileIndex={null} />,
+      );
+      const list = stubListViewport(40);
+      stubBox(getTreeRow('c.ts'), 150, 36);
+
+      rerender(
+        <FileList
+          {...baseProps}
+          files={flatFiles}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={2}
+        />,
+      );
+
+      expect(list.scrollTop).toBe(40);
+    });
+
+    it('scrolls up so a nested row clears the sticky folder headers', () => {
+      const nestedFiles = [createFile('src/a.ts'), createFile('src/b.ts'), createFile('src/c.ts')];
+      const { rerender } = render(
+        <FileList {...baseProps} files={nestedFiles} selectedFileIndex={null} />,
+      );
+      const list = stubListViewport(300);
+      stubBox(getTreeRow('src'), 100, 36);
+      stubBox(getTreeRow('src/b.ts'), 110, 36);
+
+      rerender(
+        <FileList
+          {...baseProps}
+          files={nestedFiles}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={1}
+        />,
+      );
+
+      expect(list.scrollTop).toBe(274);
+    });
+
+    it('does not scroll the list while the filter is typed', () => {
+      const { rerender } = render(
+        <FileList {...baseProps} files={flatFiles} selectedFileIndex={null} />,
+      );
+      const list = stubListViewport(0);
+      stubBox(getTreeRow('f.ts'), 500, 36);
+      rerender(
+        <FileList
+          {...baseProps}
+          files={flatFiles}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={5}
+        />,
+      );
+      list.scrollTop = 0;
+
+      fireEvent.change(screen.getByPlaceholderText('Filter files...'), {
+        target: { value: '.ts' },
+      });
+
+      expect(list.scrollTop).toBe(0);
+    });
+
+    it('does not scroll the list when the same files arrive as a new array', () => {
+      const { rerender } = render(
+        <FileList {...baseProps} files={flatFiles} selectedFileIndex={null} />,
+      );
+      const list = stubListViewport(0);
+      stubBox(getTreeRow('f.ts'), 500, 36);
+      rerender(
+        <FileList
+          {...baseProps}
+          files={flatFiles}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={5}
+        />,
+      );
+      list.scrollTop = 0;
+
+      rerender(
+        <FileList
+          {...baseProps}
+          files={flatFiles.map((file) => ({ ...file }))}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={5}
+        />,
+      );
+
+      expect(list.scrollTop).toBe(0);
+    });
+  });
 });
