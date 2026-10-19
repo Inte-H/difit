@@ -15,6 +15,7 @@ import {
   type DiffResponse,
   type DiffSelection,
   type NewerTarget,
+  type ReviewCommit,
   type ThreadFixup,
   AUTOSQUASH_PREFIX,
   REVIEW_THREAD_TRAILER,
@@ -57,6 +58,7 @@ type ClassifiableFile = Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks' 
 
 interface FixupLogEntry {
   sha: string;
+  firstParent: string | undefined;
   isMerge: boolean;
   subject: string;
   threadIds: string[];
@@ -69,6 +71,7 @@ function parseFixupLog(raw: string): FixupLogEntry[] {
     const [, sha, parents, subject, trailerValues] = header;
     return {
       sha,
+      firstParent: parents.split(' ')[0] || undefined,
       isMerge: parents.includes(' '),
       subject,
       threadIds: trailerValues
@@ -733,6 +736,30 @@ export class GitDiffParser {
     }
 
     return entries.map((entry) => this.toThreadFixup(entry));
+  }
+
+  // Oldest first along the first parent, so a merge stands as one commit against its first parent.
+  async listReviewCommits(selection: DiffSelection): Promise<ReviewCommit[]> {
+    const { targetCommitish } = selection;
+    if (!isCommitTarget(targetCommitish) || !validateCommitish(targetCommitish)) {
+      return [];
+    }
+
+    const base = await this.resolveBaseCommitish(selection);
+    const log = await this.git.raw([
+      'log',
+      '--reverse',
+      '--first-parent',
+      '--no-show-signature',
+      FIXUP_LOG_FORMAT,
+      `${base}..${targetCommitish}`,
+      '--',
+    ]);
+    return parseFixupLog(log).flatMap(({ sha, firstParent, subject, threadIds }) =>
+      firstParent && threadIds.length === 0 && !AUTOSQUASH_PREFIX.test(subject)
+        ? [{ sha, shortSha: shortHash(sha), parentSha: firstParent, subject }]
+        : [],
+    );
   }
 
   // Counts the commits on `ref` that neither the target nor `since` holds, leaving out fixups;

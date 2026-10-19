@@ -18,6 +18,7 @@ const parserInstances = vi.hoisted(() => [] as any[]);
 const commitDirectEdit = vi.hoisted(() => vi.fn());
 
 const searchSymbol = vi.hoisted(() => vi.fn());
+const reviewCommits = vi.hoisted(() => ({ list: [] as unknown[] }));
 
 vi.mock('./direct-edit.js', () => ({ commitDirectEdit }));
 vi.mock('./symbol-search.js', () => ({ searchSymbol }));
@@ -100,6 +101,7 @@ vi.mock('./git-diff.js', () => {
     listThreadFixups = vi.fn().mockResolvedValue([]);
     classifyFixups = vi.fn(async (fixups: unknown[]) => fixups);
     findNewerTarget = vi.fn().mockResolvedValue(null);
+    listReviewCommits = vi.fn(async () => reviewCommits.list);
     readThreadFixup = vi.fn(
       async (sha: string) =>
         ((await this.listThreadFixups()) as Array<{ sha: string }>).find(
@@ -2318,6 +2320,216 @@ describe('Server Integration Tests', () => {
       expect(overlapped).toBe(false);
     });
   });
+  describe('Commits of the review', () => {
+    const REVIEW = '?base=def4567&target=abc1234';
+    const full = (short: string) => short.padEnd(40, '0');
+    const COMMITS = [
+      { sha: full('1111111'), shortSha: '1111111', parentSha: full('def4567'), subject: 'first' },
+      { sha: full('abc1234'), shortSha: 'abc1234', parentSha: full('1111111'), subject: 'second' },
+    ];
+    const SECOND = `?base=${full('1111111')}&target=${full('abc1234')}`;
+
+    beforeEach(() => {
+      reviewCommits.list = COMMITS;
+    });
+    afterEach(() => {
+      reviewCommits.list = [];
+    });
+
+    async function startReview(
+      selection = { targetCommitish: 'abc1234', baseCommitish: 'abc1234^' },
+    ) {
+      const result = await startServer({ selection, preferredPort: 9190 });
+      servers.push(result.server);
+      const parser = parserInstances.at(-1)!;
+      const shown = await parser.parseDiff();
+      parser.parseDiff.mockImplementation(
+        async ({
+          baseCommitish,
+          targetCommitish,
+        }: {
+          baseCommitish: string;
+          targetCommitish: string;
+        }) => ({
+          ...shown,
+          baseCommitish: baseCommitish.slice(0, 7),
+          targetCommitish: targetCommitish.slice(0, 7),
+          requestedBaseCommitish: baseCommitish,
+          requestedTargetCommitish: targetCommitish,
+        }),
+      );
+      return result.port;
+    }
+
+    const view = async (port: number, query = '') =>
+      (await (await fetch(`http://localhost:${port}/api/diff${query}`)).json()) as any;
+
+    const reviewerThread = {
+      id: 'c1',
+      filePath: 'test.js',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+      position: { side: 'new', line: 3 },
+      messages: [
+        {
+          id: 'c1',
+          body: 'fix this',
+          author: 'User',
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+      ],
+    };
+    const postThread = (port: number, query: string) =>
+      fetch(`http://localhost:${port}/api/comments${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threads: [reviewerThread] }),
+      });
+
+    it('reports the review with its commits alongside the whole diff', async () => {
+      const port = await startReview();
+
+      const body = await view(port);
+
+      expect(body.review).toEqual({
+        selection: { baseCommitish: 'def4567', targetCommitish: 'abc1234' },
+        requested: { baseCommitish: 'abc1234^', targetCommitish: 'abc1234' },
+        commits: COMMITS,
+      });
+      expect(body.directEditAvailable).toBe(true);
+    });
+
+    it('keeps the same review while one of its commits is shown, without direct edits', async () => {
+      const port = await startReview();
+      await view(port);
+
+      const body = await view(port, SECOND);
+
+      expect(body.targetCommitish).toBe('abc1234');
+      expect(body.baseCommitish).toBe('1111111');
+      expect(body.review.selection).toEqual({
+        baseCommitish: 'def4567',
+        targetCommitish: 'abc1234',
+      });
+      expect(body.directEditAvailable).toBe(false);
+    });
+
+    it('reads the whole review for the agent while the browser shows one commit', async () => {
+      const port = await startReview();
+      await view(port);
+      await postThread(port, REVIEW);
+      await view(port, SECOND);
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      const json = (await (
+        await fetch(`http://localhost:${port}/api/comments-json`)
+      ).json()) as any;
+      const wait = await (await fetch(`http://localhost:${port}/api/comments-wait`)).text();
+
+      expect(output).toContain('fix this');
+      expect(json.threads.map((thread: { id: string }) => thread.id)).toEqual(['c1']);
+      expect(wait).toContain('"threadId":"c1"');
+    });
+
+    it('files a comment sent for one commit under the review', async () => {
+      const port = await startReview();
+      await view(port, SECOND);
+
+      await postThread(port, `?base=1111111&target=abc1234`);
+
+      const json = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${REVIEW}`)
+      ).json()) as any;
+      expect(json.threads.map((thread: { id: string }) => thread.id)).toEqual(['c1']);
+    });
+
+    it('starts a review of its own for a pair outside the range', async () => {
+      const port = await startReview();
+      await postThread(port, REVIEW);
+      reviewCommits.list = [];
+
+      const body = await view(port, '?base=fffffff&target=eeeeeee');
+
+      expect(body.review).toEqual({
+        selection: { baseCommitish: 'fffffff', targetCommitish: 'eeeeeee' },
+        requested: { baseCommitish: 'fffffff', targetCommitish: 'eeeeeee' },
+        commits: [],
+      });
+      expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toBe('');
+      await view(port, SECOND);
+      expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toContain(
+        'fix this',
+      );
+    });
+
+    it('goes back to an older review that a newer one covers', async () => {
+      const port = await startReview();
+      await view(port);
+      await postThread(port, REVIEW);
+      const newer = {
+        sha: full('9999999'),
+        shortSha: '9999999',
+        parentSha: full('abc1234'),
+        subject: 'third',
+      };
+      reviewCommits.list = [...COMMITS, newer];
+      await view(port, `?base=${full('def4567')}&target=${newer.sha}`);
+      expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toBe('');
+
+      const body = await view(port, REVIEW);
+
+      expect(body.review.selection).toEqual({
+        baseCommitish: 'def4567',
+        targetCommitish: 'abc1234',
+      });
+      expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toContain(
+        'fix this',
+      );
+    });
+
+    it('keeps a commit of the review being read on that review when a newer one covers it', async () => {
+      const port = await startReview();
+      await view(port);
+      await postThread(port, REVIEW);
+      const newer = {
+        sha: full('9999999'),
+        shortSha: '9999999',
+        parentSha: full('abc1234'),
+        subject: 'third',
+      };
+      reviewCommits.list = [...COMMITS, newer];
+      await view(port, `?base=${full('def4567')}&target=${newer.sha}`);
+      await view(port, REVIEW);
+
+      const body = await view(port, `?base=${full('def4567')}&target=${full('1111111')}`);
+
+      expect(body.review.selection).toEqual({
+        baseCommitish: 'def4567',
+        targetCommitish: 'abc1234',
+      });
+      expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toContain(
+        'fix this',
+      );
+    });
+
+    it('reports no review when the target is not pinned to a commit', async () => {
+      const port = await startReview({ targetCommitish: 'HEAD', baseCommitish: 'HEAD^' });
+
+      expect((await view(port)).review).toBeUndefined();
+    });
+
+    it('reports no review for a diff read from standard input', async () => {
+      const result = await startServer({
+        stdinDiff: 'diff --git a/stdin-test.js b/stdin-test.js',
+        preferredPort: 9195,
+      });
+      servers.push(result.server);
+
+      expect((await view(result.port)).review).toBeUndefined();
+    });
+  });
+
   describe('Waiting for the agent turn', () => {
     const PINNED = '?base=def4567&target=abc1234';
     const FIXUP = 'b'.repeat(40);

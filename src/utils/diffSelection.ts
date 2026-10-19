@@ -1,4 +1,4 @@
-import type { BaseMode, DiffSelection } from '../types/diff.js';
+import type { BaseMode, DiffSelection, ReviewCommit, ReviewScope } from '../types/diff.js';
 
 export function normalizeBaseMode(baseMode?: BaseMode): BaseMode {
   return baseMode ?? 'direct';
@@ -69,4 +69,32 @@ export function isSameCommit(a: string, b: string): boolean {
   if (!HASH_PATTERN.test(a) || !HASH_PATTERN.test(b)) return a === b;
   const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
   return longer.toLowerCase().startsWith(shorter.toLowerCase());
+}
+
+export function reviewCommitViewed(
+  view: DiffSelection,
+  commits: readonly ReviewCommit[],
+): ReviewCommit | undefined {
+  if (normalizeBaseMode(view.baseMode) === 'merge-base') return undefined;
+  return commits.find(
+    (commit) =>
+      isSameCommit(commit.sha, view.targetCommitish) &&
+      isSameCommit(commit.parentSha, view.baseCommitish),
+  );
+}
+
+// The review itself, or the diff from just before one of its commits to that or a later one.
+export function isViewOfReview(
+  view: DiffSelection,
+  review: Pick<ReviewScope, 'selection' | 'commits'>,
+): boolean {
+  if (diffSelectionsEqual(view, review.selection)) return true;
+  if (normalizeBaseMode(view.baseMode) === 'merge-base') return false;
+  const end = review.commits.findIndex((commit) => isSameCommit(commit.sha, view.targetCommitish));
+  return (
+    end !== -1 &&
+    review.commits
+      .slice(0, end + 1)
+      .some((commit) => isSameCommit(commit.parentSha, view.baseCommitish))
+  );
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, memo } from 'react';
 
 import {
   type DiffFile,
@@ -34,7 +34,7 @@ interface DiffViewerProps {
   collapsedFiles: Set<string>;
   onToggleCollapsed: (path: string) => void;
   onToggleAllCollapsed: (shouldCollapse: boolean) => void;
-  onAddComment: (
+  onAddComment?: (
     file: string,
     line: LineNumber,
     body: string,
@@ -250,14 +250,16 @@ export const DiffViewer = memo(function DiffViewer({
     }
   }, [isVisible, isCollapsed, canExpandHiddenLines, file, prefetchFileContent]);
 
-  const handleAddComment = useCallback(
-    async (line: LineNumber, body: string, codeContent?: string, side?: DiffSide) => {
-      try {
-        await onAddComment(file.path, line, body, codeContent, side);
-      } catch (error) {
-        console.error('Failed to add comment:', error);
-      }
-    },
+  const handleAddComment = useMemo(
+    () =>
+      onAddComment &&
+      (async (line: LineNumber, body: string, codeContent?: string, side?: DiffSide) => {
+        try {
+          await onAddComment(file.path, line, body, codeContent, side);
+        } catch (error) {
+          console.error('Failed to add comment:', error);
+        }
+      }),
     [file.path, onAddComment],
   );
 

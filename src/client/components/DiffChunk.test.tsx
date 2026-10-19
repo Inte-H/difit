@@ -760,13 +760,23 @@ describe('editing the reviewed code directly', () => {
 
 type ChunkMode = 'unified' | 'split';
 
-function renderChunk(mode: ChunkMode, extra: { onOpenInEditor?: () => void } = {}) {
+function renderChunk(
+  mode: ChunkMode,
+  {
+    commentable = true,
+    ...extra
+  }: {
+    onOpenInEditor?: () => void;
+    commentable?: boolean;
+    commentTrigger?: { fileIndex: number; chunkIndex: number; lineIndex: number };
+  } = {},
+) {
   const onAddComment = vi.fn().mockResolvedValue(undefined);
   const props = {
     chunk: testChunk,
     chunkIndex: 0,
     threads: [],
-    onAddComment,
+    ...(commentable ? { onAddComment } : {}),
     onResolveThread: noop,
     onReplyToThread: asyncNoop,
     onRemoveMessage: noop,
@@ -971,4 +981,76 @@ describe('line buttons by input device', () => {
       expect(screen.getByRole('textbox')).toBeInTheDocument();
     },
   );
+});
+
+describe.each<ChunkMode>(['unified', 'split'])('a view that takes no comments (%s)', (mode) => {
+  const originalMatchMedia = window.matchMedia;
+  const pointerCanHover = (canHover: boolean) => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(hover: hover)' ? canHover : false,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+  };
+
+  afterEach(() => {
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: originalMatchMedia,
+    });
+    document.getSelection()?.removeAllRanges();
+  });
+
+  it('shows no comment button on a hovered line', () => {
+    pointerCanHover(true);
+    const { rows } = renderChunk(mode, { commentable: false, onOpenInEditor: noop });
+
+    fireEvent.mouseEnter(mode === 'unified' ? rows[2]! : codeCell(mode, rows[2]!));
+
+    expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+    expect(screen.getByTitle('Open in editor')).toBeInTheDocument();
+  });
+
+  it('leaves commenting out of the line menu on a touch screen', async () => {
+    pointerCanHover(false);
+    const { rows } = renderChunk(mode, { commentable: false, onOpenInEditor: noop });
+
+    fireEvent.mouseEnter(mode === 'unified' ? rows[2]! : codeCell(mode, rows[2]!));
+    fireEvent.click(screen.getByRole('button', { name: '줄 메뉴' }));
+
+    expect(await screen.findByRole('menuitem', { name: '에디터에서 열기' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '지적 달기' })).not.toBeInTheDocument();
+  });
+
+  it('shows no line button on a touch screen when nothing else is on offer', () => {
+    pointerCanHover(false);
+    const { rows } = renderChunk(mode, { commentable: false });
+
+    fireEvent.mouseEnter(mode === 'unified' ? rows[2]! : codeCell(mode, rows[2]!));
+
+    expect(screen.queryByRole('button', { name: '줄 메뉴' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+  });
+
+  it('opens no comment for lines dragged over, picked text or the comment key', async () => {
+    const { rows } = renderChunk(mode, {
+      commentable: false,
+      commentTrigger: { fileIndex: 0, chunkIndex: 0, lineIndex: 2 },
+    });
+
+    fireEvent.mouseDown(lineNumberCell(mode, rows[0]!));
+    fireEvent.mouseMove(codeCell(mode, rows[2]!));
+    fireEvent.mouseUp(document);
+    selectText([codeCell(mode, rows[0]!), 'first'], [codeCell(mode, rows[1]!), 'second']);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '고른 부분에 지적 달기' })).not.toBeInTheDocument();
+  });
 });

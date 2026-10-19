@@ -37,7 +37,8 @@ interface DiffChunkProps {
   chunkIndex: number;
   threads: CommentThread[];
   showAuthorBadges?: boolean;
-  onAddComment: (
+  // Left out where the diff takes no comments.
+  onAddComment?: (
     line: LineNumber,
     body: string,
     codeContent?: string,
@@ -91,11 +92,12 @@ export const DiffChunk = memo(function DiffChunk({
   const [endLine, setEndLine] = useState<number | null>(null);
   const [dragSide, setDragSide] = useState<DiffSide | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [commentingLine, setCommentingLine] = useState<{
+  const [openCommentLine, setCommentingLine] = useState<{
     side: DiffSide;
     lineNumber: LineNumber;
     quote?: string;
   } | null>(null);
+  const commentingLine = onAddComment ? openCommentLine : null;
   const [selectionAnchor, setSelectionAnchor] = useState<{
     side: DiffSide;
     lineNumber: number;
@@ -150,6 +152,7 @@ export const DiffChunk = memo(function DiffChunk({
   };
 
   const startCommentDrag = (selection: LineSelection, fromLineNumber = false) => {
+    if (!onAddComment) return;
     dragFromLineNumber.current = fromLineNumber;
     setSelectionAnchor(selection);
     setStartLine(selection.lineNumber);
@@ -265,7 +268,7 @@ export const DiffChunk = memo(function DiffChunk({
 
   const handleSubmitComment = useCallback(
     async (body: string) => {
-      if (commentingLine !== null) {
+      if (commentingLine !== null && onAddComment) {
         const codeContent = getSelectedCodeContent();
         const fullBody =
           commentingLine.quote === undefined ? body : quoteSelection(commentingLine.quote, body);
@@ -434,7 +437,7 @@ export const DiffChunk = memo(function DiffChunk({
   return (
     <div ref={containerRef} className="group/hunk relative bg-github-bg-primary">
       {editHunk && <EditHunkButton onClick={editHunk} />}
-      {selected && (
+      {selected && onAddComment && (
         <SelectionCommentBar
           range={selected.range}
           container={containerRef.current}
@@ -513,19 +516,25 @@ export const DiffChunk = memo(function DiffChunk({
                       }
                     }
                   }}
-                  onCommentButtonMouseDown={(e) => {
-                    e.stopPropagation();
-                    if (e.shiftKey) {
-                      e.preventDefault();
-                    }
-                    handleCommentButtonMouseDown({
-                      isShiftClick: e.shiftKey,
-                      selection,
-                    });
-                  }}
-                  onComment={() => {
-                    if (selection) handleAddComment(selection.side, selection.lineNumber);
-                  }}
+                  onCommentButtonMouseDown={
+                    onAddComment &&
+                    ((e) => {
+                      e.stopPropagation();
+                      if (e.shiftKey) {
+                        e.preventDefault();
+                      }
+                      handleCommentButtonMouseDown({
+                        isShiftClick: e.shiftKey,
+                        selection,
+                      });
+                    })
+                  }
+                  onComment={
+                    onAddComment &&
+                    (() => {
+                      if (selection) handleAddComment(selection.side, selection.lineNumber);
+                    })
+                  }
                   onLineNumberMouseDown={(e) => {
                     if (e.button !== 0 || e.shiftKey || !selection) return;
                     e.preventDefault();

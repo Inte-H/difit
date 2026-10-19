@@ -61,6 +61,7 @@ import {
   type GeneratedStatusResponse,
   type ReviewDecision,
   type RevisionsResponse,
+  type ReviewScope,
   type SymbolSearchResponse,
   type ThreadAwaitingAgent,
   type ThreadFixup,
@@ -71,6 +72,7 @@ import {
   diffSelectionsEqual,
   getDiffSelectionKey,
   isCommitHash,
+  isViewOfReview,
 } from '../utils/diffSelection.js';
 
 interface ServerOptions {
@@ -253,12 +255,41 @@ export async function startServer(options: ServerOptions): Promise<{
   // A target named by hash stays put while fixups pile up after it; HEAD or a branch moves with
   // them, so only such reviews carry review states.
   const pinnedCommentSessionKeys = new Set<string>();
-  const rememberPinnedReview = (requested: DiffSelection, resolved: DiffSelection) => {
-    if (isCommitHash(requested.targetCommitish)) {
-      pinnedCommentSessionKeys.add(createCommentSessionKey(resolved));
-    }
+  // Pinned reviews, newest last.
+  const pinnedReviews: ReviewScope[] = [];
+  // A part of the review being read stays on it even when a newer review also covers it.
+  const findReviewOf = (view: DiffSelection) => {
+    const newestFirst = [...pinnedReviews].reverse();
+    const current = newestFirst.find((review) =>
+      diffSelectionsEqual(review.selection, currentCommentSelection),
+    );
+    return (
+      newestFirst.find((review) => diffSelectionsEqual(view, review.selection)) ??
+      (current && isViewOfReview(view, current) ? current : undefined) ??
+      newestFirst.find((review) => isViewOfReview(view, review))
+    );
   };
-  rememberPinnedReview(initialSelection, currentCommentSelection);
+  const reviewOf = async (
+    requested: DiffSelection,
+    resolved: DiffSelection,
+  ): Promise<ReviewScope | undefined> => {
+    if (options.stdinDiff) return undefined;
+    const known = findReviewOf(resolved);
+    if (known || !isCommitHash(requested.targetCommitish)) return known;
+    let commits: ReviewScope['commits'] = [];
+    try {
+      commits = await parser.listReviewCommits(resolved);
+    } catch (error) {
+      console.error('Error listing review commits:', error);
+    }
+    const raced = findReviewOf(resolved);
+    if (raced) return raced;
+    const review = { selection: resolved, requested, commits };
+    pinnedCommentSessionKeys.add(createCommentSessionKey(resolved));
+    pinnedReviews.push(review);
+    return review;
+  };
+  await reviewOf(initialSelection, currentCommentSelection);
   const canEditDirectly = (selection: DiffSelection) =>
     !options.stdinDiff &&
     listensOnLoopbackOnly &&
@@ -329,7 +360,7 @@ export async function startServer(options: ServerOptions): Promise<{
       return currentCommentSelection;
     }
 
-    return createDiffSelection(
+    const selection = createDiffSelection(
       hasBase ? (query.base as string) : currentCommentSelection.baseCommitish,
       hasTarget ? (query.target as string) : currentCommentSelection.targetCommitish,
       hasBaseMode
@@ -338,6 +369,7 @@ export async function startServer(options: ServerOptions): Promise<{
           ? undefined
           : currentCommentSelection.baseMode,
     );
+    return findReviewOf(selection)?.selection ?? selection;
   }
 
   function getOrCreateCommentSession(selection: DiffSelection): CommentSessionState {
@@ -406,12 +438,13 @@ export async function startServer(options: ServerOptions): Promise<{
 
     currentSelection = requestedSelection;
 
-    currentCommentSelection = createResolvedCommentSelection(
+    const viewSelection = createResolvedCommentSelection(
       responseDiffData,
       requestedSelection,
       Boolean(options.stdinDiff),
     );
-    rememberPinnedReview(requestedSelection, currentCommentSelection);
+    const review = await reviewOf(requestedSelection, viewSelection);
+    currentCommentSelection = review?.selection ?? viewSelection;
 
     const baseCommitish =
       responseDiffData.baseCommitish ?? (options.stdinDiff ? 'stdin' : undefined);
@@ -429,7 +462,9 @@ export async function startServer(options: ServerOptions): Promise<{
       ...responseDiffData,
       ignoreWhitespace,
       openInEditorAvailable: !options.stdinDiff,
-      directEditAvailable: canEditDirectly(currentCommentSelection),
+      directEditAvailable:
+        canEditDirectly(currentCommentSelection) &&
+        diffSelectionsEqual(viewSelection, currentCommentSelection),
       symbolSearchAvailable: !options.stdinDiff,
       baseCommitish,
       targetCommitish,
@@ -440,6 +475,7 @@ export async function startServer(options: ServerOptions): Promise<{
       repositoryId,
       commentImports: shouldIncludeCommentImports ? initialCommentImports : undefined,
       commentImportId: shouldIncludeCommentImports ? commentImportId : undefined,
+      review,
     });
   });
 

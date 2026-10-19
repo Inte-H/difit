@@ -18,8 +18,8 @@ interface DiffLineRowProps {
   onMouseEnter: () => void;
   onMouseLeave: () => void;
   onMouseMove: () => void;
-  onCommentButtonMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
-  onComment: () => void;
+  onCommentButtonMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onComment?: () => void;
   onLineNumberMouseDown: (e: React.MouseEvent<HTMLTableCellElement>) => void;
   canHover: boolean;
   onOpenInEditor?: () => void;
