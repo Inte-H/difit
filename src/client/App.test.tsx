@@ -2006,7 +2006,7 @@ describe('App Component - Commits of the review', () => {
     ]);
   });
 
-  it('keeps the comments of the review while a commit is shown, without drawing or taking any', async () => {
+  it('draws a comment from before commit views only on the whole review and its last commit', async () => {
     renderApp();
     await screen.findByText('Look here');
 
@@ -2024,11 +2024,35 @@ describe('App Component - Commits of the review', () => {
     fireEvent.mouseEnter(row);
     expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
 
+    fireEvent.click(commitButton(/abc1234/));
+    expect(await screen.findByText('Look here')).toBeInTheDocument();
+
     fireEvent.click(commitButton('전체'));
     expect(await screen.findByText('Look here')).toBeInTheDocument();
   });
 
-  it('marks no comment outdated against the files of one commit', async () => {
+  it('draws a comment made on one commit there and leaves it off the other commit', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'c3', filePath: 'test.ts', line: 1, body: 'Pinned here' }),
+        codeSnapshot: { content: 'const a = 1;', commit: COMMITS[0]!.sha },
+        view: { baseCommitish: COMMITS[0]!.parentSha, targetCommitish: COMMITS[0]!.sha },
+        fixupTarget: COMMITS[0]!.sha,
+      },
+    ];
+    renderApp();
+    expect(await screen.findByText('Pinned here')).toBeInTheDocument();
+
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByText('Pinned here')).not.toBeInTheDocument();
+
+    fireEvent.click(commitButton(/1111111/));
+    expect(await screen.findByText('Pinned here')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+  });
+
+  it('lists a comment the shown commit leaves off without marking it outdated', async () => {
     mockComments = [
       {
         ...createMockThread({ id: 'c2', filePath: 'other.ts', line: 1, body: 'Elsewhere' }),
@@ -2087,5 +2111,20 @@ describe('App Component - Commits of the review', () => {
       REVIEW.requested.targetCommitish,
     ]);
     expect(await screen.findByText('Look here')).toBeInTheDocument();
+  });
+
+  it('stays on the shown commit to show a comment drawn there', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+    const queriesBefore = diffQueries().length;
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await screen.findByRole('button', { name: 'Close comments list' });
+    await userEvent.keyboard('{Enter}');
+
+    expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
+    expect(diffQueries()).toHaveLength(queriesBefore);
   });
 });

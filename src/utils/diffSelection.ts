@@ -83,18 +83,56 @@ export function reviewCommitViewed(
   );
 }
 
+export function isSameView(a: DiffSelection, b: DiffSelection): boolean {
+  return (
+    isSameCommit(a.baseCommitish, b.baseCommitish) &&
+    isSameCommit(a.targetCommitish, b.targetCommitish) &&
+    normalizeBaseMode(a.baseMode) === normalizeBaseMode(b.baseMode)
+  );
+}
+
+function commitsBetween(view: DiffSelection, commits: readonly ReviewCommit[]): ReviewCommit[] {
+  if (normalizeBaseMode(view.baseMode) === 'merge-base') return [];
+  const end = commits.findIndex((commit) => isSameCommit(commit.sha, view.targetCommitish));
+  const start = commits
+    .slice(0, end + 1)
+    .findIndex((commit) => isSameCommit(commit.parentSha, view.baseCommitish));
+  return end === -1 || start === -1 ? [] : commits.slice(start, end + 1);
+}
+
+export function commitsOfView(
+  view: DiffSelection,
+  review: Pick<ReviewScope, 'selection' | 'commits'>,
+): ReviewCommit[] {
+  return isSameView(view, review.selection) ? review.commits : commitsBetween(view, review.commits);
+}
+
 // The review itself, or the diff from just before one of its commits to that or a later one.
 export function isViewOfReview(
   view: DiffSelection,
   review: Pick<ReviewScope, 'selection' | 'commits'>,
 ): boolean {
-  if (diffSelectionsEqual(view, review.selection)) return true;
-  if (normalizeBaseMode(view.baseMode) === 'merge-base') return false;
-  const end = review.commits.findIndex((commit) => isSameCommit(commit.sha, view.targetCommitish));
   return (
-    end !== -1 &&
-    review.commits
-      .slice(0, end + 1)
-      .some((commit) => isSameCommit(commit.parentSha, view.baseCommitish))
+    diffSelectionsEqual(view, review.selection) || commitsBetween(view, review.commits).length > 0
   );
+}
+
+export interface ViewBinding {
+  view: DiffSelection;
+  fixupTarget: string;
+  snapshotCommit: string;
+}
+
+export function bindingForView(
+  review: Pick<ReviewScope, 'selection' | 'commits'>,
+  view: DiffSelection,
+): ViewBinding | undefined {
+  if (isSameView(view, review.selection)) return undefined;
+  const commit = reviewCommitViewed(view, review.commits);
+  if (!commit) return undefined;
+  return {
+    view: createDiffSelection(commit.parentSha, commit.sha),
+    fixupTarget: commit.sha,
+    snapshotCommit: commit.sha,
+  };
 }

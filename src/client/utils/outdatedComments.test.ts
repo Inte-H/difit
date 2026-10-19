@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DiffCommentThread, DiffFile, DiffLine } from '../../types/diff';
 
-import { buildFileLineIndex, locateThread } from './outdatedComments';
+import { buildFileLineIndex, locateThread, placeThread } from './outdatedComments';
 
 const buildThread = (overrides: Partial<DiffCommentThread> = {}): DiffCommentThread => ({
   id: 'thread-1',
@@ -225,5 +225,136 @@ describe('locateThread', () => {
     );
 
     expect(locateThread(thread, index, TARGET).isOutdated).toBe(true);
+  });
+});
+
+describe('placeThread', () => {
+  const sha = (digit: string) => digit.repeat(40);
+  const PIN = { sha: sha('1'), shortSha: '1111111', parentSha: sha('0'), subject: 'test: pin' };
+  const FIX = { sha: sha('2'), shortSha: '2222222', parentSha: sha('1'), subject: 'fix: round' };
+  const review = {
+    selection: { baseCommitish: '0000000', targetCommitish: '2222222' },
+    commits: [PIN, FIX],
+  };
+  const WHOLE = { baseCommitish: '0000000', targetCommitish: '2222222' };
+  const PIN_VIEW = { baseCommitish: '0000000', targetCommitish: '1111111' };
+  const FIX_VIEW = { baseCommitish: '1111111', targetCommitish: '2222222' };
+  const shownOn = (view: typeof WHOLE) => ({ view, review, targetCommit: '2222222' });
+
+  const madeOnPin = (overrides: Partial<DiffCommentThread> = {}) =>
+    buildThread({
+      view: { baseCommitish: PIN.parentSha, targetCommitish: PIN.sha },
+      fixupTarget: PIN.sha,
+      codeSnapshot: { content: 'const value = 1;', commit: PIN.sha },
+      ...overrides,
+    });
+  const oldThread = () =>
+    buildThread({ codeSnapshot: { content: 'const value = 1;', commit: '2222222' } });
+  const repeated = buildFileLineIndex(
+    buildFile([newLine(10, 'const value = 1;'), newLine(20, 'const value = 1;')]),
+  );
+  const movedDown = buildFileLineIndex(
+    buildFile([newLine(10, 'import x;'), newLine(12, 'const value = 1;')]),
+  );
+  const gone = buildFileLineIndex(buildFile([newLine(10, 'const value = 2;')]));
+
+  it('draws a thread at its stored line on the view it was made on, even when the line repeats', () => {
+    expect(placeThread(madeOnPin(), shownOn(PIN_VIEW), repeated)).toEqual({
+      kind: 'stored',
+      line: 10,
+    });
+  });
+
+  it('moves a thread on another view to the one line that holds its content', () => {
+    expect(placeThread(madeOnPin(), shownOn(WHOLE), movedDown)).toEqual({
+      kind: 'moved',
+      line: 12,
+    });
+  });
+
+  it('marks a thread on another view outdated when its content is gone or repeats', () => {
+    expect(placeThread(madeOnPin(), shownOn(WHOLE), gone)).toEqual({
+      kind: 'stale',
+      reason: 'missing',
+      line: 10,
+    });
+    expect(placeThread(madeOnPin(), shownOn(WHOLE), repeated)).toEqual({
+      kind: 'stale',
+      reason: 'ambiguous',
+      line: 10,
+    });
+  });
+
+  it('hides a thread on a commit view that does not hold its fixup target', () => {
+    expect(placeThread(madeOnPin(), shownOn(FIX_VIEW), movedDown)).toEqual({
+      kind: 'hidden',
+      line: 10,
+    });
+  });
+
+  it('never hides a thread on the whole review', () => {
+    const elsewhere = madeOnPin({ fixupTarget: 'abcdef0' });
+
+    expect(placeThread(elsewhere, shownOn(WHOLE), movedDown).kind).toBe('moved');
+  });
+
+  it('places a thread from before views as made on the whole review and aimed at its target', () => {
+    expect(placeThread(oldThread(), shownOn(WHOLE), repeated)).toEqual({
+      kind: 'stored',
+      line: 10,
+    });
+    expect(placeThread(oldThread(), shownOn(FIX_VIEW), movedDown)).toEqual({
+      kind: 'moved',
+      line: 12,
+    });
+    expect(placeThread(oldThread(), shownOn(FIX_VIEW), repeated)).toEqual({
+      kind: 'stale',
+      reason: 'ambiguous',
+      line: 10,
+    });
+    expect(placeThread(oldThread(), shownOn(PIN_VIEW), repeated).kind).toBe('hidden');
+  });
+
+  it('does not trust the stored line of a deleted line commented on the last commit', () => {
+    const thread = buildThread({
+      position: { side: 'old', line: 10 },
+      codeSnapshot: { content: 'const removed = true;', commit: FIX.sha },
+      view: { baseCommitish: FIX.parentSha, targetCommitish: FIX.sha },
+      fixupTarget: FIX.sha,
+    });
+    const index = buildFileLineIndex(
+      buildFile([oldLine(10, 'const removed = true;'), oldLine(30, 'const removed = true;')]),
+    );
+
+    expect(placeThread(thread, shownOn(FIX_VIEW), index).kind).toBe('stored');
+    expect(placeThread(thread, shownOn(WHOLE), index)).toEqual({
+      kind: 'stale',
+      reason: 'ambiguous',
+      line: 10,
+    });
+  });
+
+  it('relocates an imported thread whose snapshot comes from an older commit', () => {
+    const thread = buildThread({
+      codeSnapshot: { content: 'const value = 1;', commit: 'abcdef0' },
+    });
+
+    expect(placeThread(thread, shownOn(WHOLE), repeated)).toEqual({
+      kind: 'stale',
+      reason: 'ambiguous',
+      line: 10,
+    });
+  });
+
+  it('places a thread as before when the diff is no view of a review', () => {
+    expect(placeThread(madeOnPin(), { view: null, targetCommit: TARGET }, movedDown)).toEqual({
+      kind: 'moved',
+      line: 12,
+    });
+    expect(placeThread(oldThread(), { view: WHOLE, targetCommit: null }, movedDown)).toEqual({
+      kind: 'stale',
+      reason: 'missing',
+      line: 10,
+    });
   });
 });
