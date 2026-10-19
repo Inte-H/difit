@@ -148,7 +148,7 @@ describe('CLI Utils', () => {
           filePath: 'src/example.ts',
           position: { side: 'new', line: 10 },
           body: 'Imported comment',
-          author: undefined,
+          author: 'Agent',
           createdAt: undefined,
           updatedAt: undefined,
           codeSnapshot: undefined,
@@ -177,6 +177,21 @@ describe('CLI Utils', () => {
       expect(result).toHaveLength(2);
       expect(result[0]?.type).toBe('thread');
       expect(result[1]?.type).toBe('reply');
+      expect(result.map((entry) => entry.author)).toEqual(['Agent', 'Agent']);
+    });
+
+    it('keeps the author a comment names', () => {
+      const result = parseCommentOptions([
+        JSON.stringify({
+          type: 'thread',
+          filePath: 'src/example.ts',
+          position: { side: 'new', line: 10 },
+          body: 'Imported comment',
+          author: 'Codex',
+        }),
+      ]);
+
+      expect(result[0]?.author).toBe('Codex');
     });
 
     it('throws for invalid json', () => {

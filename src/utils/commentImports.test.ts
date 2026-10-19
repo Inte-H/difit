@@ -4,6 +4,7 @@ import type { CommentImport, DiffCommentThread } from '../types/diff';
 
 import {
   mergeCommentImports,
+  normalizeCommentImports,
   parseCommentImportValue,
   serializeCommentImports,
 } from './commentImports';
@@ -63,7 +64,7 @@ describe('commentImports', () => {
           position: { side: 'new', line: 10 },
           body: 'Review comment',
           id: undefined,
-          author: undefined,
+          author: 'Agent',
           createdAt: undefined,
           updatedAt: undefined,
           codeSnapshot: undefined,
@@ -92,6 +93,42 @@ describe('commentImports', () => {
       expect(imports).toHaveLength(2);
       expect(imports[0]?.type).toBe('thread');
       expect(imports[1]?.type).toBe('reply');
+    });
+
+    it('gives the agent author to threads and replies sent without one', () => {
+      const imports = parseCommentImportValue(
+        JSON.stringify([
+          {
+            type: 'thread',
+            filePath: 'src/example.ts',
+            position: { side: 'new', line: 10 },
+            body: 'Root',
+          },
+          {
+            type: 'reply',
+            filePath: 'src/example.ts',
+            position: { side: 'new', line: 10 },
+            body: 'Reply',
+            author: '   ',
+          },
+        ]),
+      );
+
+      expect(imports.map((entry) => entry.author)).toEqual(['Agent', 'Agent']);
+    });
+
+    it('keeps the author the import names', () => {
+      const imports = parseCommentImportValue(
+        JSON.stringify({
+          type: 'thread',
+          filePath: 'src/example.ts',
+          position: { side: 'new', line: 10 },
+          body: 'Review comment',
+          author: 'claude',
+        }),
+      );
+
+      expect(imports[0]?.author).toBe('claude');
     });
 
     it('keeps the commit a snapshot was taken from', () => {
@@ -278,6 +315,46 @@ describe('commentImports', () => {
       expect(result.threads).toEqual([]);
       expect(result.warnings).toHaveLength(1);
       expect(result.warnings[0]).toContain('Skipped reply import');
+    });
+
+    it('leaves a stored message without an author as it is', () => {
+      const stored = createThread({ id: 'stored', body: 'Old agent remark' });
+      const existing = [
+        {
+          ...stored,
+          messages: stored.messages.map(({ author: _author, ...message }) => message),
+        },
+      ];
+
+      const result = mergeCommentImports(
+        existing,
+        parseCommentImportValue(
+          JSON.stringify({
+            type: 'thread',
+            filePath: 'src/example.ts',
+            position: { side: 'new', line: 20 },
+            body: 'New agent remark',
+          }),
+        ),
+      );
+
+      expect(result.threads.map((thread) => thread.messages[0]?.author)).toEqual([
+        undefined,
+        'Agent',
+      ]);
+    });
+  });
+
+  describe('normalizeCommentImports', () => {
+    it('leaves a missing author empty', () => {
+      const imports = normalizeCommentImports({
+        type: 'thread',
+        filePath: 'src/example.ts',
+        position: { side: 'new', line: 10 },
+        body: 'Review comment',
+      });
+
+      expect(imports[0]?.author).toBeUndefined();
     });
   });
 });
