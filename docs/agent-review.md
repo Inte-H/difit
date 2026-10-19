@@ -29,10 +29,12 @@ difit comment wait --port <port>
   "message": "빼기로 고쳐 주세요.",
   "state": "rejected",
   "label": "다시 수정 중",
-  "rejectedFixupSha": "afdba2e…"
+  "rejectedFixupSha": "afdba2e…",
+  "fixupTarget": "3f1c9e0…"
 }
 ```
 
+- `fixupTarget`은 리뷰어가 커밋 하나를 보며 단 지적에만 있고, 그 지적에 답할 fixup을 걸 커밋이다. 없으면 리뷰 대상 커밋에 건다.
 - 알리는 경우는 셋이다. 리뷰어가 마지막으로 말한 `[수정 중]`, 새 fixup도 그 뒤의 답도 없는 `[다시 수정 중]`, 되돌린 fixup이 아직 남은 `[되돌림]`. `rejectedFixupSha`는 버려야 할 fixup이다. 고정할 커밋이 없는 리뷰에서는 리뷰어가 마지막으로 말한 지적을 모두 알린다.
 - 띄우자마자 지금 차례인 지적을 모두 찍으므로, 두 번 띄우는 사이에 생긴 지적도 놓치지 않는다. 답한 뒤 다시 띄운다. 답하지 않은 지적은 다시 띄우자마자 또 나온다.
 - 리뷰가 끝나면 아무것도 찍지 않고 0으로 끝난다. 연결이 끊기면 10초 동안 다시 붙고, 그래도 안 되면 오류를 찍고 1로 끝난다.
@@ -47,16 +49,33 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
    difit comment get --port <port> --format json
    ```
 
-2. 코드를 고친 뒤, 리뷰 대상 커밋을 향한 fixup 커밋을 만들고 스레드 id를 트레일러로 붙인다.
+   리뷰어가 커밋 하나를 보며 단 지적에는 필드가 둘 더 있다. `view`는 지적을 단 화면의 기준(`baseCommitish`)과 대상(`targetCommitish`)이고, `fixupTarget`은 fixup을 걸 커밋의 SHA다. 텍스트 출력에도 그 지적의 위치 줄 바로 아래에 `고쳐 넣을 커밋: <짧은 SHA> <제목>`이 붙는다. 두 필드가 없는 지적은 전체 화면에서 단 지적이다.
+
+   - 줄 번호는 `view` 트리의 줄이다. 새 쪽(`"side": "new"`) 줄은 `git show <view.targetCommitish>:<파일>`, 옛 쪽 줄은 `git show <view.baseCommitish>:<파일>`로 읽는다. `view`가 없으면 리뷰 대상 커밋의 줄이다.
+   - 고치는 곳은 HEAD의 파일이다. 뒤 커밋이 그 줄을 옮기거나 바꿨을 수 있으니 줄 번호 대신 `codeSnapshot.content`(지적한 줄의 내용)로 자리를 찾는다. 뒤 커밋이 그 줄을 바꿨어도 fixup은 하나만 만든다([docs/adr/0002](adr/0002-one-fixup-per-thread.md)). 접을 때 생기는 충돌은 아래 「범위 중간 커밋에 접다가 충돌하면」대로 푼다.
+
+2. 코드를 고친 뒤 fixup 커밋을 만들고 스레드 id를 트레일러로 붙인다. 대상은 지적의 `fixupTarget`이고, 없으면 리뷰 대상 SHA다.
 
    ```sh
-   git commit -a --fixup=<리뷰 대상 SHA> --trailer "Review-Thread: <threadId>"
+   git commit -a --fixup=<지적의 fixupTarget, 없으면 리뷰 대상 SHA> --trailer "Review-Thread: <threadId>"
    ```
 
    git이 오래돼 `--trailer`를 모르면 트레일러 줄을 메시지로 직접 넣는다. `fixup!` 제목 아래에 빈 줄을 두고 붙으므로 화면이 똑같이 읽는다.
 
    ```sh
-   git commit -a --fixup=<리뷰 대상 SHA> -m "Review-Thread: <threadId>"
+   git commit -a --fixup=<지적의 fixupTarget, 없으면 리뷰 대상 SHA> -m "Review-Thread: <threadId>"
+   ```
+
+   `--fixup`은 제목을 `fixup! <대상 커밋 제목>`으로 쓰고, 접을 때는 범위 안에서 그 제목을 가진 가장 오래된 커밋에 접힌다. 대상보다 앞에 같은 제목의 커밋이 있으면 수정이 그 커밋으로 들어가 버리므로, 먼저 확인한다.
+
+   ```sh
+   git log --format=%s <리뷰 범위의 시작 커밋>..<fixupTarget>^ | grep -Fx "$(git log -1 --format=%s <fixupTarget>)"
+   ```
+
+   무언가 찍히면 제목 대신 SHA로 대상을 적는다. 리뷰어가 화면에서 직접 고친 fixup과 같은 모양이다([docs/adr/0003](adr/0003-reviewer-edits-become-fixups.md)).
+
+   ```sh
+   git commit -a -m "fixup! <fixupTarget 전체 SHA>" --trailer "Review-Thread: <threadId>"
    ```
 
    - 지적 하나에 fixup 커밋 하나만 둔다. 같은 지적에 fixup이 둘이면 화면이 어느 쪽을 판정할지 정하지 못한다.
@@ -75,10 +94,13 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 승인 여부는 `difit comment get --port <port>` 텍스트 출력에서 지적마다 붙는 `[승인됨]`으로 확인한다. JSON의 `decisions`는 판정을 지우지 않고 쌓기만 한다. 리뷰어가 승인을 취소하면 `"kind": "unapproved"`가 더해지므로, 같은 지적의 `approved`와 `unapproved` 가운데 시각이 늦은 쪽이 지금의 판정이다. 다만 승인한 fixup에 그보다 늦은 `rejected`가 있으면 거절이 우선한다. 리뷰어가 직접 고친 수정을 `되돌리기`로 거절하면 이렇게 남는다.
 
 ```sh
+git rev-parse HEAD   # 찍힌 SHA를 <접기 전 SHA>로 적어 둔다
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 범위의 시작 커밋>
 ```
 
-리뷰 범위의 시작 커밋은 diff의 비교 기준이다. 커밋 하나만 주고 연 리뷰라면 그 커밋의 부모(`<SHA>^`)이다. 커밋 여러 개를 한꺼번에 본 리뷰에서는 리뷰어가 직접 고친 fixup이 범위 중간의 커밋을 향할 수 있으므로, 리뷰 대상 커밋이 아니라 범위의 시작점부터 돌려야 모두 접힌다.
+접기 전 SHA는 셸 변수에 담지 말고 적어 둔다. 명령을 한 번씩 따로 돌리는 에이전트에게는 앞 명령의 셸 변수가 남지 않는다. 접기는 커밋을 다시 나눌 뿐 마지막 파일 내용은 바꾸지 않으므로, 접은 뒤 `git diff --exit-code <접기 전 SHA> HEAD`가 아무것도 찍지 않아야 한다.
+
+리뷰 범위의 시작 커밋은 diff의 비교 기준이다. 커밋 하나만 주고 연 리뷰라면 그 커밋의 부모(`<SHA>^`)이다. 커밋 여러 개를 한꺼번에 본 리뷰에서는 커밋 하나를 보며 단 지적의 fixup과 리뷰어가 직접 고친 fixup이 범위 중간의 커밋을 향할 수 있으므로, 리뷰 대상 커밋이 아니라 범위의 시작점부터 돌려야 모두 접힌다.
 
 fixup이 대상 커밋이 넣은 내용을 전부 지우면 그 커밋이 비게 되어 rebase가 `Could not apply ... fixup!`에서 멈춘다. 빈 커밋으로 남기려면 `git commit --amend --allow-empty --no-edit`, 커밋째 없애려면 `git reset --soft HEAD^`를 한 뒤 `git rebase --continue`로 잇는다.
 
@@ -88,9 +110,16 @@ fixup이 대상 커밋이 넣은 내용을 전부 지우면 그 커밋이 비게
 git log --format='%h %s' <리뷰 범위의 시작 커밋>..HEAD | grep -E '^[0-9a-f]+ (fixup|squash|amend)! '
 ```
 
-남은 fixup이 있으면 짝 커밋을 골라 `git rebase -i`에서 fixup을 그 커밋 바로 아래로 옮기고 `fixup`으로 바꾼다. fixup 본문 첫 줄에는 fixup을 만들 때의 대상 커밋 제목이 적혀 있다. 그 사이 제목이 바뀌었거나 같은 제목의 커밋이 여럿이면, `git show <fixup SHA>`로 무엇을 고쳤는지 보고 `git blame <fixup SHA>^ -- <파일>`로 그 자리의 줄을 넣은 커밋을 확인한다. 리뷰 범위보다 앞의 커밋이 나오면 짝은 리뷰 대상 커밋이다.
+남은 fixup이 있으면 짝 커밋을 골라 `git rebase -i`에서 fixup을 그 커밋 바로 아래로 옮기고 `fixup`으로 바꾼다. 지적에 `fixupTarget`이 있으면 그 커밋이 짝이다. 없으면 이렇게 찾는다. fixup 본문 첫 줄에는 fixup을 만들 때의 대상 커밋 제목이 적혀 있다. 그 사이 제목이 바뀌었거나 같은 제목의 커밋이 여럿이면, `git show <fixup SHA>`로 무엇을 고쳤는지 보고 `git blame <fixup SHA>^ -- <파일>`로 그 자리의 줄을 넣은 커밋을 확인한다. 리뷰 범위보다 앞의 커밋이 나오면 짝은 리뷰 대상 커밋이다.
 
 접으면 fixup 커밋이 사라지므로, 어떤 수정이 어느 커밋으로 들어갔는지를 실행 중인 서버에 기록한다. 지적마다 옛 fixup SHA와 접힌 뒤의 새 커밋 SHA를 짝지어 올린다.
+
+접은 뒤의 새 커밋은 순서로 찾는다. 범위에 머지 커밋이 없으면 접기는 fixup만 없애고 다른 커밋의 순서는 그대로 두므로, 아래 두 목록에서 같은 줄에 있는 SHA가 같은 커밋이다. 예를 들어 `fixupTarget`이 앞 목록의 두 번째 줄이면, 뒤 목록의 두 번째 줄이 접힌 뒤의 SHA다.
+
+```sh
+git rev-list --reverse <리뷰 범위의 시작 커밋>..<리뷰 대상 SHA>  # 접기 전
+git rev-list --reverse <리뷰 범위의 시작 커밋>..HEAD             # 접은 뒤
+```
 
 ```sh
 curl -X POST "http://localhost:<port>/api/decisions" \
@@ -100,16 +129,26 @@ curl -X POST "http://localhost:<port>/api/decisions" \
 
 응답이 `{"success":true,"changed":true,...}`면 받은 것이다. 같은 기록을 다시 보내도 중복으로 쌓이지 않는다. 본문이 배열이 아니거나 필드가 빠진 기록이 하나라도 있으면 아무것도 기록하지 않고 400으로 답한다.
 
+### 범위 중간 커밋에 접다가 충돌하면
+
+fixup이 범위 중간의 커밋을 향하고 그 뒤 커밋이 같은 줄을 바꿨으면, fixup은 HEAD의 줄을 고친 것이라 rebase가 두 번 멈춘다. 도구가 대신 풀지 않으므로 아래처럼 손으로 푼다. 지적한 커밋을 바꾸지 않는다. 리뷰어가 그 커밋을 골라 지적했고, 승인도 그 커밋에 접는다는 뜻이기 때문이다.
+
+1. 먼저 fixup에서 `Could not apply <fixup SHA>... fixup! <대상 커밋 제목>`으로 멈춘다. 충돌 표시의 `HEAD` 쪽이 대상 커밋의 줄이고, 다른 쪽이 HEAD 기준으로 고친 줄이다. 대상 커밋의 줄에 지적한 수정만 더한다. 뒤 커밋이 바꾼 내용은 넣지 않는다.
+2. `git add <파일>` 뒤 `GIT_EDITOR=true git rebase --continue`로 잇는다. 이때 git이 합친 커밋 메시지를 고치라고 편집기를 여는데, `GIT_EDITOR=true`는 대상 커밋의 메시지를 그대로 쓰고 fixup의 제목과 트레일러를 버린다.
+3. 이어서 뒤 커밋에서 `Could not apply <SHA>... <그 커밋 제목>`으로 멈춘다. 이번에는 `HEAD` 쪽이 1에서 고친 줄이고, 다른 쪽이 그 커밋이 원래 만들었던 줄이다. 고친 줄 위에 그 커밋이 하던 변경을 다시 얹는다. 같은 방법으로 `git add`와 `GIT_EDITOR=true git rebase --continue`를 한다. 같은 줄을 바꾼 뒤 커밋이 더 있으면 그 커밋에서도 멈출 수 있으니 같은 방법으로 푼다.
+4. rebase가 끝나면 `git diff --exit-code <접기 전 SHA> HEAD`를 돌린다. 무언가 찍히면 푼 결과가 접기 전과 다르다는 뜻이다. `git reset --hard <접기 전 SHA>`로 되돌리고(아직 rebase 중이면 `git rebase --abort`), 그 지적에 `comment add`로 답글을 달아 어떻게 할지 리뷰어에게 묻는다.
+
 ## 접은 뒤의 커밋으로 지적 옮기기
 
-접으면 리뷰 대상 커밋의 SHA가 바뀐다. 새 SHA로 리뷰를 다시 열면 지적은 옛 SHA의 리뷰에 남아 있으므로, 옛 서버에서 꺼내 새 서버에 넣는다. `comment get`은 지적마다 메시지를 배열로 주고 `comment add`는 첫 메시지를 `thread`, 나머지를 `reply`로 받으므로 모양을 바꿔 넣는다. 지적 id와 `codeSnapshot`(줄 내용과 지적을 단 커밋)을 그대로 실어야 fixup 트레일러와 결정 기록이 같은 지적을 가리키고, 화면이 지적의 자리를 다시 찾을 수 있다.
+접으면 리뷰 대상 커밋의 SHA가 바뀐다. 새 SHA로 리뷰를 다시 열면 지적은 옛 SHA의 리뷰에 남아 있으므로, 옛 서버에서 꺼내 새 서버에 넣는다. `comment get`은 지적마다 메시지를 배열로 주고 `comment add`는 첫 메시지를 `thread`, 나머지를 `reply`로 받으므로 모양을 바꿔 넣는다. 지적 id와 `codeSnapshot`(줄 내용과 지적을 단 커밋)을 그대로 실어야 fixup 트레일러와 결정 기록이 같은 지적을 가리키고, 화면이 지적의 자리를 다시 찾을 수 있다. 커밋 하나를 보며 단 지적의 `view`와 `fixupTarget`도 함께 싣는다.
 
 ```sh
 difit comment get --port <옛 port> --format json > old.json
 
 difit comment add --port <새 port> "$(jq '[.threads[] | . as $t
   | ($t.messages[0] | {type: "thread", id: $t.id, filePath: $t.filePath, position: $t.position,
-                       body, author, createdAt, codeSnapshot: $t.codeSnapshot}),
+                       body, author, createdAt, codeSnapshot: $t.codeSnapshot,
+                       view: $t.view, fixupTarget: $t.fixupTarget}),
     ($t.messages[1:][] | {type: "reply", filePath: $t.filePath, position: $t.position,
                           body, author, createdAt})
   | with_entries(select(.value != null))]' old.json)"
@@ -117,6 +156,8 @@ difit comment add --port <새 port> "$(jq '[.threads[] | . as $t
 jq '.decisions' old.json | curl -X POST "http://localhost:<새 port>/api/decisions" \
   -H 'Content-Type: application/json' -d @-
 ```
+
+옮겨 온 `view`와 `fixupTarget`은 접기 전의 SHA를 그대로 가리킨다. 그래서 새 리뷰에서 이런 지적은 커밋 하나를 보는 화면에는 보이지 않고 전체 화면에만 보이며, 카드에는 짧은 SHA만 보이고 마우스를 올려도 제목이 나오지 않으며, 텍스트 출력의 `고쳐 넣을 커밋:` 줄에도 제목 없이 짧은 SHA만 나온다. 아직 답하지 않은 지적이면, 위의 순서 대응으로 찾은 새 SHA에 fixup을 건다.
 
 새 커밋의 화면은 옮겨 온 지적을 이렇게 놓는다.
 

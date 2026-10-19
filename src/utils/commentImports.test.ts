@@ -4,6 +4,7 @@ import type { CommentImport, DiffCommentThread } from '../types/diff';
 
 import {
   mergeCommentImports,
+  mergeCommentThreads,
   normalizeCommentImports,
   parseCommentImportValue,
   serializeCommentImports,
@@ -43,6 +44,14 @@ function createThread({
       },
     ],
   };
+}
+
+const PIN_SHA = '1111111111111111111111111111111111111111';
+const BASE_SHA = '0000000000000000000000000000000000000000';
+const PIN_VIEW = { baseCommitish: BASE_SHA, targetCommitish: PIN_SHA };
+
+function createBoundThread(args: Parameters<typeof createThread>[0]): DiffCommentThread {
+  return { ...createThread(args), view: PIN_VIEW, fixupTarget: PIN_SHA };
 }
 
 describe('commentImports', () => {
@@ -355,6 +364,153 @@ describe('commentImports', () => {
       });
 
       expect(imports[0]?.author).toBeUndefined();
+    });
+  });
+  describe('the view a thread was made on and its fixup target', () => {
+    it('keeps them through a merge whether the thread is in the existing set, the incoming one or both', () => {
+      const onlyExisting = createBoundThread({ id: 'a', body: 'a', line: 1 });
+      const onlyIncoming = createBoundThread({ id: 'b', body: 'b', line: 2 });
+      const inBoth = createBoundThread({ id: 'c', body: 'c', line: 3 });
+      const incomingCopy = { ...createThread({ id: 'c', body: 'c', line: 3 }) };
+
+      const { threads } = mergeCommentThreads([onlyExisting, inBoth], [onlyIncoming, incomingCopy]);
+
+      for (const thread of threads) {
+        expect(thread.view).toEqual(PIN_VIEW);
+        expect(thread.fixupTarget).toBe(PIN_SHA);
+      }
+      expect(threads).toHaveLength(3);
+    });
+
+    it('takes them from the incoming copy when only that copy has them', () => {
+      const existing = createThread({ id: 'c', body: 'c' });
+      const incoming = createBoundThread({ id: 'c', body: 'c' });
+
+      const [merged] = mergeCommentThreads([existing], [incoming]).threads;
+
+      expect(merged?.view).toEqual(PIN_VIEW);
+      expect(merged?.fixupTarget).toBe(PIN_SHA);
+    });
+
+    it('keeps them when an agent reply is added to the thread', () => {
+      const thread = createBoundThread({ id: 'a', body: 'Fix this' });
+
+      const { threads } = mergeCommentImports(
+        [thread],
+        [
+          {
+            type: 'reply',
+            filePath: thread.filePath,
+            position: thread.position,
+            body: 'Done',
+            author: 'Agent',
+          },
+        ],
+      );
+
+      expect(threads[0]?.messages).toHaveLength(2);
+      expect(threads[0]?.view).toEqual(PIN_VIEW);
+      expect(threads[0]?.fixupTarget).toBe(PIN_SHA);
+    });
+
+    it('adds no such keys to a thread that has none', () => {
+      const thread = createThread({ id: 'a', body: 'a' });
+
+      const [merged] = mergeCommentThreads([thread], [thread]).threads;
+      const [replied] = mergeCommentImports(
+        [thread],
+        [{ type: 'reply', filePath: thread.filePath, position: thread.position, body: 'x' }],
+      ).threads;
+
+      expect(merged).not.toHaveProperty('view');
+      expect(merged).not.toHaveProperty('fixupTarget');
+      expect(replied).not.toHaveProperty('view');
+      expect(replied).not.toHaveProperty('fixupTarget');
+    });
+
+    it('carries them from a thread import into the new thread', () => {
+      const imports = parseCommentImportValue(
+        JSON.stringify({
+          type: 'thread',
+          id: 'moved',
+          filePath: 'src/example.ts',
+          position: { side: 'new', line: 10 },
+          body: 'Review comment',
+          view: PIN_VIEW,
+          fixupTarget: PIN_SHA,
+        }),
+      );
+
+      const [thread] = mergeCommentImports([], imports).threads;
+
+      expect(thread?.view).toEqual(PIN_VIEW);
+      expect(thread?.fixupTarget).toBe(PIN_SHA);
+    });
+
+    it('keeps the base mode of an imported view', () => {
+      const view = { ...PIN_VIEW, baseMode: 'merge-base' };
+      const [entry] = normalizeCommentImports({
+        type: 'thread',
+        filePath: 'src/example.ts',
+        position: { side: 'new', line: 10 },
+        body: 'Review comment',
+        view,
+      });
+
+      expect(entry?.view).toEqual(view);
+    });
+
+    it('leaves the keys out of an import that has neither', () => {
+      const [entry] = normalizeCommentImports({
+        type: 'thread',
+        filePath: 'src/example.ts',
+        position: { side: 'new', line: 10 },
+        body: 'Review comment',
+      });
+      const [thread] = mergeCommentImports([], entry ? [entry] : []).threads;
+
+      expect(entry).not.toHaveProperty('view');
+      expect(entry).not.toHaveProperty('fixupTarget');
+      expect(thread).not.toHaveProperty('view');
+      expect(thread).not.toHaveProperty('fixupTarget');
+    });
+
+    it('makes them part of the import id', () => {
+      const entry = {
+        type: 'thread' as const,
+        filePath: 'src/example.ts',
+        position: { side: 'new' as const, line: 10 },
+        body: 'Review comment',
+      };
+
+      expect(
+        serializeCommentImports([{ ...entry, fixupTarget: PIN_SHA, view: PIN_VIEW }]),
+      ).not.toBe(serializeCommentImports([entry]));
+    });
+
+    it.each([
+      ['a fixup target that is not a commit hash', { fixupTarget: 'main' }, 'fixupTarget'],
+      ['a view that is not an object', { view: 'abc..def' }, 'view'],
+      [
+        'a view with an empty end',
+        { view: { baseCommitish: BASE_SHA, targetCommitish: '' } },
+        'view',
+      ],
+      [
+        'a view with an unknown base mode',
+        { view: { ...PIN_VIEW, baseMode: 'triple-dot' } },
+        'view',
+      ],
+    ])('rejects %s', (_label, fields, fieldName) => {
+      expect(() =>
+        normalizeCommentImports({
+          type: 'thread',
+          filePath: 'src/example.ts',
+          position: { side: 'new', line: 10 },
+          body: 'Review comment',
+          ...fields,
+        }),
+      ).toThrow(`Invalid comment import field: ${fieldName}`);
     });
   });
 });

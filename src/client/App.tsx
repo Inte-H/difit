@@ -17,10 +17,13 @@ import {
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
 import { mergeCommentThreads } from '../utils/commentImports';
 import {
+  bindingForView,
   createDiffSelection,
   diffSelectionsEqual,
+  fixupCommitOf,
   getDiffSelectionKey,
   isCommitHash,
+  madeViewElsewhere,
   normalizeBaseMode,
   reviewCommitViewed,
   selectionAtCommit,
@@ -84,7 +87,7 @@ import {
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
 import { directEditFailureMessage } from './utils/directEdit';
-import { buildFileLineIndex, locateThread, storedPlacement } from './utils/outdatedComments';
+import { buildFileLineIndex, placeThread } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
 const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
@@ -229,6 +232,7 @@ function App() {
           to: resolvedSelection.targetCommitish,
         })
       : 'all';
+  const takesComments = shownPart === 'all' || 'sha' in shownPart;
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
@@ -627,35 +631,54 @@ function App() {
     return map;
   }, [navigableFiles]);
 
-  const normalizedThreads = useMemo<CommentThread[]>(
-    () =>
-      threads.map((thread) => ({
+  const { normalizedThreads, hiddenThreadIds } = useMemo(() => {
+    const hidden = new Set<string>();
+    const placed = threads.map((thread): CommentThread => {
+      const placement = placeThread(
+        thread,
+        { view: resolvedSelection, review, targetCommit },
+        fileLineIndexByPath.get(thread.filePath),
+      );
+      if (placement.kind === 'hidden') hidden.add(thread.id);
+      const madeView =
+        review && resolvedSelection
+          ? madeViewElsewhere(thread, resolvedSelection, review)
+          : undefined;
+      return {
         id: thread.id,
         file: thread.filePath,
-        ...(showsPartOfReview
-          ? storedPlacement(thread)
-          : locateThread(thread, fileLineIndexByPath.get(thread.filePath), targetCommit)),
+        line: placement.line,
+        isOutdated: placement.kind === 'stale',
+        ...(placement.kind === 'stale' ? { outdatedReason: placement.reason } : {}),
         side: thread.position.side,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
         codeContent: thread.codeSnapshot?.content,
         anchorCommit: thread.codeSnapshot?.commit,
         messages: thread.messages,
-      })),
-    [threads, fileLineIndexByPath, targetCommit, showsPartOfReview],
+        ...(thread.fixupTarget
+          ? { fixupCommit: fixupCommitOf(thread.fixupTarget, review?.commits ?? []) }
+          : {}),
+        ...(madeView ? { madeView } : {}),
+      };
+    });
+    return { normalizedThreads: placed, hiddenThreadIds: hidden };
+  }, [threads, fileLineIndexByPath, targetCommit, resolvedSelection, review]);
+  const drawnThreads = useMemo(
+    () => normalizedThreads.filter((thread) => !hiddenThreadIds.has(thread.id)),
+    [normalizedThreads, hiddenThreadIds],
   );
   const showAuthorBadges = useMemo(
     () => hasMultipleCommentAuthors(normalizedThreads.flatMap((thread) => thread.messages)),
     [normalizedThreads],
   );
   const unresolvedThreads = useMemo(
-    () => normalizedThreads.filter((thread) => !resolvedThreadIds.has(thread.id)),
-    [normalizedThreads, resolvedThreadIds],
+    () => drawnThreads.filter((thread) => !resolvedThreadIds.has(thread.id)),
+    [drawnThreads, resolvedThreadIds],
   );
   const threadsByFile = useMemo(() => {
     const map = new Map<string, CommentThread[]>();
-    if (showsPartOfReview) return map;
-    (showResolvedThreads ? normalizedThreads : unresolvedThreads).forEach((thread) => {
+    (showResolvedThreads ? drawnThreads : unresolvedThreads).forEach((thread) => {
       const entry = map.get(thread.file);
       if (entry) {
         entry.push(thread);
@@ -664,7 +687,7 @@ function App() {
       }
     });
     return map;
-  }, [normalizedThreads, unresolvedThreads, showResolvedThreads, showsPartOfReview]);
+  }, [drawnThreads, unresolvedThreads, showResolvedThreads]);
 
   // State to trigger comment creation from keyboard
   const [commentTrigger, setCommentTrigger] = useState<{
@@ -702,13 +725,13 @@ function App() {
   const { cursor, isHelpOpen, setIsHelpOpen, setCursorPosition, rememberFilePosition } =
     useKeyboardNavigation({
       files: navigableFiles,
-      comments: showsPartOfReview ? EMPTY_COMMENT_THREADS : unresolvedThreads,
+      comments: unresolvedThreads,
       viewMode: diffMode,
       reviewedFiles: viewedFiles,
       onToggleReviewed: toggleFileReviewed,
       getHoveredFileIndex,
       onCreateComment: () => {
-        if (cursor && !showsPartOfReview) {
+        if (cursor && takesComments) {
           setCommentTrigger({
             fileIndex: cursor.fileIndex,
             chunkIndex: cursor.chunkIndex,
@@ -1067,6 +1090,7 @@ function App() {
       recordDecision: recordWithPatchId(recordDecision, fixupsByThread),
       undoApproval,
       openReviewAt,
+      showView: showDiff,
       directEdit,
     }),
     [
@@ -1077,6 +1101,7 @@ function App() {
       recordDecision,
       undoApproval,
       openReviewAt,
+      showDiff,
       directEdit,
     ],
   );
@@ -1263,10 +1288,12 @@ function App() {
                 language: undefined,
               }
             : undefined,
+        binding:
+          review && resolvedSelection ? bindingForView(review, resolvedSelection) : undefined,
       });
       return Promise.resolve();
     },
-    [addThread],
+    [addThread, review, resolvedSelection],
   );
 
   const showCopyAllNotice = (notice: CopyAllNotice) => {
@@ -1308,8 +1335,12 @@ function App() {
 
   const handleNavigateToComment = (thread: CommentThread) => {
     if (!diffData) return;
-    if (showsPartOfReview && review) {
-      showDiff(review.requested);
+    const placedHere =
+      !hiddenThreadIds.has(thread.id) &&
+      !thread.isOutdated &&
+      diffData.files.some(({ path }) => path === thread.file);
+    if (!placedHere && showsPartOfReview && review) {
+      showDiff(thread.madeView ?? review.requested);
       pendingCommentNavigationRef.current = thread.id;
       return;
     }
@@ -1321,13 +1352,13 @@ function App() {
   };
   useEffect(() => {
     const threadId = pendingCommentNavigationRef.current;
-    if (!threadId || !diffData || showsPartOfReview || !hasLoadedComments) return;
+    if (!threadId || !diffData || !hasLoadedComments || hiddenThreadIds.has(threadId)) return;
     pendingCommentNavigationRef.current = null;
     const thread = normalizedThreads.find(({ id }) => id === threadId);
     if (!thread) return;
     const position = findCommentPosition(thread, diffData.files);
     if (position) setCursorPosition(position);
-  }, [diffData, hasLoadedComments, normalizedThreads, showsPartOfReview, setCursorPosition]);
+  }, [diffData, hasLoadedComments, normalizedThreads, hiddenThreadIds, setCursorPosition]);
 
   const handleOpenInEditor = useCallback(
     async (filePath: string, lineNumber: number) => {
@@ -1652,7 +1683,7 @@ function App() {
         {isMobile && (
           <FileChips
             files={diffData.files}
-            comments={normalizedThreads}
+            comments={drawnThreads}
             decisions={decisions}
             reviewedFiles={viewedFiles}
             selectedFileIndex={cursor?.fileIndex ?? null}
@@ -1723,7 +1754,7 @@ function App() {
                   files={diffData.files}
                   onScrollToFile={scrollFileIntoDiffContainer}
                   onFileSelected={isMobile ? handleMobileFileSelected : undefined}
-                  comments={normalizedThreads}
+                  comments={drawnThreads}
                   decisions={decisions}
                   reviewedFiles={viewedFiles}
                   onToggleReviewed={toggleFileReviewed}
@@ -1807,7 +1838,7 @@ function App() {
                       collapsedFiles={collapsedFiles}
                       onToggleCollapsed={toggleFileCollapsed}
                       onToggleAllCollapsed={toggleAllFilesCollapsed}
-                      onAddComment={showsPartOfReview ? undefined : handleAddComment}
+                      onAddComment={takesComments ? handleAddComment : undefined}
                       onResolveThread={resolveThread}
                       onReplyToThread={handleReplyToThread}
                       onRemoveMessage={removeMessage}

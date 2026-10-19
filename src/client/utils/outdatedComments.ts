@@ -1,6 +1,13 @@
-import type { AnchorStaleReason, DiffCommentThread, DiffFile, LineNumber } from '../../types/diff';
+import type {
+  AnchorStaleReason,
+  DiffCommentThread,
+  DiffFile,
+  DiffSelection,
+  LineNumber,
+  ReviewScope,
+} from '../../types/diff';
 import { noVisibleLineContradictsAnchor, relocateAnchor } from '../../utils/anchorRelocation';
-import { isSameCommit } from '../../utils/diffSelection';
+import { commitsOfView, isSameCommit, isSameView } from '../../utils/diffSelection';
 
 export interface FileLineIndex {
   old: Map<number, string>;
@@ -34,16 +41,13 @@ export function buildFileLineIndex(file: DiffFile): FileLineIndex {
 const toLineNumber = (line: DiffCommentThread['position']['line']): LineNumber =>
   typeof line === 'number' ? line : [line.start, line.end];
 
-export function storedPlacement(thread: DiffCommentThread): ThreadPlacement {
-  return { line: toLineNumber(thread.position.line), isOutdated: false };
-}
-
 // A stale thread keeps its stored position. Without a target commit (working tree, index, stdin)
 // the thread is never moved, only checked at its stored line.
 export function locateThread(
   thread: DiffCommentThread,
   index: FileLineIndex | undefined,
   targetCommit: string | null,
+  madeOnThisView?: boolean,
 ): ThreadPlacement {
   const storedLine = toLineNumber(thread.position.line);
   const snapshot = thread.codeSnapshot?.content;
@@ -64,10 +68,51 @@ export function locateThread(
   const relocation = relocateAnchor(
     anchor,
     lines,
-    anchorCommit === undefined || isSameCommit(anchorCommit, targetCommit),
+    madeOnThisView ?? (anchorCommit === undefined || isSameCommit(anchorCommit, targetCommit)),
   );
   if (relocation.kind === 'stale') {
     return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };
   }
   return { line: toLineNumber(relocation.line), isOutdated: false };
+}
+
+export type Placement =
+  | { kind: 'stored' | 'moved'; line: LineNumber }
+  | { kind: 'stale'; reason: AnchorStaleReason; line: LineNumber }
+  | { kind: 'hidden'; line: LineNumber };
+
+export interface PlacementContext {
+  view: DiffSelection | null;
+  review?: Pick<ReviewScope, 'selection' | 'commits'>;
+  targetCommit: string | null;
+}
+
+const sameLine = (a: LineNumber, b: LineNumber) => String(a) === String(b);
+
+export function placeThread(
+  thread: DiffCommentThread,
+  { view, review, targetCommit }: PlacementContext,
+  index: FileLineIndex | undefined,
+): Placement {
+  const storedLine = toLineNumber(thread.position.line);
+  let madeOnThisView: boolean | undefined;
+  if (view && review) {
+    const fixupTarget = thread.fixupTarget ?? review.selection.targetCommitish;
+    if (
+      !isSameView(view, review.selection) &&
+      !commitsOfView(view, review).some((commit) => isSameCommit(commit.sha, fixupTarget))
+    ) {
+      return { kind: 'hidden', line: storedLine };
+    }
+    const anchorCommit = thread.codeSnapshot?.commit;
+    madeOnThisView =
+      isSameView(thread.view ?? review.selection, view) &&
+      (anchorCommit === undefined || isSameCommit(anchorCommit, view.targetCommitish));
+  }
+
+  const placement = locateThread(thread, index, targetCommit, madeOnThisView);
+  if (placement.isOutdated) {
+    return { kind: 'stale', reason: placement.outdatedReason ?? 'missing', line: placement.line };
+  }
+  return { kind: sameLine(placement.line, storedLine) ? 'stored' : 'moved', line: placement.line };
 }

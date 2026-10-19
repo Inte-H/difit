@@ -6,10 +6,12 @@ import {
   type DiffLineRange,
   type DiffCommentCodeSnapshot,
   type DiffCommentMessage,
+  type DiffSelection,
   type ReplyCommentImport,
   type ThreadCommentImport,
 } from '../types/diff.js';
 import { createId } from './createId.js';
+import { createDiffSelection, isCommitHash } from './diffSelection.js';
 
 interface MergeCommentImportsResult {
   threads: DiffCommentThread[];
@@ -100,6 +102,47 @@ function normalizeCodeSnapshot(value: unknown): DiffCommentCodeSnapshot | undefi
   };
 }
 
+function normalizeView(value: unknown): DiffSelection | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.baseCommitish !== 'string' ||
+    value.baseCommitish.length === 0 ||
+    typeof value.targetCommitish !== 'string' ||
+    value.targetCommitish.length === 0 ||
+    (value.baseMode !== undefined && value.baseMode !== 'direct' && value.baseMode !== 'merge-base')
+  ) {
+    throw new Error('Invalid comment import field: view');
+  }
+  return createDiffSelection(value.baseCommitish, value.targetCommitish, value.baseMode);
+}
+
+function normalizeFixupTarget(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || !isCommitHash(value)) {
+    throw new Error('Invalid comment import field: fixupTarget');
+  }
+  return value;
+}
+
+function cloneView(view: DiffSelection): DiffSelection {
+  return createDiffSelection(view.baseCommitish, view.targetCommitish, view.baseMode);
+}
+
+function viewFields(source: {
+  view?: DiffSelection;
+  fixupTarget?: string;
+}): Pick<DiffCommentThread, 'view' | 'fixupTarget'> {
+  return {
+    ...(source.view === undefined ? {} : { view: cloneView(source.view) }),
+    ...(source.fixupTarget === undefined ? {} : { fixupTarget: source.fixupTarget }),
+  };
+}
+
 function normalizeOptionalString(value: unknown, fieldName: string): string | undefined {
   if (value === undefined) {
     return undefined;
@@ -149,6 +192,10 @@ function normalizeCommentImportEntry(value: unknown): CommentImport {
     createdAt,
     updatedAt,
     codeSnapshot: normalizeCodeSnapshot(value.codeSnapshot),
+    ...viewFields({
+      view: normalizeView(value.view),
+      fixupTarget: normalizeFixupTarget(value.fixupTarget),
+    }),
   };
 
   return normalized as CommentImport;
@@ -266,6 +313,7 @@ function createImportedThread(commentImport: ThreadCommentImport, now: string): 
     updatedAt,
     position: commentImport.position,
     codeSnapshot: commentImport.codeSnapshot,
+    ...viewFields(commentImport),
     messages: [
       {
         id: commentImport.id ?? threadId,
@@ -341,6 +389,7 @@ function cloneThread(thread: DiffCommentThread): DiffCommentThread {
     position: clonePosition(thread.position),
     codeSnapshot: cloneCodeSnapshot(thread.codeSnapshot),
     messages: thread.messages.map(cloneMessage),
+    ...viewFields(thread),
   };
 }
 
@@ -431,6 +480,10 @@ function mergeThread(
     position: clonePosition(existingThread.position),
     codeSnapshot: cloneCodeSnapshot(incomingThread.codeSnapshot ?? existingThread.codeSnapshot),
     messages: orderedMessages,
+    ...viewFields({
+      view: existingThread.view ?? incomingThread.view,
+      fixupTarget: existingThread.fixupTarget ?? incomingThread.fixupTarget,
+    }),
   };
 }
 
@@ -482,6 +535,14 @@ export function serializeCommentImports(commentImports: CommentImport[]): string
             commit: commentImport.codeSnapshot.commit,
           }
         : undefined,
+      view: commentImport.view
+        ? {
+            baseCommitish: commentImport.view.baseCommitish,
+            targetCommitish: commentImport.view.targetCommitish,
+            baseMode: commentImport.view.baseMode,
+          }
+        : undefined,
+      fixupTarget: commentImport.fixupTarget,
     })),
   );
 }

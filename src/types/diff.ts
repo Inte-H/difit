@@ -167,6 +167,11 @@ export interface DiffCommentThread {
   codeSnapshot?: DiffCommentCodeSnapshot;
 
   messages: DiffCommentMessage[];
+
+  // Optional so a record stays version 2 and an older difit still reads it. A thread without
+  // them was made on the whole review and is fixed up into the review target.
+  view?: DiffSelection;
+  fixupTarget?: string;
 }
 
 interface CommentImportBase {
@@ -178,6 +183,8 @@ interface CommentImportBase {
   createdAt?: string;
   updatedAt?: string;
   codeSnapshot?: DiffCommentCodeSnapshot;
+  view?: DiffSelection;
+  fixupTarget?: string;
 }
 
 export interface ThreadCommentImport extends CommentImportBase {
@@ -287,6 +294,7 @@ export interface ThreadAwaitingAgent {
   filePath: string;
   position: DiffCommentPosition;
   message: string;
+  fixupTarget?: string;
 }
 
 export interface ThreadFixup {
@@ -370,6 +378,9 @@ export interface CommentThread {
   isOutdated?: boolean;
   outdatedReason?: AnchorStaleReason;
   messages: DiffCommentMessage[];
+  fixupCommit?: { shortSha: string; subject?: string };
+  // Set only when it is a view of this review other than the one shown.
+  madeView?: DiffSelection;
 }
 
 // Revision selector types

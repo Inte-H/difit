@@ -1910,15 +1910,39 @@ describe('App Component - Commits of the review', () => {
     ],
   };
   let review: DiffResponse['review'] = REVIEW;
+  let firstStepLine = 'const a = 1;';
+  const fileOf = (target: string | null) =>
+    target === COMMITS[0]!.sha
+      ? {
+          ...file,
+          chunks: file.chunks.map((chunk) => ({
+            ...chunk,
+            lines: chunk.lines.map((line) => ({ ...line, content: firstStepLine })),
+          })),
+        }
+      : file;
   const viewOf = (base: string | null, target: string | null): DiffResponse => ({
     ...mockDiffResponse,
     baseCommitish: (base ?? REVIEW.requested.baseCommitish).slice(0, 7),
     targetCommitish: (target ?? REVIEW.requested.targetCommitish).slice(0, 7),
     requestedBaseCommitish: base ?? REVIEW.requested.baseCommitish,
     requestedTargetCommitish: target ?? REVIEW.requested.targetCommitish,
-    files: [file],
+    files: [fileOf(target)],
     ...(review ? { review } : {}),
   });
+  const pinnedThread = (line: string): DiffCommentThread => ({
+    ...createMockThread({ id: 'c3', filePath: 'test.ts', line: 1, body: 'Pinned here' }),
+    codeSnapshot: { content: line, commit: COMMITS[0]!.sha },
+    view: { baseCommitish: COMMITS[0]!.parentSha, targetCommitish: COMMITS[0]!.sha },
+    fixupTarget: COMMITS[0]!.sha,
+  });
+  const fixupsFor: { current: unknown[] } = { current: [] };
+  const firstRow = () =>
+    waitFor(() => {
+      const found = document.querySelector('[data-diff-line-row="true"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
   const diffQueries = () =>
     vi
       .mocked(global.fetch)
@@ -1936,6 +1960,8 @@ describe('App Component - Commits of the review', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     review = REVIEW;
+    firstStepLine = 'const a = 1;';
+    fixupsFor.current = [];
     mockDecisions = [];
     mockComments = [
       createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
@@ -1946,7 +1972,10 @@ describe('App Component - Commits of the review', () => {
         return Promise.resolve({ ok: true, json: async () => null } as Response);
       }
       if (url.startsWith('/api/fixups')) {
-        return Promise.resolve({ ok: true, json: async () => ({ fixups: [] }) } as Response);
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ fixups: fixupsFor.current }),
+        } as Response);
       }
       const params = new URLSearchParams(url.split('?')[1]);
       return Promise.resolve({
@@ -2006,7 +2035,7 @@ describe('App Component - Commits of the review', () => {
     ]);
   });
 
-  it('keeps the comments of the review while a commit is shown, without drawing or taking any', async () => {
+  it('draws a comment from before commit views only on the whole review and its last commit', async () => {
     renderApp();
     await screen.findByText('Look here');
 
@@ -2016,19 +2045,82 @@ describe('App Component - Commits of the review', () => {
 
     expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual(['def4567', 'abc1234']);
     expect(screen.queryByText('Look here')).not.toBeInTheDocument();
-    const row = await waitFor(() => {
-      const found = document.querySelector('[data-diff-line-row="true"]');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    fireEvent.mouseEnter(row);
-    expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+
+    fireEvent.click(commitButton(/abc1234/));
+    expect(await screen.findByText('Look here')).toBeInTheDocument();
 
     fireEvent.click(commitButton('전체'));
     expect(await screen.findByText('Look here')).toBeInTheDocument();
   });
 
-  it('marks no comment outdated against the files of one commit', async () => {
+  it('binds a comment made on one commit to that commit', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    fireEvent.mouseEnter((await firstRow()).children[2]!);
+    const addButton = screen.getByRole('button', { name: 'Add a comment' });
+    fireEvent.mouseDown(addButton, { shiftKey: true });
+    fireEvent.change(await screen.findByPlaceholderText(/comment/i), {
+      target: { value: 'Fix this here' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    await waitFor(() =>
+      expect(
+        vi
+          .mocked(useDiffComments)
+          .mock.results.flatMap(({ value }) => vi.mocked(value.addThread).mock.calls),
+      ).toEqual([
+        [
+          expect.objectContaining({
+            filePath: 'test.ts',
+            line: 1,
+            body: 'Fix this here',
+            binding: {
+              view: { baseCommitish: COMMITS[0]!.parentSha, targetCommitish: COMMITS[0]!.sha },
+              fixupTarget: COMMITS[0]!.sha,
+              snapshotCommit: COMMITS[0]!.sha,
+            },
+          }),
+        ],
+      ]),
+    );
+  });
+
+  it('offers no line comments while a run of commits is shown', async () => {
+    review = {
+      selection: { baseCommitish: 'def4567', targetCommitish: '2222222' },
+      requested: { baseCommitish: full('def4567'), targetCommitish: full('2222222') },
+      commits: [
+        ...COMMITS,
+        { sha: full('2222222'), shortSha: '2222222', parentSha: full('abc1234'), subject: 'third' },
+      ],
+    };
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+    fireEvent.mouseEnter((await firstRow()).children[2]!);
+    expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+  });
+
+  it('draws a comment made on one commit there and leaves it off the other commit', async () => {
+    mockComments = [pinnedThread('const a = 1;')];
+    renderApp();
+    expect(await screen.findByText('Pinned here')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByText('Pinned here')).not.toBeInTheDocument();
+
+    fireEvent.click(commitButton(/1111111/));
+    expect(await screen.findByText('Pinned here')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+  });
+
+  it('lists a comment the shown commit leaves off without marking it outdated', async () => {
     mockComments = [
       {
         ...createMockThread({ id: 'c2', filePath: 'other.ts', line: 1, body: 'Elsewhere' }),
@@ -2087,5 +2179,143 @@ describe('App Component - Commits of the review', () => {
       REVIEW.requested.targetCommitish,
     ]);
     expect(await screen.findByText('Look here')).toBeInTheDocument();
+  });
+
+  it('goes back to the whole review for a comment on a file the shown commit leaves alone', async () => {
+    mockComments = [
+      createMockThread({ id: 'c9', filePath: 'other.ts', line: 1, body: 'Elsewhere' }),
+    ];
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await screen.findByRole('button', { name: 'Close comments list' });
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([
+      REVIEW.requested.baseCommitish,
+      REVIEW.requested.targetCommitish,
+    ]);
+  });
+
+  it('goes back to the whole review for a comment the shown commit cannot place', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'c8', filePath: 'test.ts', line: 1, body: 'Gone here' }),
+        codeSnapshot: { content: 'const gone = 0;' },
+      },
+    ];
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await screen.findByRole('button', { name: 'Close comments list' });
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+  });
+
+  it('stays on the shown commit to show a comment drawn there', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+    const queriesBefore = diffQueries().length;
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await screen.findByRole('button', { name: 'Close comments list' });
+    await userEvent.keyboard('{Enter}');
+
+    expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
+    expect(diffQueries()).toHaveLength(queriesBefore);
+  });
+
+  it('names on the card the commit a fix for the comment goes into', async () => {
+    mockComments = [pinnedThread('const a = 1;')];
+    renderApp();
+    await screen.findByText('Pinned here');
+
+    const card = document.getElementById('comment-thread-c3')!;
+    expect(within(card).getByText('1111111')).toHaveAttribute('title', 'first step');
+  });
+
+  it('takes a comment outdated on the whole review back to its commit, and Back returns', async () => {
+    firstStepLine = 'const pinned = 0;';
+    mockComments = [pinnedThread('const pinned = 0;')];
+    renderApp();
+    await screen.findByText('Pinned here');
+    const lengthBefore = window.history.length;
+
+    expect(screen.getByLabelText('Outdated comment')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: '이 지적을 달던 시점으로' }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '이 지적을 단 화면으로' }));
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]);
+    expect(window.history.length).toBe(lengthBefore + 1);
+    await screen.findByText('Pinned here');
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+
+    act(() => window.history.back());
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(await screen.findByLabelText('Outdated comment')).toBeInTheDocument();
+  });
+
+  it('shows the fixup for a comment made on one commit under it there, ready to approve', async () => {
+    firstStepLine = 'const pinned = 0;';
+    mockComments = [pinnedThread('const pinned = 0;')];
+    fixupsFor.current = [
+      {
+        sha: 'f'.repeat(40),
+        shortSha: 'fffffff',
+        patchId: 'patch-1',
+        subject: 'fixup! first step',
+        threadIds: ['c3'],
+        files: [{ path: 'test.ts', status: 'modified', chunks: file.chunks }],
+      },
+    ];
+    const recordDecision = vi.fn();
+    const defaultComments = vi.mocked(useDiffComments).getMockImplementation()!;
+    vi.mocked(useDiffComments).mockImplementation((...args) => ({
+      ...defaultComments(...args),
+      recordDecision,
+    }));
+
+    try {
+      renderApp();
+      await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+      fireEvent.click(commitButton(/1111111/));
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+      expect(await screen.findByTestId('fixup-overlay-card')).toHaveTextContent('fffffff');
+      fireEvent.click(screen.getByRole('button', { name: '승인' }));
+      expect(recordDecision).toHaveBeenCalledWith('c3', 'approved', 'f'.repeat(40), 'patch-1');
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual(['def4567', 'abc1234']);
+    } finally {
+      vi.mocked(useDiffComments).mockImplementation(defaultComments);
+    }
+  });
+
+  it('opens the commit a comment was made on to show it from the list', async () => {
+    mockComments = [pinnedThread('const a = 1;')];
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+    expect(screen.queryByText('Pinned here')).not.toBeInTheDocument();
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await screen.findByRole('button', { name: 'Close comments list' });
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]);
   });
 });

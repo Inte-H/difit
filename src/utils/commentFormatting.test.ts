@@ -396,6 +396,40 @@ Related entries are below.`);
       expect(result).toContain('src/App.tsx:L20 [승인됨]\nDone');
     });
 
+    it('should name the commit to fix into only for a thread that has one', () => {
+      const thread = (id: string, fixupCommit?: CommentThread['fixupCommit']): CommentThread => ({
+        id,
+        file: 'src/App.tsx',
+        line: 10,
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+        messages: [
+          {
+            id,
+            body: `Fix ${id}`,
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ],
+        ...(fixupCommit ? { fixupCommit } : {}),
+      });
+      const result = formatCommentsOutput(
+        [
+          thread('named', { shortSha: '1111111', subject: 'first' }),
+          thread('unlisted', { shortSha: '2222222' }),
+          thread('old'),
+        ],
+        new Map([['named', 'awaiting-fix']]),
+      );
+
+      expect(result).toContain(
+        'src/App.tsx:L10 [수정 중]\n고쳐 넣을 커밋: 1111111 first\nFix named',
+      );
+      expect(result).toContain('src/App.tsx:L10\n고쳐 넣을 커밋: 2222222\nFix unlisted');
+      expect(result).toContain('src/App.tsx:L10\nFix old');
+      expect(result.match(/고쳐 넣을 커밋/g)).toHaveLength(2);
+    });
+
     it('should handle comments with multi-line bodies', () => {
       const comments: Comment[] = [
         {

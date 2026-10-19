@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bindingForView,
+  commitsOfView,
+  fixupCommitOf,
   isCommitHash,
   isSameCommit,
+  isSameView,
   isViewOfReview,
+  madeViewElsewhere,
   reviewCommitViewed,
   selectionAtCommit,
 } from './diffSelection';
@@ -110,5 +115,89 @@ describe('views of a review', () => {
     expect(
       reviewCommitViewed({ baseCommitish: '0000000', targetCommitish: '2222222' }, commits),
     ).toBeUndefined();
+  });
+
+  it('takes a short view and the full hashes it abbreviates as the same view', () => {
+    const stored = { baseCommitish: sha('1'), targetCommitish: sha('2') };
+
+    expect(isSameView({ baseCommitish: '1111111', targetCommitish: '2222222' }, stored)).toBe(true);
+    expect(isSameView({ baseCommitish: '1111111', targetCommitish: '4444444' }, stored)).toBe(
+      false,
+    );
+    expect(
+      isSameView(
+        { baseCommitish: '1111111', targetCommitish: '2222222', baseMode: 'merge-base' },
+        stored,
+      ),
+    ).toBe(false);
+  });
+
+  it('lists the commits each view of the review shows', () => {
+    expect(commitsOfView(review.selection, review)).toEqual(commits);
+    expect(commitsOfView({ baseCommitish: '1111111', targetCommitish: '2222222' }, review)).toEqual(
+      [commits[1]],
+    );
+    expect(commitsOfView({ baseCommitish: '1111111', targetCommitish: '4444444' }, review)).toEqual(
+      commits.slice(1),
+    );
+    expect(commitsOfView({ baseCommitish: 'fffffff', targetCommitish: '2222222' }, review)).toEqual(
+      [],
+    );
+  });
+
+  it('binds a comment made on one commit to that commit by its full hashes', () => {
+    expect(
+      bindingForView(review, { baseCommitish: '1111111', targetCommitish: '2222222' }),
+    ).toEqual({
+      view: { baseCommitish: sha('1'), targetCommitish: sha('2') },
+      fixupTarget: sha('2'),
+      snapshotCommit: sha('2'),
+    });
+  });
+
+  it('binds nothing to a comment made on the whole review or a run of commits', () => {
+    expect(bindingForView(review, review.selection)).toBeUndefined();
+    expect(
+      bindingForView(review, { baseCommitish: '0000000', targetCommitish: '2222222' }),
+    ).toBeUndefined();
+
+    const oneCommitReview = {
+      selection: { baseCommitish: '0000000', targetCommitish: '1111111' },
+      commits: commits.slice(0, 1),
+    };
+    expect(bindingForView(oneCommitReview, oneCommitReview.selection)).toBeUndefined();
+  });
+
+  describe('the view a comment was made on', () => {
+    const requested = { baseCommitish: sha('0'), targetCommitish: sha('4') };
+    const scope = { ...review, requested };
+    const onSecond = { view: { baseCommitish: sha('1'), targetCommitish: sha('2') } };
+
+    it('is the commit it was made on, while another view is shown', () => {
+      expect(madeViewElsewhere(onSecond, review.selection, scope)).toBe(onSecond.view);
+      expect(
+        madeViewElsewhere(
+          onSecond,
+          { baseCommitish: '1111111', targetCommitish: '2222222' },
+          scope,
+        ),
+      ).toBeUndefined();
+    });
+
+    it('is the whole review as requested for a comment that names no view', () => {
+      const onCommit = { baseCommitish: '1111111', targetCommitish: '2222222' };
+      expect(madeViewElsewhere({}, onCommit, scope)).toBe(requested);
+      expect(madeViewElsewhere({}, review.selection, scope)).toBeUndefined();
+    });
+
+    it('is nothing for a view outside the review', () => {
+      const elsewhere = { view: { baseCommitish: sha('7'), targetCommitish: sha('8') } };
+      expect(madeViewElsewhere(elsewhere, review.selection, scope)).toBeUndefined();
+    });
+  });
+
+  it('names the commit a fix goes into by its short hash and subject', () => {
+    expect(fixupCommitOf(sha('2'), commits)).toEqual({ shortSha: '2222222', subject: 'second' });
+    expect(fixupCommitOf(sha('9'), commits)).toEqual({ shortSha: '9999999' });
   });
 });

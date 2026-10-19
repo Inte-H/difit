@@ -98,7 +98,7 @@ Each comment thread carries a state in the text output of `comment get`:
 
 ### Learning when it is your turn
 
-A background command wakes you only when it exits, so while a review server you started is running, keep one `difit comment wait --port <port>` running as a background command. It exits as soon as a thread is your turn, printing each such thread as one JSON line: `threadId`, `filePath`, `position`, `message` (the latest message), and on pinned reviews `state` (`awaiting-fix`, `rejected` or `withdrawn`), `label` and, when a rejected fixup is still in the range, `rejectedFixupSha`. Answer every thread it brings as below, then start `difit comment wait` again the same way. It also prints threads that became your turn before it started, so nothing is lost between runs; a thread you have not answered comes back at once.
+A background command wakes you only when it exits, so while a review server you started is running, keep one `difit comment wait --port <port>` running as a background command. It exits as soon as a thread is your turn, printing each such thread as one JSON line: `threadId`, `filePath`, `position`, `message` (the latest message), and on pinned reviews `state` (`awaiting-fix`, `rejected` or `withdrawn`), `label` and, when a rejected fixup is still in the range, `rejectedFixupSha`, plus `fixupTarget` for a comment the user made while viewing one commit. Answer every thread it brings as below, then start `difit comment wait` again the same way. It also prints threads that became your turn before it started, so nothing is lost between runs; a thread you have not answered comes back at once.
 
 - A thread is your turn when it is `[수정 중]` and the user spoke last, `[다시 수정 중]` with no new fixup and no reply from you after the rejection, or `[되돌림]` while its fixup is still in the range. On reviews without a pinned commit, any thread where the user spoke last is your turn. To answer in words instead of a fix (a question, or disagreeing with a rejection), add a reply with `comment add` (`"type": "reply"` with the thread's `filePath` and `position`); that also ends your turn.
 - Exit code 0 with nothing on standard output means the review ended: start no more `difit comment wait` for it. A non-zero exit means it could not reach the server: show its standard error to the user, unless you stopped or restarted the server yourself; after a restart, start `difit comment wait` on the new port.
@@ -115,14 +115,31 @@ The user can also edit code in the viewer. difit then commits a `fixup! <target 
    difit comment get --port <port> --format json
    ```
 
-2. Fix the code, then commit only that comment's changes as a fixup of the review target, with the thread id as a trailer.
+   A comment the user made while viewing one commit has two more fields: `view` (the `baseCommitish` and `targetCommitish` of the diff it was made on) and `fixupTarget` (the SHA of the commit to fix into). The text output adds `고쳐 넣을 커밋: <short SHA> <subject>` right under that comment's location line. A comment without them was made on the whole review.
+
+   - Line numbers belong to the `view` tree: read new-side lines with `git show <view.targetCommitish>:<file>` and old-side lines with `git show <view.baseCommitish>:<file>`. Without `view`, they belong to the review target.
+   - Fix the code in HEAD. Later commits may have moved or changed those lines, so find the place by `codeSnapshot.content` rather than by line number. Make one fixup even when a later commit changed those lines; resolve the fold as in "Folding into a commit in the middle of the range".
+
+2. Fix the code, then commit only that comment's changes as a fixup of the comment's `fixupTarget`, or of the review target when it has none, with the thread id as a trailer.
 
    ```bash
    git add <files changed for this comment>
-   git commit --fixup=<review target SHA> --trailer "Review-Thread: <threadId>"
+   git commit --fixup=<fixupTarget, else review target SHA> --trailer "Review-Thread: <threadId>"
    ```
 
    On a git without `--trailer`, use `-m "Review-Thread: <threadId>"` instead; it lands below the `fixup!` subject after a blank line and reads the same.
+
+   `--fixup` writes `fixup! <target subject>`, and autosquash folds it into the oldest commit in the range with that subject. If an earlier commit shares the target's subject, the fix lands there. Check first:
+
+   ```bash
+   git log --format=%s <review base>..<fixupTarget>^ | grep -Fx "$(git log -1 --format=%s <fixupTarget>)"
+   ```
+
+   If it prints anything, name the target by SHA instead, the shape fixups from the viewer use:
+
+   ```bash
+   git commit -m "fixup! <full fixupTarget SHA>" --trailer "Review-Thread: <threadId>"
+   ```
 
 - Keep exactly one fixup commit per comment. With two, the viewer cannot tell which one to decide on and hides both buttons.
 - Re-read `comment get` right before committing and confirm the comment is still `[수정 중]` or `[다시 수정 중]`. The user may have edited that line in the viewer meanwhile.
@@ -137,10 +154,11 @@ Fold once, when the branch is wrapped up: every remaining fixup is `[승인됨]`
 The JSON `decisions` only accumulate. When the user unapproves, `"kind": "unapproved"` is added; the later of `approved` and `unapproved` for a thread wins, and a `rejected` later than the approval wins over both. Read the current state from the text output labels.
 
 ```bash
+git rev-parse HEAD   # note this SHA as <pre-fold SHA>
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <review base>
 ```
 
-`<review base>` is the compare-with side of the diff, or `<SHA>^` for a single-commit review. Start from the review base, not the target commit: a fixup the user made in the viewer can point at an earlier commit in the range.
+`<review base>` is the compare-with side of the diff, or `<SHA>^` for a single-commit review. Start from the review base, not the target commit: a fixup for a comment made on one commit, or one the user made in the viewer, can point at an earlier commit in the range. Folding only regroups changes, so afterwards `git diff --exit-code <pre-fold SHA> HEAD` must print nothing. Note the SHA itself rather than a shell variable: a variable does not survive into the next command when each command runs on its own.
 
 - If a fixup deletes everything its target added, the rebase stops at `Could not apply ... fixup!`. Keep an empty commit with `git commit --amend --allow-empty --no-edit`, or drop it with `git reset --soft HEAD^`, then `git rebase --continue`.
 - Fixups from the viewer name their target by SHA. Rebasing onto a newer base or rewording the target before folding gives it a new SHA and leaves the fixup unfolded, so do those after folding. The rebase still reports success; confirm nothing is left:
@@ -149,9 +167,9 @@ GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <review base>
   git log --format='%h %s' <review base>..HEAD | grep -E '^[0-9a-f]+ (fixup|squash|amend)! '
   ```
 
-  For a leftover fixup, find its target with `git show <fixup SHA>` and `git blame <fixup SHA>^ -- <file>` (a commit older than the range means the review target), move it under that commit in `git rebase -i`, and mark it `fixup`.
+  For a leftover fixup, its target is the comment's `fixupTarget` when it has one; otherwise find it with `git show <fixup SHA>` and `git blame <fixup SHA>^ -- <file>` (a commit older than the range means the review target), move it under that commit in `git rebase -i`, and mark it `fixup`.
 
-Folding removes the fixup commits, so record where each fix went on the running server, pairing the old fixup SHA with the commit it folded into:
+Folding removes the fixup commits, so record where each fix went on the running server, pairing the old fixup SHA with the commit it folded into. With no merge commits in the range, folding drops only the fixups and keeps the order, so the folded commit sits on the same line of `git rev-list --reverse <review base>..HEAD` as its target does in `git rev-list --reverse <review base>..<review target SHA>`:
 
 ```bash
 curl -X POST "http://localhost:<port>/api/decisions" \
@@ -161,16 +179,26 @@ curl -X POST "http://localhost:<port>/api/decisions" \
 
 `{"success":true,"changed":true,...}` means it was stored. Resending the same record does not duplicate it; a non-array body or a record with a missing field stores nothing and returns 400.
 
+### Folding into a commit in the middle of the range
+
+When a fixup targets a commit in the middle of the range and a later commit changed the same lines, the fixup was written against HEAD and the rebase stops twice. difit does not resolve this; resolve it by hand and keep the commented commit as the target, since that is the commit the user chose and approved.
+
+1. It first stops at `Could not apply <fixup SHA>... fixup! <target subject>`. The `HEAD` side of the conflict is the target commit's lines. Keep those lines plus the fix only, without what later commits changed.
+2. `git add <file>`, then `GIT_EDITOR=true git rebase --continue`. git opens an editor for the combined message; `GIT_EDITOR=true` keeps the target's message and drops the fixup's subject and trailer.
+3. It then stops at the later commit, `Could not apply <SHA>... <its subject>`. The `HEAD` side is now the fixed lines and the other side is that commit's original lines. Put that commit's own change back on top of the fixed lines, then `git add` and `GIT_EDITOR=true git rebase --continue` again. Each further commit that changed those lines can stop the same way.
+4. When the rebase finishes, run `git diff --exit-code <pre-fold SHA> HEAD`. If it prints anything, the resolution changed the result: `git reset --hard <pre-fold SHA>` (or `git rebase --abort` while the rebase is still running) and ask the user in a `comment add` reply on that thread.
+
 ### Moving comments to the folded commit
 
-Folding changes the target SHA, and a review reopened on the new SHA starts without the comments. Copy them from the old server, keeping thread ids and `codeSnapshot` so trailers and decisions still point at the same comments:
+Folding changes the target SHA, and a review reopened on the new SHA starts without the comments. Copy them from the old server, keeping thread ids and `codeSnapshot` so trailers and decisions still point at the same comments, along with `view` and `fixupTarget`:
 
 ```bash
 difit comment get --port <old port> --format json > old.json
 
 difit comment add --port <new port> "$(jq '[.threads[] | . as $t
   | ($t.messages[0] | {type: "thread", id: $t.id, filePath: $t.filePath, position: $t.position,
-                       body, author, createdAt, codeSnapshot: $t.codeSnapshot}),
+                       body, author, createdAt, codeSnapshot: $t.codeSnapshot,
+                       view: $t.view, fixupTarget: $t.fixupTarget}),
     ($t.messages[1:][] | {type: "reply", filePath: $t.filePath, position: $t.position,
                           body, author, createdAt})
   | with_entries(select(.value != null))]' old.json)"
@@ -178,6 +206,8 @@ difit comment add --port <new port> "$(jq '[.threads[] | . as $t
 jq '.decisions' old.json | curl -X POST "http://localhost:<new port>/api/decisions" \
   -H 'Content-Type: application/json' -d @-
 ```
+
+The copied `view` and `fixupTarget` still name pre-fold SHAs, so in the new review such a comment shows only on the whole view, and its commit line shows the short SHA alone. For one you have not answered yet, fix up the commit on the same `git rev-list` line as above.
 
 ## Constraints
 

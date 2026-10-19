@@ -19,7 +19,7 @@ import {
 } from '../../utils/commentFormatting';
 import { createId } from '../../utils/createId';
 import { mergeCommentImports } from '../../utils/commentImports';
-import { isCommitTarget } from '../../utils/diffSelection';
+import { isCommitTarget, type ViewBinding } from '../../utils/diffSelection';
 import { mergeReviewDecisions } from '../../utils/reviewDecisions';
 import { storageService } from '../services/StorageService';
 import { getLanguageFromPath } from '../utils/diffUtils';
@@ -30,6 +30,7 @@ interface AddThreadParams {
   side: DiffSide;
   line: number | { start: number; end: number };
   codeSnapshot?: DiffCommentThread['codeSnapshot'];
+  binding?: ViewBinding;
 }
 
 interface ReplyToThreadParams {
@@ -281,8 +282,10 @@ export function useDiffComments(
     (params: AddThreadParams): DiffCommentThread => {
       const now = new Date().toISOString();
       const threadId = createId();
+      const { binding } = params;
       const commit =
-        targetCommitish && isCommitTarget(targetCommitish) ? targetCommitish : undefined;
+        binding?.snapshotCommit ??
+        (targetCommitish && isCommitTarget(targetCommitish) ? targetCommitish : undefined);
       const newThread: DiffCommentThread = {
         id: threadId,
         filePath: params.filePath,
@@ -308,6 +311,7 @@ export function useDiffComments(
             updatedAt: now,
           },
         ],
+        ...(binding ? { view: binding.view, fixupTarget: binding.fixupTarget } : {}),
       };
 
       const newThreads = [...threads, newThread];

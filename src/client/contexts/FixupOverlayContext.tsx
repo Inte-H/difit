@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 
 import type {
   CommentThread,
+  DiffSelection,
   DirectEditRequest,
   ReviewDecision,
   ReviewDecisionKind,
@@ -35,6 +36,7 @@ export interface FixupOverlayState {
   recordDecision: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
   undoApproval: (threadId: string) => void;
   openReviewAt: (commit: string) => void;
+  showView: (view: DiffSelection) => void;
   // Null when this review cannot take edits.
   directEdit: DirectEditControls | null;
 }
@@ -47,6 +49,7 @@ export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
   recordDecision: () => {},
   undoApproval: () => {},
   openReviewAt: () => {},
+  showView: () => {},
   directEdit: null,
 };
 
@@ -73,6 +76,7 @@ export interface ThreadReviewControls {
   onDecide: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
   onUndoApproval: (threadId: string) => void;
   onOpenReviewAt: (commit: string) => void;
+  onShowView: (view: DiffSelection) => void;
 }
 
 export function recordWithPatchId(
@@ -101,6 +105,7 @@ export function threadReviewControls(
     onDecide: overlay.recordDecision,
     onUndoApproval: overlay.undoApproval,
     onOpenReviewAt: overlay.openReviewAt,
+    onShowView: overlay.showView,
   };
 }
 

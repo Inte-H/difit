@@ -244,6 +244,46 @@ describe('StorageService - Repository Isolation', () => {
       expect(raw.decisions).toEqual(decisions);
     });
 
+    it('writes the view a thread was made on into a version 2 record and reads it back', () => {
+      const thread = {
+        id: 't1',
+        filePath: 'src/a.ts',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+        position: { side: 'new' as const, line: 3 },
+        codeSnapshot: { content: 'x', commit: '1111111111111111111111111111111111111111' },
+        messages: [
+          {
+            id: 't1',
+            body: 'b',
+            author: 'User',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ],
+        view: {
+          baseCommitish: '0000000000000000000000000000000000000000',
+          targetCommitish: '1111111111111111111111111111111111111111',
+        },
+        fixupTarget: '1111111111111111111111111111111111111111',
+      };
+      service.saveDiffContextData('base', 'target', {
+        version: 2,
+        baseCommitish: 'base',
+        targetCommitish: 'target',
+        createdAt: '2024-01-01T00:00:00Z',
+        lastModifiedAt: '2024-01-01T00:00:00Z',
+        threads: [thread],
+        viewedFiles: [],
+        appliedCommentImportIds: [],
+      });
+
+      const key = localStorageMock._keys.find((k) => k.startsWith('difit-storage-v1')) ?? '';
+      const raw = JSON.parse(localStorage.getItem(key) ?? '{}');
+      expect(raw.version).toBe(2);
+      expect(service.getDiffContextData('base', 'target')?.threads).toEqual([thread]);
+    });
+
     it('reads back a version 3 record with its decisions', () => {
       service.saveDiffContextData('base', 'target', {
         version: 2,

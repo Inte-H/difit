@@ -2444,6 +2444,79 @@ describe('Server Integration Tests', () => {
       expect(json.threads.map((thread: { id: string }) => thread.id)).toEqual(['c1']);
     });
 
+    const FIRST_VIEW = { baseCommitish: full('def4567'), targetCommitish: full('1111111') };
+    const boundThread = {
+      ...reviewerThread,
+      id: 'c2',
+      messages: [{ ...reviewerThread.messages[0], id: 'c2', body: 'fix the first' }],
+      view: FIRST_VIEW,
+      fixupTarget: full('1111111'),
+    };
+    const postThreads = (port: number, threads: unknown[], baseVersion?: number) =>
+      fetch(`http://localhost:${port}/api/comments${REVIEW}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threads, baseVersion }),
+      });
+    const readJson = async (port: number) =>
+      (await (await fetch(`http://localhost:${port}/api/comments-json`)).json()) as {
+        threads: Array<Record<string, unknown>>;
+      };
+
+    it('tells the agent the commit to fix into for a comment made on one commit', async () => {
+      const port = await startReview();
+      await view(port);
+      await postThreads(port, [reviewerThread, boundThread]);
+
+      const json = await readJson(port);
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      const wait = await (await fetch(`http://localhost:${port}/api/comments-wait`)).text();
+
+      expect(json.threads.find((thread) => thread.id === 'c2')).toMatchObject({
+        view: FIRST_VIEW,
+        fixupTarget: full('1111111'),
+      });
+      expect(json.threads.find((thread) => thread.id === 'c1')).not.toHaveProperty('fixupTarget');
+      expect(output).toContain(
+        'test.js:L3 [수정 중]\n고쳐 넣을 커밋: 1111111 first\nfix the first',
+      );
+      expect(output).toContain('test.js:L3 [수정 중]\nfix this');
+      expect(output.match(/고쳐 넣을 커밋/g)).toHaveLength(1);
+      expect(wait).toContain(`"threadId":"c2"`);
+      expect(wait.match(/"fixupTarget"/g)).toHaveLength(1);
+      expect(wait).toContain(`"fixupTarget":"${full('1111111')}"`);
+    });
+
+    it('keeps the commit to fix into through an agent reply and a stale save', async () => {
+      const port = await startReview();
+      await view(port);
+      await postThreads(port, [boundThread]);
+
+      await fetch(`http://localhost:${port}/api/comment-imports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          {
+            type: 'reply',
+            filePath: 'test.js',
+            position: { side: 'new', line: 3 },
+            body: 'on it',
+            author: 'Agent',
+          },
+        ] satisfies CommentImport[]),
+      });
+      const savedByAnOlderPage = { ...reviewerThread, id: 'c2', messages: boundThread.messages };
+      await postThreads(port, [savedByAnOlderPage], 1);
+
+      const threads = (await readJson(port)).threads;
+      expect(threads).toHaveLength(1);
+      expect(threads[0]).toMatchObject({
+        view: FIRST_VIEW,
+        fixupTarget: full('1111111'),
+        messages: [{ body: 'fix the first' }, { body: 'on it' }],
+      });
+    });
+
     it('starts a review of its own for a pair outside the range', async () => {
       const port = await startReview();
       await postThread(port, REVIEW);
@@ -2680,6 +2753,21 @@ describe('Server Integration Tests', () => {
         `difit review: your turn on c1 [수정 중]; read with difit comment get --port ${port} --format json`,
       );
       expect(JSON.parse(json!)).toMatchObject({ threadId: 'c1', state: 'awaiting-fix' });
+    });
+
+    it('tells the Claude Code session the commit to fix into', async () => {
+      await listenOnSocket();
+      const { port } = await startPinned();
+
+      await postFromPage(port, { threads: [{ ...reviewerThread('c1'), fixupTarget: FIXUP }] });
+      await settle();
+
+      const [message] = received[0]!
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const [, json] = (message.message.content as string).split('\n');
+      expect(JSON.parse(json!)).toMatchObject({ threadId: 'c1', fixupTarget: FIXUP });
     });
 
     it('sends a rejection and a reverted edit, but not an approval or the same turn twice', async () => {
