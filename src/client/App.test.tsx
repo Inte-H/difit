@@ -1869,3 +1869,223 @@ describe('App Component - File at the top of the diff', () => {
     expect(within(chips).getByTitle('first.ts')).toHaveAttribute('aria-current', 'true');
   });
 });
+
+describe('App Component - Commits of the review', () => {
+  const full = (short: string) => short.padEnd(40, '0');
+  const COMMITS = [
+    {
+      sha: full('1111111'),
+      shortSha: '1111111',
+      parentSha: full('def4567'),
+      subject: 'first step',
+    },
+    {
+      sha: full('abc1234'),
+      shortSha: 'abc1234',
+      parentSha: full('1111111'),
+      subject: 'second step',
+    },
+  ];
+  const REVIEW = {
+    selection: { baseCommitish: 'def4567', targetCommitish: 'abc1234' },
+    requested: { baseCommitish: full('def4567'), targetCommitish: full('abc1234') },
+    commits: COMMITS,
+  };
+  const file = {
+    path: 'test.ts',
+    status: 'modified' as const,
+    additions: 1,
+    deletions: 0,
+    chunks: [
+      {
+        header: '@@ -1,1 +1,1 @@',
+        oldStart: 1,
+        oldLines: 1,
+        newStart: 1,
+        newLines: 1,
+        lines: [
+          { type: 'normal' as const, content: 'const a = 1;', oldLineNumber: 1, newLineNumber: 1 },
+        ],
+      },
+    ],
+  };
+  let review: DiffResponse['review'] = REVIEW;
+  const viewOf = (base: string | null, target: string | null): DiffResponse => ({
+    ...mockDiffResponse,
+    baseCommitish: (base ?? REVIEW.requested.baseCommitish).slice(0, 7),
+    targetCommitish: (target ?? REVIEW.requested.targetCommitish).slice(0, 7),
+    requestedBaseCommitish: base ?? REVIEW.requested.baseCommitish,
+    requestedTargetCommitish: target ?? REVIEW.requested.targetCommitish,
+    files: [file],
+    ...(review ? { review } : {}),
+  });
+  const diffQueries = () =>
+    vi
+      .mocked(global.fetch)
+      .mock.calls.map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/diff'))
+      .map((url) => {
+        const params = new URLSearchParams(url.split('?')[1]);
+        return [params.get('base'), params.get('target')];
+      });
+  const commitButton = (name: RegExp | string) =>
+    within(
+      within(screen.getByRole('region', { name: '리뷰 범위의 커밋' })).getByRole('list'),
+    ).getByRole('button', { name });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    review = REVIEW;
+    mockDecisions = [];
+    mockComments = [
+      createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+    ];
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      if (url.startsWith('/api/fixups')) {
+        return Promise.resolve({ ok: true, json: async () => ({ fixups: [] }) } as Response);
+      }
+      const params = new URLSearchParams(url.split('?')[1]);
+      return Promise.resolve({
+        ok: true,
+        json: async () =>
+          url.startsWith('/api/diff')
+            ? viewOf(params.get('base'), params.get('target'))
+            : { threads: [], decisions: [] },
+        blob: async () => ({ size: 1024 }),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, '');
+  });
+
+  it('lists the commits of the review above the files', async () => {
+    renderApp();
+
+    expect(await screen.findByRole('region', { name: '리뷰 범위의 커밋' })).toBeInTheDocument();
+    expect(commitButton('전체')).toHaveAttribute('aria-current', 'true');
+    expect(commitButton(/1111111/)).toBeInTheDocument();
+  });
+
+  it('lists no commits for a review of one commit or one that is not pinned', async () => {
+    review = { ...REVIEW, commits: COMMITS.slice(1) };
+    const { unmount } = renderApp();
+    await screen.findByText('Look here');
+    expect(screen.queryByRole('region', { name: '리뷰 범위의 커밋' })).not.toBeInTheDocument();
+    unmount();
+
+    review = undefined;
+    renderApp();
+    await screen.findByText('Look here');
+    expect(screen.queryByRole('region', { name: '리뷰 범위의 커밋' })).not.toBeInTheDocument();
+  });
+
+  it('shows one commit on a click and the whole review again on Back', async () => {
+    renderApp();
+    const lengthBefore = window.history.length;
+
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+
+    await waitFor(() =>
+      expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]),
+    );
+    expect(window.history.length).toBe(lengthBefore + 1);
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    act(() => window.history.back());
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([
+      REVIEW.requested.baseCommitish,
+      REVIEW.requested.targetCommitish,
+    ]);
+  });
+
+  it('keeps the comments of the review while a commit is shown, without drawing or taking any', async () => {
+    renderApp();
+    await screen.findByText('Look here');
+
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual(['def4567', 'abc1234']);
+    expect(screen.queryByText('Look here')).not.toBeInTheDocument();
+    const row = await waitFor(() => {
+      const found = document.querySelector('[data-diff-line-row="true"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    fireEvent.mouseEnter(row);
+    expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+
+    fireEvent.click(commitButton('전체'));
+    expect(await screen.findByText('Look here')).toBeInTheDocument();
+  });
+
+  it('marks no comment outdated against the files of one commit', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'c2', filePath: 'other.ts', line: 1, body: 'Elsewhere' }),
+        codeSnapshot: { content: 'const b = 2;', commit: 'abc1234' },
+      },
+    ];
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+
+    expect(await screen.findByText('Elsewhere')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+  });
+
+  it('marks neither the whole review nor a commit while a run of commits is shown', async () => {
+    const third = {
+      sha: full('2222222'),
+      shortSha: '2222222',
+      parentSha: full('abc1234'),
+      subject: 'third step',
+    };
+    review = {
+      selection: { baseCommitish: 'def4567', targetCommitish: '2222222' },
+      requested: { baseCommitish: full('def4567'), targetCommitish: third.sha },
+      commits: [...COMMITS, third],
+    };
+
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+    expect(commitButton('전체')).not.toHaveAttribute('aria-current');
+    expect(commitButton(/1111111/)).not.toHaveAttribute('aria-current');
+    expect(
+      within(screen.getByRole('region', { name: '리뷰 범위의 커밋' })).getByRole('button', {
+        expanded: true,
+      }),
+    ).toHaveTextContent('def4567..abc1234');
+  });
+
+  it('goes back to the whole review to show a comment picked from the list', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await screen.findByRole('button', { name: 'Close comments list' });
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([
+      REVIEW.requested.baseCommitish,
+      REVIEW.requested.targetCommitish,
+    ]);
+    expect(await screen.findByText('Look here')).toBeInTheDocument();
+  });
+});

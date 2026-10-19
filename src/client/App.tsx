@@ -22,6 +22,7 @@ import {
   getDiffSelectionKey,
   isCommitHash,
   normalizeBaseMode,
+  reviewCommitViewed,
   selectionAtCommit,
 } from '../utils/diffSelection';
 import {
@@ -36,6 +37,7 @@ import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
+import { CommitList, type ShownPart } from './components/CommitList';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
@@ -82,7 +84,7 @@ import {
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
 import { directEditFailureMessage } from './utils/directEdit';
-import { buildFileLineIndex, locateThread } from './utils/outdatedComments';
+import { buildFileLineIndex, locateThread, storedPlacement } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
 const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
@@ -193,6 +195,7 @@ function App() {
   const selectedRevisionRef = useRef(selectedRevision);
   selectedRevisionRef.current = selectedRevision;
   const diffRequestIdRef = useRef(0);
+  const pendingCommentNavigationRef = useRef<string | null>(null);
   const activeDiffAbortControllerRef = useRef<AbortController | null>(null);
   const resolvedSelection = useMemo<DiffSelection | null>(() => {
     if (!diffData?.baseCommitish || !diffData?.targetCommitish) {
@@ -212,6 +215,20 @@ function App() {
 
     return getDiffSelectionKey(resolvedSelection);
   }, [resolvedSelection]);
+  const review = diffData?.review;
+  const commentSelection = review?.selection ?? resolvedSelection;
+  const commentSelectionKey = commentSelection ? getDiffSelectionKey(commentSelection) : null;
+  const showsPartOfReview =
+    review !== undefined &&
+    resolvedSelection !== null &&
+    !diffSelectionsEqual(resolvedSelection, review.selection);
+  const shownPart: ShownPart =
+    review && resolvedSelection && showsPartOfReview
+      ? (reviewCommitViewed(resolvedSelection, review.commits) ?? {
+          from: resolvedSelection.baseCommitish,
+          to: resolvedSelection.targetCommitish,
+        })
+      : 'all';
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
@@ -233,39 +250,39 @@ function App() {
     clearAllComments,
     generateAllCommentsPrompt,
   } = useDiffComments(
-    resolvedSelection?.baseCommitish,
-    resolvedSelection?.targetCommitish,
-    diffData?.commit, // Using commit as currentCommitHash
+    commentSelection?.baseCommitish,
+    commentSelection?.targetCommitish,
+    review ? undefined : diffData?.commit, // Using commit as currentCommitHash
     undefined, // branchToHash map - could be populated from server data
     diffData?.repositoryId, // Repository identifier for storage isolation
-    resolvedSelection?.baseMode,
+    commentSelection?.baseMode,
   );
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
 
   const showMobileCommentsBar = isMobile && threads.length > 0;
   const commentsContextKey = useMemo(() => {
-    if (!resolvedSelectionKey) {
+    if (!commentSelectionKey) {
       return null;
     }
 
-    return `${diffData?.repositoryId ?? 'default'}:${resolvedSelectionKey}`;
-  }, [diffData?.repositoryId, resolvedSelectionKey]);
-  const commentSessionQueryString = useMemo(() => {
-    if (!resolvedSelection) {
+    return `${diffData?.repositoryId ?? 'default'}:${commentSelectionKey}`;
+  }, [diffData?.repositoryId, commentSelectionKey]);
+  const commentSessionQueryString = (() => {
+    if (!commentSelection) {
       return null;
     }
 
     const params = new URLSearchParams({
-      base: resolvedSelection.baseCommitish,
-      target: resolvedSelection.targetCommitish,
+      base: commentSelection.baseCommitish,
+      target: commentSelection.targetCommitish,
     });
-    if (resolvedSelection.baseMode === 'merge-base') {
-      params.set('baseMode', resolvedSelection.baseMode);
+    if (commentSelection.baseMode === 'merge-base') {
+      params.set('baseMode', commentSelection.baseMode);
     }
 
     return params.toString();
-  }, [resolvedSelection]);
+  })();
   const getCommentApiUrl = useCallback(
     (path: string) => {
       if (!commentSessionQueryString) {
@@ -277,10 +294,14 @@ function App() {
   );
   // Only a review pinned to a hash shows fixups; HEAD or a branch moves along with them.
   const targetCommit = useMemo(() => {
-    const target = resolvedSelection?.targetCommitish;
-    const requested = diffData?.requestedTargetCommitish;
+    const target = commentSelection?.targetCommitish;
+    const requested = review?.requested.targetCommitish ?? diffData?.requestedTargetCommitish;
     return target && requested && isCommitHash(requested) ? target : null;
-  }, [diffData?.requestedTargetCommitish, resolvedSelection]);
+  }, [
+    diffData?.requestedTargetCommitish,
+    review?.requested.targetCommitish,
+    commentSelection?.targetCommitish,
+  ]);
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
   const [directEditCount, setDirectEditCount] = useState(0);
   const {
@@ -611,7 +632,9 @@ function App() {
       threads.map((thread) => ({
         id: thread.id,
         file: thread.filePath,
-        ...locateThread(thread, fileLineIndexByPath.get(thread.filePath), targetCommit),
+        ...(showsPartOfReview
+          ? storedPlacement(thread)
+          : locateThread(thread, fileLineIndexByPath.get(thread.filePath), targetCommit)),
         side: thread.position.side,
         createdAt: thread.createdAt,
         updatedAt: thread.updatedAt,
@@ -619,7 +642,7 @@ function App() {
         anchorCommit: thread.codeSnapshot?.commit,
         messages: thread.messages,
       })),
-    [threads, fileLineIndexByPath, targetCommit],
+    [threads, fileLineIndexByPath, targetCommit, showsPartOfReview],
   );
   const showAuthorBadges = useMemo(
     () => hasMultipleCommentAuthors(normalizedThreads.flatMap((thread) => thread.messages)),
@@ -631,6 +654,7 @@ function App() {
   );
   const threadsByFile = useMemo(() => {
     const map = new Map<string, CommentThread[]>();
+    if (showsPartOfReview) return map;
     (showResolvedThreads ? normalizedThreads : unresolvedThreads).forEach((thread) => {
       const entry = map.get(thread.file);
       if (entry) {
@@ -640,7 +664,7 @@ function App() {
       }
     });
     return map;
-  }, [normalizedThreads, unresolvedThreads, showResolvedThreads]);
+  }, [normalizedThreads, unresolvedThreads, showResolvedThreads, showsPartOfReview]);
 
   // State to trigger comment creation from keyboard
   const [commentTrigger, setCommentTrigger] = useState<{
@@ -678,13 +702,13 @@ function App() {
   const { cursor, isHelpOpen, setIsHelpOpen, setCursorPosition, rememberFilePosition } =
     useKeyboardNavigation({
       files: navigableFiles,
-      comments: unresolvedThreads,
+      comments: showsPartOfReview ? EMPTY_COMMENT_THREADS : unresolvedThreads,
       viewMode: diffMode,
       reviewedFiles: viewedFiles,
       onToggleReviewed: toggleFileReviewed,
       getHoveredFileIndex,
       onCreateComment: () => {
-        if (cursor) {
+        if (cursor && !showsPartOfReview) {
           setCommentTrigger({
             fileIndex: cursor.fileIndex,
             chunkIndex: cursor.chunkIndex,
@@ -969,6 +993,7 @@ function App() {
       if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
 
       hasUserSelectedRevisionRef.current = true;
+      pendingCommentNavigationRef.current = null;
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
       setLoading(true);
@@ -981,14 +1006,17 @@ function App() {
   const recordReviewJump = useReviewTargetHistory(
     (selection) => void handleRevisionChange(selection),
   );
-  const openReviewAt = useCallback(
-    (commit: string) => {
-      const nextSelection = selectionAtCommit(selectedRevision, commit);
+  const showDiff = useCallback(
+    (nextSelection: DiffSelection) => {
       if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
       recordReviewJump(selectedRevision, nextSelection);
       void handleRevisionChange(nextSelection);
     },
     [handleRevisionChange, recordReviewJump, selectedRevision],
+  );
+  const openReviewAt = useCallback(
+    (commit: string) => showDiff(selectionAtCommit(selectedRevision, commit)),
+    [selectedRevision, showDiff],
   );
   const submitDirectEdit = useCallback(
     async (request: DirectEditRequest): Promise<DirectEditFailure | null> => {
@@ -1280,12 +1308,26 @@ function App() {
 
   const handleNavigateToComment = (thread: CommentThread) => {
     if (!diffData) return;
+    if (showsPartOfReview && review) {
+      showDiff(review.requested);
+      pendingCommentNavigationRef.current = thread.id;
+      return;
+    }
 
     const position = findCommentPosition(thread, diffData.files);
     if (position) {
       setCursorPosition(position);
     }
   };
+  useEffect(() => {
+    const threadId = pendingCommentNavigationRef.current;
+    if (!threadId || !diffData || showsPartOfReview || !hasLoadedComments) return;
+    pendingCommentNavigationRef.current = null;
+    const thread = normalizedThreads.find(({ id }) => id === threadId);
+    if (!thread) return;
+    const position = findCommentPosition(thread, diffData.files);
+    if (position) setCursorPosition(position);
+  }, [diffData, hasLoadedComments, normalizedThreads, showsPartOfReview, setCursorPosition]);
 
   const handleOpenInEditor = useCallback(
     async (filePath: string, lineNumber: number) => {
@@ -1666,6 +1708,16 @@ function App() {
                   : undefined,
               }}
             >
+              {!isMobile && review && review.commits.length > 1 && (
+                <CommitList
+                  commits={review.commits}
+                  shown={shownPart}
+                  onShowAll={() => showDiff(review.requested)}
+                  onShowCommit={(commit) =>
+                    showDiff(createDiffSelection(commit.parentSha, commit.sha))
+                  }
+                />
+              )}
               <div className="flex-1 overflow-y-auto">
                 <FileList
                   files={diffData.files}
@@ -1755,7 +1807,7 @@ function App() {
                       collapsedFiles={collapsedFiles}
                       onToggleCollapsed={toggleFileCollapsed}
                       onToggleAllCollapsed={toggleAllFilesCollapsed}
-                      onAddComment={handleAddComment}
+                      onAddComment={showsPartOfReview ? undefined : handleAddComment}
                       onResolveThread={resolveThread}
                       onReplyToThread={handleReplyToThread}
                       onRemoveMessage={removeMessage}

@@ -29,7 +29,7 @@ export type DiffViewerBodyProps = {
     chunkIndex: number,
     hiddenLines: number,
   ) => Promise<void>;
-  onAddComment: (
+  onAddComment?: (
     line: LineNumber,
     body: string,
     codeContent?: string,

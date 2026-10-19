@@ -34,6 +34,10 @@ export function buildFileLineIndex(file: DiffFile): FileLineIndex {
 const toLineNumber = (line: DiffCommentThread['position']['line']): LineNumber =>
   typeof line === 'number' ? line : [line.start, line.end];
 
+export function storedPlacement(thread: DiffCommentThread): ThreadPlacement {
+  return { line: toLineNumber(thread.position.line), isOutdated: false };
+}
+
 // A stale thread keeps its stored position. Without a target commit (working tree, index, stdin)
 // the thread is never moved, only checked at its stored line.
 export function locateThread(

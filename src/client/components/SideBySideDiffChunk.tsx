@@ -37,7 +37,8 @@ interface SideBySideDiffChunkProps {
   chunkIndex: number;
   threads: CommentThread[];
   showAuthorBadges?: boolean;
-  onAddComment: (
+  // Left out where the diff takes no comments.
+  onAddComment?: (
     line: LineNumber,
     body: string,
     codeContent?: string,
@@ -170,11 +171,12 @@ export function SideBySideDiffChunk({
   const [startLine, setStartLine] = useState<LineSelection | null>(null);
   const [endLine, setEndLine] = useState<LineSelection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [commentingLine, setCommentingLine] = useState<{
+  const [openCommentLine, setCommentingLine] = useState<{
     side: DiffSide;
     lineNumber: LineNumber;
     quote?: string;
   } | null>(null);
+  const commentingLine = onAddComment ? openCommentLine : null;
   const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
   const overlay = useFixupOverlay();
@@ -226,6 +228,7 @@ export function SideBySideDiffChunk({
   };
 
   const startCommentDrag = (selection: LineSelection, fromLineNumber = false) => {
+    if (!onAddComment) return;
     dragFromLineNumber.current = fromLineNumber;
     setSelectionAnchor(selection);
     setStartLine(selection);
@@ -341,7 +344,7 @@ export function SideBySideDiffChunk({
 
   const handleSubmitComment = useCallback(
     async (body: string) => {
-      if (commentingLine !== null) {
+      if (commentingLine !== null && onAddComment) {
         const codeContent = getSelectedCodeContent();
         const fullBody =
           commentingLine.quote === undefined ? body : quoteSelection(commentingLine.quote, body);
@@ -529,6 +532,21 @@ export function SideBySideDiffChunk({
   );
 
   const selected = codeSelection.selected;
+  const commentActions = (selection: LineSelection | null) =>
+    onAddComment
+      ? {
+          onCommentMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => {
+            e.stopPropagation();
+            if (e.shiftKey) {
+              e.preventDefault();
+            }
+            handleCommentButtonMouseDown({ isShiftClick: e.shiftKey, selection });
+          },
+          onComment: () => {
+            if (selection) handleAddComment(selection.side, selection.lineNumber);
+          },
+        }
+      : {};
   const startLineNumberDrag = (selection: LineSelection | null) => (e: React.MouseEvent) => {
     if (e.button !== 0 || e.shiftKey || !selection) return;
     e.preventDefault();
@@ -538,7 +556,7 @@ export function SideBySideDiffChunk({
   return (
     <div ref={containerRef} className="group/hunk relative bg-github-bg-primary overflow-hidden">
       {editHunk && <EditHunkButton onClick={editHunk} />}
-      {selected && (
+      {selected && onAddComment && (
         <SelectionCommentBar
           range={selected.range}
           container={containerRef.current}
@@ -739,21 +757,7 @@ export function SideBySideDiffChunk({
                     {isOldHovered && (
                       <LineNumberActions
                         canHover={canHover}
-                        onCommentMouseDown={(e) => {
-                          e.stopPropagation();
-                          if (e.shiftKey) {
-                            e.preventDefault();
-                          }
-                          handleCommentButtonMouseDown({
-                            isShiftClick: e.shiftKey,
-                            selection: oldSelection,
-                          });
-                        }}
-                        onComment={() => {
-                          if (oldSelection) {
-                            handleAddComment(oldSelection.side, oldSelection.lineNumber);
-                          }
-                        }}
+                        {...commentActions(oldSelection)}
                         onOpenInEditor={openOldSideInEditor}
                       />
                     )}
@@ -805,21 +809,7 @@ export function SideBySideDiffChunk({
                     {isNewHovered && (
                       <LineNumberActions
                         canHover={canHover}
-                        onCommentMouseDown={(e) => {
-                          e.stopPropagation();
-                          if (e.shiftKey) {
-                            e.preventDefault();
-                          }
-                          handleCommentButtonMouseDown({
-                            isShiftClick: e.shiftKey,
-                            selection: newSelection,
-                          });
-                        }}
-                        onComment={() => {
-                          if (newSelection) {
-                            handleAddComment(newSelection.side, newSelection.lineNumber);
-                          }
-                        }}
+                        {...commentActions(newSelection)}
                         onEditLine={editNewLine}
                         onOpenInEditor={openNewSideInEditor}
                       />

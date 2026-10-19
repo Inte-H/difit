@@ -18,8 +18,8 @@ import { OpenInEditorButton } from './OpenInEditorButton';
 
 interface LineActionsProps {
   canHover: boolean;
-  onCommentMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
-  onComment: () => void;
+  onCommentMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onComment?: () => void;
   onEditLine?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onOpenInEditor?: () => void;
 }
@@ -33,7 +33,9 @@ export function LineNumberActions({
   onEditLine,
   onOpenInEditor,
 }: LineActionsProps) {
-  if (canHover) return <CommentButton onMouseDown={onCommentMouseDown} />;
+  if (canHover)
+    return onCommentMouseDown ? <CommentButton onMouseDown={onCommentMouseDown} /> : null;
+  if (!onComment && !onEditLine && !onOpenInEditor) return null;
   return (
     <LineActionMenu onComment={onComment} onEditLine={onEditLine} onOpenInEditor={onOpenInEditor} />
   );
@@ -95,7 +97,7 @@ function LineActionMenu({
           onClick: (e: React.MouseEvent) => {
             e.stopPropagation();
             if (hasMenu) setIsOpen((open) => !open);
-            else onComment();
+            else onComment?.();
           },
         })}
         aria-label={hasMenu ? '줄 메뉴' : 'Add a comment'}
@@ -111,15 +113,17 @@ function LineActionMenu({
             className="z-[60] min-w-40 rounded-md border border-github-border bg-github-bg-secondary p-1 shadow-lg"
             {...getFloatingProps({ onMouseDown: stop })}
           >
-            <button
-              type="button"
-              role="menuitem"
-              className={MENU_ITEM_CLASS}
-              onClick={choose(onComment)}
-            >
-              <MessageSquare className="w-4 h-4" />
-              지적 달기
-            </button>
+            {onComment && (
+              <button
+                type="button"
+                role="menuitem"
+                className={MENU_ITEM_CLASS}
+                onClick={choose(onComment)}
+              >
+                <MessageSquare className="w-4 h-4" />
+                지적 달기
+              </button>
+            )}
             {onEditLine && (
               <button
                 type="button"

@@ -53,6 +53,19 @@ export interface DiffSelection {
   baseMode?: BaseMode;
 }
 
+export interface ReviewCommit {
+  sha: string;
+  shortSha: string;
+  parentSha: string;
+  subject: string;
+}
+
+export interface ReviewScope {
+  selection: DiffSelection;
+  requested: DiffSelection;
+  commits: ReviewCommit[];
+}
+
 export interface DiffResponse {
   commit: string;
   files: DiffFile[];
@@ -70,6 +83,8 @@ export interface DiffResponse {
   repositoryId?: string;
   commentImports?: CommentImport[];
   commentImportId?: string;
+  // The review this diff is a view of; comments and decisions belong to it.
+  review?: ReviewScope;
 }
 
 export interface ChangeKindsResponse {

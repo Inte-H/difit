@@ -384,6 +384,79 @@ describe('findNewerTarget against a real repository', () => {
   });
 });
 
+describe('listReviewCommits against a real repository', () => {
+  const entry = (sha: string, parentSha: string, subject: string) => ({
+    sha,
+    shortSha: sha.slice(0, 7),
+    parentSha,
+    subject,
+  });
+
+  it('lists the commits of the range oldest first, leaving out fixups', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const first = commit(repo, 'first', { 'f.txt': 'b\n' });
+    commit(repo, `fixup! ${first}`, { 'f.txt': 'c\n' });
+    const answer = commit(repo, 'answer\n\nreview-thread: t1', { 'f.txt': 'd\n' });
+    const second = commit(repo, 'second', { 'f.txt': 'e\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(
+      await parser.listReviewCommits({ baseCommitish: base.slice(0, 7), targetCommitish: second }),
+    ).toEqual([entry(first, base, 'first'), entry(second, answer, 'second')]);
+  });
+
+  it('keeps a merge as one commit against its first parent', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    git(repo, 'checkout', '-q', '-b', 'side');
+    commit(repo, 'side work', { 'g.txt': 'g\n' });
+    git(repo, 'checkout', '-q', 'main');
+    const mainWork = commit(repo, 'main work', { 'f.txt': 'b\n' });
+    const merged = merge(repo, 'side', 'merge side');
+
+    const parser = new GitDiffParser(repo);
+
+    expect(
+      await parser.listReviewCommits({ baseCommitish: base, targetCommitish: merged }),
+    ).toEqual([entry(mainWork, base, 'main work'), entry(merged, mainWork, 'merge side')]);
+  });
+
+  it('reads the range from the merge base when the review asks for it', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    git(repo, 'checkout', '-q', '-b', 'feature');
+    const work = commit(repo, 'work', { 'g.txt': 'g\n' });
+    git(repo, 'checkout', '-q', 'main');
+    commit(repo, 'main moves on', { 'f.txt': 'b\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(
+      await parser.listReviewCommits({
+        baseCommitish: 'main',
+        targetCommitish: work,
+        baseMode: 'merge-base',
+      }),
+    ).toEqual([entry(work, base, 'work')]);
+  });
+
+  it('lists nothing for the working tree or the staging area', async () => {
+    const repo = createRepo();
+    commit(repo, 'base', { 'f.txt': 'a\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(
+      await parser.listReviewCommits({ baseCommitish: 'HEAD', targetCommitish: 'working' }),
+    ).toEqual([]);
+    expect(
+      await parser.listReviewCommits({ baseCommitish: 'HEAD', targetCommitish: 'staged' }),
+    ).toEqual([]);
+  });
+});
+
 describe('change kinds against a real repository', () => {
   const source = (comment: string, value: number) =>
     `${lines(8, '// filler ')}// ${comment}\nexport const value = ${value};\n`;
