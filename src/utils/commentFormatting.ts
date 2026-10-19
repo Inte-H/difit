@@ -143,6 +143,10 @@ export function formatCommentThreadPrompt(
   const sections: string[] = [
     formatCommentLocation(thread.file, thread.line, thread.side, reviewState),
   ];
+  if (thread.fixupCommit) {
+    const { shortSha, subject } = thread.fixupCommit;
+    sections.push(`고쳐 넣을 커밋: ${subject ? `${shortSha} ${subject}` : shortSha}`);
+  }
 
   thread.messages.forEach((message, index) => {
     if (index === 0) {

@@ -413,6 +413,25 @@ describe('selectThreadsAwaitingAgent', () => {
     expect(ids([askedAgain], new Map(), rejected)).toEqual(['t1']);
   });
 
+  it('tells the commit to fix into for a thread that has one, and nothing for an old one', () => {
+    const bound = { ...thread('bound', ['User']), fixupTarget: 'c'.repeat(40) };
+    const rejected = [decision('rejected', 'aaaa', '2026-01-02T00:00:00Z', 'bound')];
+
+    expect(
+      selectThreadsAwaitingAgent([bound, thread('old', ['User'])], new Map(), []),
+    ).toMatchObject([{ threadId: 'bound', fixupTarget: 'c'.repeat(40) }, { threadId: 'old' }]);
+    expect(
+      selectThreadsAwaitingAgent([thread('old', ['User'])], undefined, [])[0],
+    ).not.toHaveProperty('fixupTarget');
+    expect(
+      selectThreadsAwaitingAgent(
+        [bound],
+        new Map([['bound', [fixup('aaaa', ['bound'])]]]),
+        rejected,
+      ),
+    ).toMatchObject([{ threadId: 'bound', state: 'rejected', fixupTarget: 'c'.repeat(40) }]);
+  });
+
   it('takes a reverted reviewer edit only until its fixup is dropped', () => {
     const edited = thread('t1', [REVIEWER_EDIT_AUTHOR]);
     const reverted = [

@@ -61,6 +61,7 @@ import {
   type GeneratedStatusResponse,
   type ReviewDecision,
   type RevisionsResponse,
+  type ReviewCommit,
   type ReviewScope,
   type SymbolSearchResponse,
   type ThreadAwaitingAgent,
@@ -70,6 +71,7 @@ import {
 import {
   createDiffSelection,
   diffSelectionsEqual,
+  fixupCommitOf,
   getDiffSelectionKey,
   isCommitHash,
   isViewOfReview,
@@ -796,7 +798,10 @@ export async function startServer(options: ServerOptions): Promise<{
     };
   }
 
-  function toCommentThread(thread: DiffCommentThread): CommentThread {
+  function toCommentThread(
+    thread: DiffCommentThread,
+    commits: readonly ReviewCommit[] = [],
+  ): CommentThread {
     return {
       id: thread.id,
       file: thread.filePath,
@@ -809,6 +814,9 @@ export async function startServer(options: ServerOptions): Promise<{
       updatedAt: thread.updatedAt,
       codeContent: thread.codeSnapshot?.content,
       messages: thread.messages,
+      ...(thread.fixupTarget === undefined
+        ? {}
+        : { fixupCommit: fixupCommitOf(thread.fixupTarget, commits) }),
     };
   }
 
@@ -1370,7 +1378,11 @@ export async function startServer(options: ServerOptions): Promise<{
     );
     if (threads.length === 0) return '';
     const reviewStates = await threadReviewStatesFor(selection);
-    return formatCommentsOutput(threads.map(toCommentThread), reviewStates);
+    const commits = findReviewOf(selection)?.commits;
+    return formatCommentsOutput(
+      threads.map((thread) => toCommentThread(thread, commits)),
+      reviewStates,
+    );
   }
 
   app.get('/api/comments-output', async (req, res) => {

@@ -294,6 +294,7 @@ export interface ThreadAwaitingAgent {
   filePath: string;
   position: DiffCommentPosition;
   message: string;
+  fixupTarget?: string;
 }
 
 export interface ThreadFixup {

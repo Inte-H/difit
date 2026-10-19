@@ -164,7 +164,10 @@ export function selectOpenThreads<
   });
 }
 
-type ThreadForAgent = Pick<DiffCommentThread, 'id' | 'filePath' | 'position' | 'messages'>;
+type ThreadForAgent = Pick<
+  DiffCommentThread,
+  'id' | 'filePath' | 'position' | 'messages' | 'fixupTarget'
+>;
 
 const isAgentMessage = (message: DiffCommentMessage) =>
   message.author !== REVIEWER_AUTHOR && message.author !== REVIEWER_EDIT_AUTHOR;
@@ -205,6 +208,7 @@ export function selectThreadsAwaitingAgent(
       filePath: thread.filePath,
       position: thread.position,
       message: last?.body ?? '',
+      ...(thread.fixupTarget === undefined ? {} : { fixupTarget: thread.fixupTarget }),
     };
     const reviewerSpokeLast = last?.author === REVIEWER_AUTHOR;
     if (!fixupsByThread) return reviewerSpokeLast ? [base] : [];
