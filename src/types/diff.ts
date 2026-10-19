@@ -167,6 +167,11 @@ export interface DiffCommentThread {
   codeSnapshot?: DiffCommentCodeSnapshot;
 
   messages: DiffCommentMessage[];
+
+  // Optional so a record stays version 2 and an older difit still reads it. A thread without
+  // them was made on the whole review and is fixed up into the review target.
+  view?: DiffSelection;
+  fixupTarget?: string;
 }
 
 interface CommentImportBase {
@@ -178,6 +183,8 @@ interface CommentImportBase {
   createdAt?: string;
   updatedAt?: string;
   codeSnapshot?: DiffCommentCodeSnapshot;
+  view?: DiffSelection;
+  fixupTarget?: string;
 }
 
 export interface ThreadCommentImport extends CommentImportBase {
