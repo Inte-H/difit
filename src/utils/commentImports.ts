@@ -1,12 +1,13 @@
-import type {
-  CommentImport,
-  DiffCommentPosition,
-  DiffCommentThread,
-  DiffLineRange,
-  DiffCommentCodeSnapshot,
-  DiffCommentMessage,
-  ReplyCommentImport,
-  ThreadCommentImport,
+import {
+  AGENT_AUTHOR,
+  type CommentImport,
+  type DiffCommentPosition,
+  type DiffCommentThread,
+  type DiffLineRange,
+  type DiffCommentCodeSnapshot,
+  type DiffCommentMessage,
+  type ReplyCommentImport,
+  type ThreadCommentImport,
 } from '../types/diff.js';
 import { createId } from './createId.js';
 
@@ -169,7 +170,9 @@ export function parseCommentImportValue(value: string): CommentImport[] {
     throw new Error('Invalid --comment JSON');
   }
 
-  return normalizeCommentImports(parsed);
+  return normalizeCommentImports(parsed).map((entry) =>
+    entry.author?.trim() ? entry : { ...entry, author: AGENT_AUTHOR },
+  );
 }
 
 function getPositionKey(position: DiffCommentPosition): string {

@@ -260,6 +260,8 @@ export const REVIEWER_EDIT_AUTHOR = 'reviewer-edit';
 // Author the page writes on everything the reviewer types; any other author is the agent's.
 export const REVIEWER_AUTHOR = 'User';
 
+export const AGENT_AUTHOR = 'Agent';
+
 export interface ThreadAwaitingAgent {
   threadId: string;
   // Absent on reviews without fixup states, where any reviewer word left unanswered counts.

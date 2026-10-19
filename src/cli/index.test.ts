@@ -700,6 +700,16 @@ describe('CLI index.ts', () => {
           createdAt: '2026-03-25T09:10:00Z',
           updatedAt: '2026-03-25T09:12:00Z',
         },
+        {
+          type: 'reply' as const,
+          id: 'PR_COMMENT_3',
+          filePath: 'src/example.ts',
+          position: { side: 'new' as const, line: 10 },
+          body: 'Imported PR reply from a deleted account',
+          author: undefined,
+          createdAt: '2026-03-25T09:20:00Z',
+          updatedAt: '2026-03-25T09:20:00Z',
+        },
       ];
       mockGetPrPatch.mockReturnValue(prPatch);
       mockGetPrCommentImports.mockResolvedValue(prCommentImports);
@@ -767,7 +777,7 @@ describe('CLI index.ts', () => {
             filePath: 'src/example.ts',
             position: { side: 'new', line: 10 },
             body: 'Manual reply',
-            author: undefined,
+            author: 'Agent',
             createdAt: undefined,
             updatedAt: undefined,
             codeSnapshot: undefined,
@@ -915,7 +925,7 @@ describe('CLI index.ts', () => {
             filePath: 'src/example.ts',
             position: { side: 'new', line: 10 },
             body: 'Imported comment',
-            author: undefined,
+            author: 'Agent',
             createdAt: undefined,
             updatedAt: undefined,
             codeSnapshot: undefined,

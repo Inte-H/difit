@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+import type { CommentImport } from '../types/diff.js';
+
 import { createCommentCommand, waitForAgentTurn } from './comment.js';
 
 describe('createCommentCommand', () => {
@@ -140,6 +142,40 @@ describe('comment subcommand integration', () => {
         }),
       );
       expect(consoleOutput[0]).toContain('"success":true');
+    });
+
+    it('sends the agent author for comments without one', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ success: true, importId: 'abc123', count: 1 }));
+
+      const command = createCommentCommand();
+      await command.parseAsync([
+        'node',
+        'difit',
+        'add',
+        '--port',
+        '4966',
+        '{"type":"thread","filePath":"test.ts","position":{"side":"new","line":1},"body":"Test"}',
+      ]);
+
+      const sent = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as CommentImport[];
+      expect(sent.map((entry) => entry.author)).toEqual(['Agent']);
+    });
+
+    it('sends the author a comment names', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ success: true, importId: 'abc123', count: 1 }));
+
+      const command = createCommentCommand();
+      await command.parseAsync([
+        'node',
+        'difit',
+        'add',
+        '--port',
+        '4966',
+        '{"type":"thread","filePath":"test.ts","position":{"side":"new","line":1},"body":"Test","author":"Codex"}',
+      ]);
+
+      const sent = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as CommentImport[];
+      expect(sent.map((entry) => entry.author)).toEqual(['Codex']);
     });
 
     it('validates JSON before sending', async () => {

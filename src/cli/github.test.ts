@@ -230,6 +230,29 @@ describe('CLI GitHub utils', () => {
       ]);
     });
 
+    it('leaves the author empty when GitHub returns none', () => {
+      const response = {
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: [
+                  createReviewThread({
+                    comments: { nodes: [createReviewComment({ author: null })] },
+                  }),
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          },
+        },
+      };
+
+      const result = parsePrCommentImportsResponse(response);
+
+      expect(result.commentImports.map((entry) => entry.author)).toEqual([undefined]);
+    });
+
     it('warns and skips threads with invalid line mapping', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const response = {

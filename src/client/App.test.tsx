@@ -7,6 +7,7 @@ import { mockFetch } from '../../vitest.setup';
 import type { DiffCommentThread, DiffResponse, ReviewDecision } from '../types/diff';
 import type { ClientWatchState } from '../types/watch';
 import { DiffMode } from '../types/watch';
+import { mergeCommentImports, parseCommentImportValue } from '../utils/commentImports';
 
 import App from './App';
 import { useDiffComments } from './hooks/useDiffComments';
@@ -854,6 +855,33 @@ describe('App Component - Comment sync', () => {
 
     expect(await screen.findByText('User')).toBeInTheDocument();
     expect(screen.getByText('Reviewer')).toBeInTheDocument();
+  });
+
+  it('shows author badges when the reviewer and an agent without a named author both comment', async () => {
+    const agentThreads = mergeCommentImports(
+      [],
+      parseCommentImportValue(
+        JSON.stringify({
+          type: 'thread',
+          filePath: 'test.ts',
+          position: { side: 'new', line: 20 },
+          body: 'Agent comment',
+        }),
+      ),
+    ).threads;
+    mockComments = [
+      createMockThread({ id: 'test-1', filePath: 'test.ts', line: 10, body: 'User comment' }),
+      ...agentThreads,
+    ];
+    mockFetch(mockDiffResponse);
+
+    renderApp();
+
+    fireEvent.click(await screen.findByTitle('More options'));
+    fireEvent.click(await screen.findByText('View All Comments'));
+
+    expect(await screen.findByText('User')).toBeInTheDocument();
+    expect(screen.getByText('Agent')).toBeInTheDocument();
   });
 });
 
