@@ -17,10 +17,13 @@ import {
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
 import { mergeCommentThreads } from '../utils/commentImports';
 import {
+  bindingForView,
   createDiffSelection,
   diffSelectionsEqual,
+  fixupCommitOf,
   getDiffSelectionKey,
   isCommitHash,
+  madeViewElsewhere,
   normalizeBaseMode,
   reviewCommitViewed,
   selectionAtCommit,
@@ -229,6 +232,7 @@ function App() {
           to: resolvedSelection.targetCommitish,
         })
       : 'all';
+  const takesComments = shownPart === 'all' || 'sha' in shownPart;
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
@@ -636,6 +640,10 @@ function App() {
         fileLineIndexByPath.get(thread.filePath),
       );
       if (placement.kind === 'hidden') hidden.add(thread.id);
+      const madeView =
+        review && resolvedSelection
+          ? madeViewElsewhere(thread, resolvedSelection, review)
+          : undefined;
       return {
         id: thread.id,
         file: thread.filePath,
@@ -648,6 +656,10 @@ function App() {
         codeContent: thread.codeSnapshot?.content,
         anchorCommit: thread.codeSnapshot?.commit,
         messages: thread.messages,
+        ...(thread.fixupTarget
+          ? { fixupCommit: fixupCommitOf(thread.fixupTarget, review?.commits ?? []) }
+          : {}),
+        ...(madeView ? { madeView } : {}),
       };
     });
     return { normalizedThreads: placed, hiddenThreadIds: hidden };
@@ -719,7 +731,7 @@ function App() {
       onToggleReviewed: toggleFileReviewed,
       getHoveredFileIndex,
       onCreateComment: () => {
-        if (cursor && !showsPartOfReview) {
+        if (cursor && takesComments) {
           setCommentTrigger({
             fileIndex: cursor.fileIndex,
             chunkIndex: cursor.chunkIndex,
@@ -1078,6 +1090,7 @@ function App() {
       recordDecision: recordWithPatchId(recordDecision, fixupsByThread),
       undoApproval,
       openReviewAt,
+      showView: showDiff,
       directEdit,
     }),
     [
@@ -1088,6 +1101,7 @@ function App() {
       recordDecision,
       undoApproval,
       openReviewAt,
+      showDiff,
       directEdit,
     ],
   );
@@ -1274,10 +1288,12 @@ function App() {
                 language: undefined,
               }
             : undefined,
+        binding:
+          review && resolvedSelection ? bindingForView(review, resolvedSelection) : undefined,
       });
       return Promise.resolve();
     },
-    [addThread],
+    [addThread, review, resolvedSelection],
   );
 
   const showCopyAllNotice = (notice: CopyAllNotice) => {
@@ -1319,8 +1335,12 @@ function App() {
 
   const handleNavigateToComment = (thread: CommentThread) => {
     if (!diffData) return;
-    if (hiddenThreadIds.has(thread.id) && review) {
-      showDiff(review.requested);
+    const placedHere =
+      !hiddenThreadIds.has(thread.id) &&
+      !thread.isOutdated &&
+      diffData.files.some(({ path }) => path === thread.file);
+    if (!placedHere && showsPartOfReview && review) {
+      showDiff(thread.madeView ?? review.requested);
       pendingCommentNavigationRef.current = thread.id;
       return;
     }
@@ -1818,7 +1838,7 @@ function App() {
                       collapsedFiles={collapsedFiles}
                       onToggleCollapsed={toggleFileCollapsed}
                       onToggleAllCollapsed={toggleAllFilesCollapsed}
-                      onAddComment={showsPartOfReview ? undefined : handleAddComment}
+                      onAddComment={takesComments ? handleAddComment : undefined}
                       onResolveThread={resolveThread}
                       onReplyToThread={handleReplyToThread}
                       onRemoveMessage={removeMessage}

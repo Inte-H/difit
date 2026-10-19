@@ -372,6 +372,40 @@ const next = true;
       expect(result.current.threads[0]?.codeSnapshot?.commit).toBeUndefined();
     });
 
+    it('binds a thread made on one commit to that commit and the view it was made on', () => {
+      const commit = '1111111'.padEnd(40, '1');
+      const view = { baseCommitish: '0000000'.padEnd(40, '0'), targetCommitish: commit };
+      const { result } = renderHook(() => useDiffComments('def4567', 'abc1234'));
+
+      act(() => {
+        result.current.addThread({
+          filePath: 'src/utils/test.ts',
+          body: 'Pinned here',
+          side: 'new',
+          line: 3,
+          codeSnapshot: { content: 'const x = 1;' },
+          binding: { view, fixupTarget: commit, snapshotCommit: commit },
+        });
+      });
+      act(() => {
+        result.current.addThread({
+          filePath: 'src/utils/test.ts',
+          body: 'On the whole review',
+          side: 'new',
+          line: 3,
+        });
+      });
+
+      const [bound, plain] = result.current.threads;
+      expect(bound?.view).toEqual(view);
+      expect(bound?.fixupTarget).toBe(commit);
+      expect(bound?.codeSnapshot?.commit).toBe(commit);
+      expect(bound?.codeSnapshot?.content).toBe('const x = 1;');
+      expect(plain).not.toHaveProperty('view');
+      expect(plain).not.toHaveProperty('fixupTarget');
+      expect(plain?.codeSnapshot?.commit).toBe('abc1234');
+    });
+
     it('should remove comment by id', () => {
       const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
 

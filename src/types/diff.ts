@@ -377,6 +377,9 @@ export interface CommentThread {
   isOutdated?: boolean;
   outdatedReason?: AnchorStaleReason;
   messages: DiffCommentMessage[];
+  fixupCommit?: { shortSha: string; subject?: string };
+  // Set only when it is a view of this review other than the one shown.
+  madeView?: DiffSelection;
 }
 
 // Revision selector types

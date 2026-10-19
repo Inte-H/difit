@@ -1,4 +1,11 @@
-import type { BaseMode, DiffSelection, ReviewCommit, ReviewScope } from '../types/diff.js';
+import type {
+  BaseMode,
+  CommentThread,
+  DiffCommentThread,
+  DiffSelection,
+  ReviewCommit,
+  ReviewScope,
+} from '../types/diff.js';
 
 export function normalizeBaseMode(baseMode?: BaseMode): BaseMode {
   return baseMode ?? 'direct';
@@ -135,4 +142,26 @@ export function bindingForView(
     fixupTarget: commit.sha,
     snapshotCommit: commit.sha,
   };
+}
+
+// As the commit list or its 「전체」 entry requests it, so showing it records the same history entry.
+export function madeViewElsewhere(
+  thread: Pick<DiffCommentThread, 'view'>,
+  shown: DiffSelection,
+  review: Pick<ReviewScope, 'selection' | 'commits' | 'requested'>,
+): DiffSelection | undefined {
+  const made = thread.view ?? review.selection;
+  if (isSameView(made, shown)) return undefined;
+  if (isSameView(made, review.selection)) return review.requested;
+  return commitsBetween(made, review.commits).length > 0 ? made : undefined;
+}
+
+export function fixupCommitOf(
+  fixupTarget: string,
+  commits: readonly ReviewCommit[],
+): NonNullable<CommentThread['fixupCommit']> {
+  const commit = commits.find(({ sha }) => isSameCommit(sha, fixupTarget));
+  return commit
+    ? { shortSha: commit.shortSha, subject: commit.subject }
+    : { shortSha: fixupTarget.slice(0, 7) };
 }

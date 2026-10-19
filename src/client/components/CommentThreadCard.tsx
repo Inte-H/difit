@@ -275,9 +275,11 @@ export function CommentThreadCard({
     review &&
     thread.isOutdated &&
     thread.anchorCommit &&
+    !thread.madeView &&
     !(review.targetCommit && isSameCommit(thread.anchorCommit, review.targetCommit))
       ? thread.anchorCommit
       : null;
+  const madeView = thread.isOutdated ? thread.madeView : undefined;
 
   const rootMessage = thread.messages[0];
   if (!rootMessage) return null;
@@ -385,6 +387,18 @@ export function CommentThreadCard({
 
       {!isCollapsed && (
         <div className="space-y-3">
+          {thread.fixupCommit && (
+            <div className="flex min-w-0 items-center gap-2 text-xs text-github-text-muted">
+              <span className="shrink-0">고쳐 넣을 커밋</span>
+              <span className="shrink-0 font-mono text-github-text-secondary">
+                {thread.fixupCommit.shortSha}
+              </span>
+              {thread.fixupCommit.subject && (
+                <span className="min-w-0 truncate">{thread.fixupCommit.subject}</span>
+              )}
+            </div>
+          )}
+
           <ThreadMessageItem
             message={rootMessage}
             showAuthorBadge={showAuthorBadges}
@@ -477,6 +491,19 @@ export function CommentThreadCard({
               title={`${anchorCommit} 커밋을 대상으로 리뷰를 다시 엽니다`}
             >
               이 지적을 달던 시점으로
+            </button>
+          )}
+
+          {review && madeView && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                review.onShowView(madeView);
+              }}
+              className="min-h-10 w-full rounded border border-github-border bg-github-bg-secondary px-3 text-sm text-github-text-primary"
+            >
+              이 지적을 단 화면으로
             </button>
           )}
 

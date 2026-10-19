@@ -477,6 +477,7 @@ describe('CommentThreadCard', () => {
               onDecide: vi.fn(),
               onUndoApproval: vi.fn(),
               onOpenReviewAt: vi.fn(),
+              onShowView: vi.fn(),
             }}
             onResolveThread={vi.fn()}
             onReplyToThread={vi.fn().mockResolvedValue(undefined)}
@@ -643,6 +644,7 @@ describe('CommentThreadCard', () => {
     onDecide: vi.fn(),
     onUndoApproval: vi.fn(),
     onOpenReviewAt: vi.fn(),
+    onShowView: vi.fn(),
   };
 
   it('marks a stale review thread visibly while keeping its state chip and decision buttons', () => {
@@ -696,6 +698,65 @@ describe('CommentThreadCard', () => {
 
     rerender(renderCard(staleThread));
     expect(reopenButton()).not.toBeInTheDocument();
+  });
+
+  it('takes a stale thread back to the view it was made on, in place of reopening the review', async () => {
+    const user = userEvent.setup();
+    const onShowView = vi.fn();
+    const onOpenReviewAt = vi.fn();
+    const madeView = { baseCommitish: 'a'.repeat(40), targetCommitish: '6e4f6d5'.padEnd(40, '0') };
+    const renderCard = (thread: CommentThread) => (
+      <CommentThreadCard
+        thread={thread}
+        review={{ ...awaitingReview, onOpenReviewAt, onShowView }}
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />
+    );
+    const madeViewButton = () => screen.queryByRole('button', { name: '이 지적을 단 화면으로' });
+    const staleThread = {
+      ...mockThread,
+      isOutdated: true,
+      outdatedReason: 'missing' as const,
+      anchorCommit: madeView.targetCommitish,
+      madeView,
+    };
+
+    const { rerender } = render(renderCard(staleThread));
+    expect(
+      screen.queryByRole('button', { name: '이 지적을 달던 시점으로' }),
+    ).not.toBeInTheDocument();
+    await user.click(madeViewButton()!);
+    expect(onShowView).toHaveBeenCalledWith(madeView);
+    expect(onOpenReviewAt).not.toHaveBeenCalled();
+
+    rerender(renderCard({ ...staleThread, isOutdated: false }));
+    expect(madeViewButton()).not.toBeInTheDocument();
+  });
+
+  it('names the commit a fix for the thread goes into', () => {
+    const renderCard = (thread: CommentThread) => (
+      <CommentThreadCard
+        thread={thread}
+        review={awaitingReview}
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />
+    );
+
+    const { rerender } = render(
+      renderCard({ ...mockThread, fixupCommit: { shortSha: '1111111', subject: 'first step' } }),
+    );
+    expect(screen.getByText('고쳐 넣을 커밋')).toBeInTheDocument();
+    expect(screen.getByText('1111111')).toBeInTheDocument();
+    expect(screen.getByText('first step')).toBeInTheDocument();
+
+    rerender(renderCard(mockThread));
+    expect(screen.queryByText('고쳐 넣을 커밋')).not.toBeInTheDocument();
   });
 
   it('always shows an inline reply trigger below the last message', () => {
