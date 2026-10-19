@@ -1921,12 +1921,24 @@ describe('App Component - Commits of the review', () => {
           })),
         }
       : file;
+  const THIRD = {
+    sha: full('2222222'),
+    shortSha: '2222222',
+    parentSha: full('abc1234'),
+    subject: 'third step',
+  };
+  const THREE_COMMITS = {
+    selection: { baseCommitish: 'def4567', targetCommitish: '2222222' },
+    requested: { baseCommitish: full('def4567'), targetCommitish: THIRD.sha },
+    commits: [...COMMITS, THIRD],
+  };
+  let requested = REVIEW.requested;
   const viewOf = (base: string | null, target: string | null): DiffResponse => ({
     ...mockDiffResponse,
-    baseCommitish: (base ?? REVIEW.requested.baseCommitish).slice(0, 7),
-    targetCommitish: (target ?? REVIEW.requested.targetCommitish).slice(0, 7),
-    requestedBaseCommitish: base ?? REVIEW.requested.baseCommitish,
-    requestedTargetCommitish: target ?? REVIEW.requested.targetCommitish,
+    baseCommitish: (base ?? requested.baseCommitish).slice(0, 7),
+    targetCommitish: (target ?? requested.targetCommitish).slice(0, 7),
+    requestedBaseCommitish: base ?? requested.baseCommitish,
+    requestedTargetCommitish: target ?? requested.targetCommitish,
     files: [fileOf(target)],
     ...(review ? { review } : {}),
   });
@@ -1962,6 +1974,7 @@ describe('App Component - Commits of the review', () => {
     review = REVIEW;
     firstStepLine = 'const a = 1;';
     fixupsFor.current = [];
+    requested = REVIEW.requested;
     mockDecisions = [];
     mockComments = [
       createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
@@ -2138,29 +2151,112 @@ describe('App Component - Commits of the review', () => {
     expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
   });
 
-  it('marks neither the whole review nor a commit while a run of commits is shown', async () => {
-    const third = {
-      sha: full('2222222'),
-      shortSha: '2222222',
-      parentSha: full('abc1234'),
-      subject: 'third step',
-    };
-    review = {
-      selection: { baseCommitish: 'def4567', targetCommitish: '2222222' },
-      requested: { baseCommitish: full('def4567'), targetCommitish: third.sha },
-      commits: [...COMMITS, third],
-    };
+  it('paints a run of commits shown on load and names its ends in the header', async () => {
+    review = THREE_COMMITS;
 
     renderApp();
     await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
 
     expect(commitButton('전체')).not.toHaveAttribute('aria-current');
-    expect(commitButton(/1111111/)).not.toHaveAttribute('aria-current');
+    expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true');
+    expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
+    expect(commitButton(/2222222/)).not.toHaveAttribute('aria-current');
     expect(
       within(screen.getByRole('region', { name: '리뷰 범위의 커밋' })).getByRole('button', {
         expanded: true,
       }),
-    ).toHaveTextContent('def4567..abc1234');
+    ).toHaveTextContent('1111111~abc1234 (2개)');
+  });
+
+  describe('with three commits', () => {
+    beforeEach(() => {
+      review = THREE_COMMITS;
+      requested = THREE_COMMITS.requested;
+    });
+
+    it('shows the run between two commits on a Shift+click from either end', async () => {
+      renderApp();
+      await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+      fireEvent.click(commitButton(/1111111/));
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+      fireEvent.click(commitButton(/abc1234/), { shiftKey: true });
+      await waitFor(() =>
+        expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[1]!.sha]),
+      );
+      await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+      expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true');
+
+      fireEvent.click(commitButton(/2222222/));
+      await waitFor(() => expect(commitButton(/1111111/)).not.toHaveAttribute('aria-current'));
+      fireEvent.click(commitButton(/abc1234/), { shiftKey: true });
+      await waitFor(() => expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.sha, THIRD.sha]));
+    });
+
+    it('shows the same run after dragging from one commit to another', async () => {
+      renderApp();
+      await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+      fireEvent.mouseDown(commitButton(/abc1234/), { button: 0 });
+      fireEvent.mouseEnter(commitButton(/1111111/));
+      fireEvent.mouseUp(commitButton(/1111111/));
+
+      await waitFor(() =>
+        expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[1]!.sha]),
+      );
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+      expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
+    });
+
+    it('shows the whole review for a run that covers every commit', async () => {
+      renderApp();
+      await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+      fireEvent.click(commitButton(/2222222/));
+      await waitFor(() => expect(commitButton(/2222222/)).toHaveAttribute('aria-current', 'true'));
+
+      fireEvent.click(commitButton(/1111111/), { shiftKey: true });
+
+      await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+      expect(diffQueries().at(-1)).toEqual([
+        THREE_COMMITS.requested.baseCommitish,
+        THREE_COMMITS.requested.targetCommitish,
+      ]);
+      expect(await screen.findByText('Look here')).toBeInTheDocument();
+    });
+
+    it('goes back from a run to the commit shown before on Back', async () => {
+      renderApp();
+      await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+      fireEvent.click(commitButton(/1111111/));
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+      fireEvent.click(commitButton(/abc1234/), { shiftKey: true });
+      await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+      act(() => window.history.back());
+
+      await waitFor(() => expect(commitButton(/abc1234/)).not.toHaveAttribute('aria-current'));
+      expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true');
+      expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]);
+    });
+
+    it('keeps the comments of the review while a run is shown, without drawing or taking any', async () => {
+      renderApp();
+      await screen.findByText('Look here');
+      fireEvent.click(commitButton(/1111111/));
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+      fireEvent.click(commitButton(/abc1234/), { shiftKey: true });
+      await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+      expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual(['def4567', '2222222']);
+      expect(screen.queryByText('Look here')).not.toBeInTheDocument();
+      const row = await waitFor(() => {
+        const found = document.querySelector('[data-diff-line-row="true"]');
+        expect(found).not.toBeNull();
+        return found!;
+      });
+      fireEvent.mouseEnter(row);
+      expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+    });
   });
 
   it('goes back to the whole review to show a comment picked from the list', async () => {

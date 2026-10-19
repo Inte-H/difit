@@ -2415,6 +2415,52 @@ describe('Server Integration Tests', () => {
       expect(body.directEditAvailable).toBe(false);
     });
 
+    describe('with a run of its commits shown', () => {
+      const RUN_COMMITS = [
+        COMMITS[0]!,
+        {
+          sha: full('5555555'),
+          shortSha: '5555555',
+          parentSha: full('1111111'),
+          subject: 'middle',
+        },
+        { ...COMMITS[1]!, parentSha: full('5555555') },
+      ];
+      const LATER_RUN = `?base=${full('1111111')}&target=${full('abc1234')}`;
+
+      beforeEach(() => {
+        reviewCommits.list = RUN_COMMITS;
+      });
+
+      it('keeps the same review, without direct edits', async () => {
+        const port = await startReview();
+        await view(port);
+
+        const body = await view(port, LATER_RUN);
+
+        expect(body.baseCommitish).toBe('1111111');
+        expect(body.targetCommitish).toBe('abc1234');
+        expect(body.review.selection).toEqual({
+          baseCommitish: 'def4567',
+          targetCommitish: 'abc1234',
+        });
+        expect(body.review.commits).toEqual(RUN_COMMITS);
+        expect(body.directEditAvailable).toBe(false);
+      });
+
+      it('files a comment sent for the run under the review', async () => {
+        const port = await startReview();
+        await view(port, LATER_RUN);
+
+        await postThread(port, '?base=1111111&target=abc1234');
+
+        const json = (await (
+          await fetch(`http://localhost:${port}/api/comments-json${REVIEW}`)
+        ).json()) as any;
+        expect(json.threads.map((thread: { id: string }) => thread.id)).toEqual(['c1']);
+      });
+    });
+
     it('reads the whole review for the agent while the browser shows one commit', async () => {
       const port = await startReview();
       await view(port);
