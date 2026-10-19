@@ -247,6 +247,7 @@ function App() {
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
   const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
+  const showsCommitList = !isMobile && review !== undefined && review.commits.length > 1;
 
   // New diff-aware comment system
   const {
@@ -765,6 +766,10 @@ function App() {
       onRefresh: () => {
         reload();
       },
+      ...(showsCommitList && {
+        onPreviousCommit: () => selectView({ kind: 'previous' }),
+        onNextCommit: () => selectView({ kind: 'next' }),
+      }),
     });
 
   // Viewed button in the diff header: silently remember the toggled file as
@@ -1759,7 +1764,7 @@ function App() {
                   : undefined,
               }}
             >
-              {!isMobile && review && review.commits.length > 1 && (
+              {showsCommitList && (
                 <CommitList review={review} shown={shownView} onSelect={selectView} />
               )}
               <div className="flex-1 overflow-y-auto">

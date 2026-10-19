@@ -43,6 +43,8 @@ export interface UseKeyboardNavigationProps {
   onDeleteAllComments?: () => void;
   onShowCommentsList?: () => void;
   onRefresh?: () => void;
+  onPreviousCommit?: () => void;
+  onNextCommit?: () => void;
   isModalOpen?: boolean;
   getHoveredFileIndex?: () => number | null;
 }

@@ -2224,6 +2224,25 @@ describe('App Component - Commits of the review', () => {
       expect(await screen.findByText('Look here')).toBeInTheDocument();
     });
 
+    it('moves to the previous and next commit with the keys and from the whole review to the first and last', async () => {
+      renderApp();
+      await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+      await userEvent.keyboard('{Shift>}>{/Shift}');
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+      await userEvent.keyboard('{Shift>}>{/Shift}');
+      await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+      expect(diffQueries().at(-1)).toEqual([COMMITS[1]!.parentSha, COMMITS[1]!.sha]);
+      await userEvent.keyboard('{Shift>}<{/Shift}');
+      await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+      fireEvent.click(commitButton('전체'));
+      await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+      await userEvent.keyboard('{Shift>}<{/Shift}');
+      await waitFor(() => expect(commitButton(/2222222/)).toHaveAttribute('aria-current', 'true'));
+      expect(diffQueries().at(-1)).toEqual([THIRD.parentSha, THIRD.sha]);
+    });
+
     it('goes back from a run to the commit shown before on Back', async () => {
       renderApp();
       await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
