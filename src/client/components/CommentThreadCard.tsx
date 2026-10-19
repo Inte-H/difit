@@ -19,6 +19,10 @@ import { CommentBodyRenderer } from './CommentBodyRenderer';
 import { CommentForm } from './CommentForm';
 import type { AppearanceSettings } from './SettingsModal';
 
+// Hidden until the message is hovered only where hovering is possible; touch screens keep it shown.
+const REVEAL_ON_HOVER =
+  '[@media(hover:hover)]:opacity-0 group-hover:opacity-100 focus-visible:opacity-100';
+
 interface ThreadMessageItemProps {
   message: DiffCommentMessage;
   showAuthorBadge: boolean;
@@ -151,14 +155,11 @@ function ThreadMessageItem({
             </div>
           ) : (
             <div className="flex shrink-0 items-start gap-2 pt-0.5">
-              {/* Hidden until hover only where hovering is possible; touch screens keep it shown. */}
               <button
                 type="button"
                 onClick={handleCopy}
-                className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 transition-all hover:bg-github-bg-primary focus-visible:opacity-100 group-hover:opacity-100 ${
-                  isCopied
-                    ? 'text-green-700'
-                    : 'text-github-text-primary [@media(hover:hover)]:opacity-0'
+                className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 transition-all hover:bg-github-bg-primary ${
+                  isCopied ? 'text-green-700' : `text-github-text-primary ${REVEAL_ON_HOVER}`
                 }`}
                 title={isCopied ? 'Copied!' : 'Copy comment'}
                 aria-label="Copy comment"
@@ -169,8 +170,9 @@ function ThreadMessageItem({
                 <button
                   type="button"
                   onClick={handleStartEdit}
-                  className="rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-text-primary transition-all hover:bg-github-bg-primary"
+                  className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-text-primary transition-all hover:bg-github-bg-primary ${REVEAL_ON_HOVER}`}
                   title="Edit message"
+                  aria-label="Edit message"
                 >
                   <Edit2 size={12} />
                 </button>
@@ -182,7 +184,7 @@ function ThreadMessageItem({
                     e.stopPropagation();
                     setIsConfirming(true);
                   }}
-                  className="rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-danger transition-all hover:bg-github-bg-primary"
+                  className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-danger transition-all hover:bg-github-bg-primary ${REVEAL_ON_HOVER}`}
                   title="Delete reply"
                   aria-label="Delete reply"
                 >

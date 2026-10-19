@@ -277,6 +277,82 @@ describe('CommentThreadCard', () => {
     expect(screen.queryByText('Delete?')).not.toBeInTheDocument();
   });
 
+  describe('message action visibility', () => {
+    const hideUntilHover = [
+      '[@media(hover:hover)]:opacity-0',
+      'group-hover:opacity-100',
+      'focus-visible:opacity-100',
+    ];
+    const opacityClasses = (element: HTMLElement) =>
+      [...element.classList].filter((token) => token.includes('opacity')).sort();
+
+    const renderThreadWithUserReply = () =>
+      render(
+        <CommentThreadCard
+          thread={threadWithUserReply}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />,
+      );
+
+    const replyActions = () => ({
+      copy: screen.getAllByRole('button', { name: 'Copy comment' })[1]!,
+      edit: screen.getAllByRole('button', { name: 'Edit message' })[1]!,
+      remove: screen.getByRole('button', { name: 'Delete reply' }),
+    });
+
+    it('hides copy, edit and delete the same way until the message is hovered', () => {
+      renderThreadWithUserReply();
+      const { copy, edit, remove } = replyActions();
+
+      for (const button of [copy, edit, remove]) {
+        expect(button).toHaveClass(...hideUntilHover);
+      }
+      expect(opacityClasses(edit)).toEqual(opacityClasses(copy));
+      expect(opacityClasses(remove)).toEqual(opacityClasses(copy));
+    });
+
+    it('reveals only the hovered message', () => {
+      renderThreadWithUserReply();
+      const [rootCopy, replyCopy] = screen.getAllByRole('button', { name: 'Copy comment' });
+      const replyRow = replyCopy!.closest('.group');
+
+      expect(replyRow).not.toBeNull();
+      expect(rootCopy!.closest('.group')).not.toBe(replyRow);
+      for (const button of Object.values(replyActions())) {
+        expect(button.closest('.group')).toBe(replyRow);
+      }
+    });
+
+    it('keeps the delete confirmation visible regardless of hover', async () => {
+      const user = userEvent.setup();
+      renderThreadWithUserReply();
+
+      await user.click(screen.getByRole('button', { name: 'Delete reply' }));
+
+      expect(screen.getByText('Delete?')).toBeInTheDocument();
+      for (const name of ['Delete', 'Cancel']) {
+        const button = screen.getByRole('button', { name });
+        expect(button.closest('[class*="opacity-0"]')).toBeNull();
+      }
+    });
+
+    it('keeps the copied check shown while edit and delete stay hidden', async () => {
+      const user = userEvent.setup();
+      renderThreadWithUserReply();
+
+      await user.click(replyActions().copy);
+
+      const { copy, edit, remove } = replyActions();
+      expect(copy).toHaveAttribute('title', 'Copied!');
+      expect(copy).not.toHaveClass('[@media(hover:hover)]:opacity-0');
+      expect(edit).toHaveClass(...hideUntilHover);
+      expect(remove).toHaveClass(...hideUntilHover);
+    });
+  });
+
   describe('when resolved', () => {
     const resolution = (kind: 'resolved' | 'unresolved', at: string): ReviewDecision => ({
       threadId: 'thread-1',
