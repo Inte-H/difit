@@ -12,7 +12,15 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
 } from 'lucide-react';
-import { memo, useMemo, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+} from 'react';
 
 import { type DiffFile, type CommentThread, type ReviewDecision } from '../../types/diff';
 import {
@@ -36,6 +44,7 @@ interface FileListProps {
   onToggleReviewed: (path: string) => void;
   onToggleFolderReviewed: (path: string, reviewed: boolean) => void;
   selectedFileIndex: number | null;
+  scrollVisibleFileIndex?: number | null;
 }
 
 interface TreeNode {
@@ -50,6 +59,7 @@ const TREE_ROW_PADDING_LEFT_PX = 16;
 const TREE_ICON_SIZE_PX = 16;
 const TREE_ROW_GAP_PX = 8;
 const TREE_INDENT_STEP_PX = TREE_ICON_SIZE_PX + TREE_ROW_GAP_PX;
+const SCROLL_VISIBLE_BAR_CLASS = 'shadow-[inset_3px_0_0_0_var(--color-github-text-secondary)]';
 
 function getTreeRowPaddingLeft(depth: number): string {
   return `${depth * TREE_INDENT_STEP_PX + TREE_ROW_PADDING_LEFT_PX}px`;
@@ -171,6 +181,7 @@ export const FileList = memo(function FileList({
   onToggleReviewed,
   onToggleFolderReviewed,
   selectedFileIndex,
+  scrollVisibleFileIndex = null,
 }: FileListProps) {
   const fileTree = useMemo(() => buildFileTree(files), [files]);
   const shouldUseStickyDirectoryHeaders = useMemo(
@@ -179,6 +190,7 @@ export const FileList = memo(function FileList({
   );
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const dirContainerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const fileRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const stickyContainerStyle = {
     '--dir-row-height': 'calc(var(--spacing, 0.25rem) * 9)',
   } as CSSProperties;
@@ -255,6 +267,32 @@ export const FileList = memo(function FileList({
       }
     );
   }, [fileTree, filterText]);
+
+  const scrollVisiblePath =
+    scrollVisibleFileIndex === null ? undefined : files[scrollVisibleFileIndex]?.path;
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    const row =
+      scrollVisiblePath === undefined ? undefined : fileRowRefs.current.get(scrollVisiblePath);
+    if (!container || !row) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const rowTop = rowRect.top - containerRect.top;
+    const rowBottom = rowRect.bottom - containerRect.top;
+    const depth = Number.parseInt(row.dataset.depth || '0', 10);
+    const dirHeaderHeight = shouldUseStickyDirectoryHeaders
+      ? (container.querySelector('[data-dir-header="true"]')?.getBoundingClientRect().height ?? 0)
+      : 0;
+    const stickyHeadersBottom = depth * dirHeaderHeight;
+
+    // scrollIntoView would also scroll the sidebar's overflow-hidden wrapper sideways.
+    if (rowTop < stickyHeadersBottom) {
+      container.scrollTop += rowTop - stickyHeadersBottom;
+    } else if (rowBottom > container.clientHeight) {
+      container.scrollTop += rowBottom - container.clientHeight;
+    }
+  }, [scrollVisiblePath, shouldUseStickyDirectoryHeaders]);
 
   const getFileIcon = (status: DiffFile['status']) => {
     switch (status) {
@@ -416,14 +454,24 @@ export const FileList = memo(function FileList({
       const isReviewed = reviewedFiles.has(file.path);
       const fileIndex = fileIndexMap.get(file.path) ?? -1;
       const isSelected = selectedFileIndex !== null && selectedFileIndex === fileIndex;
+      const isScrollVisible = scrollVisibleFileIndex === fileIndex;
       const changeKind = combineChangeKinds(file.chunks.map((chunk) => chunk.changeKind));
 
       return (
         <div
           key={`file:${file.path}`}
+          ref={(el) => {
+            if (el) {
+              fileRowRefs.current.set(file.path, el);
+            } else {
+              fileRowRefs.current.delete(file.path);
+            }
+          }}
           className={`flex items-center gap-2 px-4 py-2 hover:bg-github-bg-tertiary cursor-pointer transition-colors ${
             isReviewed ? 'opacity-70' : ''
-          } ${isSelected ? 'bg-github-bg-tertiary' : ''}`}
+          } ${isSelected ? 'bg-github-bg-tertiary' : ''} ${isScrollVisible ? SCROLL_VISIBLE_BAR_CLASS : ''}`}
+          aria-current={isSelected ? 'true' : undefined}
+          data-scroll-visible={isScrollVisible ? 'true' : undefined}
           data-file-row="true"
           data-tree-row="true"
           data-depth={depth}

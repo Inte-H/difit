@@ -107,4 +107,105 @@ describe('FileChips', () => {
       '2',
     );
   });
+  describe('file at the top of the diff', () => {
+    const manyFiles = ['a.js', 'b.js', 'c.js', 'd.js', 'e.js'].map((path) => createFile(path));
+
+    function renderChips(selectedFileIndex: number | null, scrollVisibleFileIndex?: number | null) {
+      return (
+        <FileChips
+          files={manyFiles}
+          comments={[]}
+          decisions={[]}
+          reviewedFiles={new Set()}
+          selectedFileIndex={selectedFileIndex}
+          scrollVisibleFileIndex={scrollVisibleFileIndex}
+          onScrollToFile={vi.fn()}
+        />
+      );
+    }
+
+    function stubBox(element: HTMLElement, left: number, width: number) {
+      element.getBoundingClientRect = () =>
+        ({ top: 0, bottom: 30, left, right: left + width, width, height: 30 }) as DOMRect;
+    }
+
+    function stubStrip(scrollLeft: number) {
+      const strip = screen.getByRole('navigation', { name: 'Changed files' });
+      stubBox(strip, 0, 300);
+      Object.defineProperty(strip, 'clientWidth', { configurable: true, value: 300 });
+      strip.scrollLeft = scrollLeft;
+      return strip;
+    }
+
+    it('marks the file at the top apart from the cursor chip', () => {
+      render(renderChips(0, 2));
+
+      const cursorChip = screen.getByTitle('a.js');
+      const visibleChip = screen.getByTitle('c.js');
+      expect(cursorChip).toHaveAttribute('aria-current', 'true');
+      expect(cursorChip).not.toHaveAttribute('data-scroll-visible');
+      expect(visibleChip).toHaveAttribute('data-scroll-visible', 'true');
+      expect(visibleChip).not.toHaveAttribute('aria-current');
+    });
+
+    it('shows both marks on one chip when they point at the same file', () => {
+      render(renderChips(3, 3));
+
+      const chip = screen.getByTitle('d.js');
+      expect(chip).toHaveAttribute('aria-current', 'true');
+      expect(chip).toHaveAttribute('data-scroll-visible', 'true');
+    });
+
+    it('scrolls the strip until the marked chip fits', () => {
+      const { rerender } = render(renderChips(null));
+      const strip = stubStrip(0);
+      stubBox(screen.getByTitle('e.js'), 400, 60);
+
+      rerender(renderChips(null, 4));
+
+      expect(strip.scrollLeft).toBe(160);
+    });
+
+    it('scrolls the strip back for a chip left of the view', () => {
+      const { rerender } = render(renderChips(null));
+      const strip = stubStrip(200);
+      stubBox(screen.getByTitle('a.js'), -180, 60);
+
+      rerender(renderChips(null, 0));
+
+      expect(strip.scrollLeft).toBe(20);
+    });
+
+    it('leaves the strip alone when the marked chip is in view', () => {
+      const { rerender } = render(renderChips(null));
+      const strip = stubStrip(50);
+      stubBox(screen.getByTitle('b.js'), 100, 60);
+
+      rerender(renderChips(null, 1));
+
+      expect(strip.scrollLeft).toBe(50);
+    });
+
+    it('does not scroll the strip when the same files arrive as a new array', () => {
+      const { rerender } = render(renderChips(null));
+      const strip = stubStrip(0);
+      stubBox(screen.getByTitle('e.js'), 400, 60);
+      rerender(renderChips(null, 4));
+      strip.scrollLeft = 0;
+
+      rerender(
+        <FileChips
+          files={manyFiles.map((file) => ({ ...file }))}
+          comments={[]}
+          decisions={[]}
+          reviewedFiles={new Set()}
+          selectedFileIndex={null}
+          scrollVisibleFileIndex={4}
+          onScrollToFile={vi.fn()}
+        />,
+      );
+
+      expect(strip.scrollLeft).toBe(0);
+    });
+  });
 });

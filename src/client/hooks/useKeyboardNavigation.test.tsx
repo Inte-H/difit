@@ -219,6 +219,56 @@ describe('useKeyboardNavigation', () => {
     });
   });
 
+  describe('Mouse scroll', () => {
+    it('keeps the cursor and continues from it when j is pressed after scrolling', async () => {
+      const user = userEvent.setup();
+      const container = createMockScrollContainer();
+      mockQuerySelector.mockImplementation(() => container as any);
+      let lineTop = 100;
+      mockGetElementById.mockImplementation(
+        () =>
+          ({
+            ...createMockElement(),
+            getBoundingClientRect: () => ({
+              top: lineTop,
+              bottom: lineTop + 20,
+              left: 0,
+              right: 100,
+              width: 100,
+              height: 20,
+            }),
+            offsetTop: 1500,
+          }) as any,
+      );
+
+      const { result } = renderHook(
+        () =>
+          useKeyboardNavigation({
+            files: mockFiles,
+            comments: [],
+            viewMode: 'unified',
+            onToggleReviewed: vi.fn(),
+            reviewedFiles: new Set<string>(),
+          }),
+        { wrapper },
+      );
+
+      await user.keyboard('jj');
+      const cursorBeforeScroll = result.current.cursor;
+      expect(cursorBeforeScroll).toMatchObject({ fileIndex: 0, chunkIndex: 0, lineIndex: 1 });
+
+      container.scrollTop = 5000;
+      lineTop = -3000;
+
+      expect(result.current.cursor).toEqual(cursorBeforeScroll);
+
+      await user.keyboard('j');
+
+      expect(result.current.cursor).toMatchObject({ fileIndex: 0, chunkIndex: 0, lineIndex: 2 });
+      expect(container.scrollTop).toBe(1500 - 768 / 3);
+    });
+  });
+
   describe('File Navigation (]/[)', () => {
     it('should navigate to next file with ] key', async () => {
       const user = userEvent.setup();
@@ -1059,8 +1109,12 @@ describe('useKeyboardNavigation', () => {
 
       await user.keyboard('{.}');
 
-      // Should set cursor
-      expect(result.current.cursor).not.toBeNull();
+      expect(result.current.cursor).toEqual({
+        fileIndex: 0,
+        chunkIndex: 0,
+        lineIndex: 2,
+        side: 'right',
+      });
     });
   });
 
