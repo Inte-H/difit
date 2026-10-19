@@ -388,14 +388,13 @@ export function CommentThreadCard({
       {!isCollapsed && (
         <div className="space-y-3">
           {thread.fixupCommit && (
-            <div className="flex min-w-0 items-center gap-2 text-xs text-github-text-muted">
-              <span className="shrink-0">고쳐 넣을 커밋</span>
-              <span className="shrink-0 font-mono text-github-text-secondary">
+            <div className="text-xs">
+              <code
+                className="font-mono text-github-text-secondary"
+                title={thread.fixupCommit.subject}
+              >
                 {thread.fixupCommit.shortSha}
-              </span>
-              {thread.fixupCommit.subject && (
-                <span className="min-w-0 truncate">{thread.fixupCommit.subject}</span>
-              )}
+              </code>
             </div>
           )}
 

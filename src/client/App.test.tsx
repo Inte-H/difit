@@ -2241,9 +2241,7 @@ describe('App Component - Commits of the review', () => {
     await screen.findByText('Pinned here');
 
     const card = document.getElementById('comment-thread-c3')!;
-    expect(within(card).getByText('고쳐 넣을 커밋')).toBeInTheDocument();
-    expect(within(card).getByText('1111111')).toBeInTheDocument();
-    expect(within(card).getByText('first step')).toBeInTheDocument();
+    expect(within(card).getByText('1111111')).toHaveAttribute('title', 'first step');
   });
 
   it('takes a comment outdated on the whole review back to its commit, and Back returns', async () => {

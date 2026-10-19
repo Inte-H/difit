@@ -751,12 +751,12 @@ describe('CommentThreadCard', () => {
     const { rerender } = render(
       renderCard({ ...mockThread, fixupCommit: { shortSha: '1111111', subject: 'first step' } }),
     );
-    expect(screen.getByText('고쳐 넣을 커밋')).toBeInTheDocument();
-    expect(screen.getByText('1111111')).toBeInTheDocument();
-    expect(screen.getByText('first step')).toBeInTheDocument();
+    expect(screen.getByText('1111111')).toHaveAttribute('title', 'first step');
+    expect(screen.queryByText('고쳐 넣을 커밋')).not.toBeInTheDocument();
+    expect(screen.queryByText('first step')).not.toBeInTheDocument();
 
     rerender(renderCard(mockThread));
-    expect(screen.queryByText('고쳐 넣을 커밋')).not.toBeInTheDocument();
+    expect(screen.queryByText('1111111')).not.toBeInTheDocument();
   });
 
   it('always shows an inline reply trigger below the last message', () => {

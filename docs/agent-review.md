@@ -157,7 +157,7 @@ jq '.decisions' old.json | curl -X POST "http://localhost:<새 port>/api/decisio
   -H 'Content-Type: application/json' -d @-
 ```
 
-옮겨 온 `view`와 `fixupTarget`은 접기 전의 SHA를 그대로 가리킨다. 그래서 새 리뷰에서 이런 지적은 커밋 하나를 보는 화면에는 보이지 않고 전체 화면에만 보이며, 카드와 텍스트 출력의 고쳐 넣을 커밋 줄에는 짧은 SHA만 나온다. 아직 답하지 않은 지적이면, 위의 순서 대응으로 찾은 새 SHA에 fixup을 건다.
+옮겨 온 `view`와 `fixupTarget`은 접기 전의 SHA를 그대로 가리킨다. 그래서 새 리뷰에서 이런 지적은 커밋 하나를 보는 화면에는 보이지 않고 전체 화면에만 보이며, 카드에는 짧은 SHA만 보이고 마우스를 올려도 제목이 나오지 않으며, 텍스트 출력의 `고쳐 넣을 커밋:` 줄에도 제목 없이 짧은 SHA만 나온다. 아직 답하지 않은 지적이면, 위의 순서 대응으로 찾은 새 SHA에 fixup을 건다.
 
 새 커밋의 화면은 옮겨 온 지적을 이렇게 놓는다.
 
