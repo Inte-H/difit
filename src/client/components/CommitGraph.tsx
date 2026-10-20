@@ -15,10 +15,11 @@ const STROKE_WIDTH = 2;
 const branchColor = (color: number) => BRANCH_COLORS[color % BRANCH_COLORS.length];
 
 // Fills the row's height, so the lines of rows next to each other meet.
-export function CommitGraph({ cell }: { cell: CommitGraphCell }) {
+// `bleed` is the negative margin that cancels the row's vertical padding.
+export function CommitGraph({ cell, bleed }: { cell: CommitGraphCell; bleed: string }) {
   const x = LANE_X[0];
   return (
-    <span className="relative shrink-0 self-stretch -my-1.5 w-[32px]" aria-hidden="true">
+    <span className={`relative shrink-0 self-stretch ${bleed} w-[32px]`} aria-hidden="true">
       <svg className="absolute inset-0 h-full w-full overflow-visible">
         {cell.above && (
           <line x1={x} y1="0" x2={x} y2="50%" stroke={MAIN_COLOR} strokeWidth={STROKE_WIDTH} />

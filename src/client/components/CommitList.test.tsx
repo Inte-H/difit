@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
 import type { ReviewCommit, ReviewView } from '../../types/diff';
@@ -23,10 +23,31 @@ const REVIEW = {
   commits: COMMITS,
 };
 
-function renderList(shown: ReviewView = { kind: 'all' }, commits: ReviewCommit[] = COMMITS) {
+function renderList(
+  shown: ReviewView = { kind: 'all' },
+  {
+    commits = COMMITS,
+    ...options
+  }: { rangeStart?: string; inDrawer?: boolean; commits?: ReviewCommit[] } = {},
+) {
   const onSelect = vi.fn();
-  render(<CommitList review={{ ...REVIEW, commits }} shown={shown} onSelect={onSelect} />);
-  return { onSelect };
+  const review = { ...REVIEW, commits };
+  const { rerender } = render(
+    <CommitList review={review} shown={shown} onSelect={onSelect} {...options} />,
+  );
+  return {
+    onSelect,
+    pickFrom: (rangeStart: string) =>
+      rerender(
+        <CommitList
+          review={review}
+          shown={shown}
+          onSelect={onSelect}
+          {...options}
+          rangeStart={rangeStart}
+        />,
+      ),
+  };
 }
 
 const list = () => screen.getByRole('list');
@@ -205,7 +226,7 @@ describe('CommitList', () => {
     });
 
     it('lists the commits a merge brings in just above it, where they cannot be chosen', () => {
-      const { onSelect } = renderList({ kind: 'all' }, WITH_MERGE);
+      const { onSelect } = renderList({ kind: 'all' }, { commits: WITH_MERGE });
 
       expect([...list().querySelectorAll('li')].map((item) => item.textContent)).toEqual([
         '전체',
@@ -223,7 +244,7 @@ describe('CommitList', () => {
     });
 
     it('draws the dots of the branch the same size as the others', () => {
-      renderList({ kind: 'all' }, WITH_MERGE);
+      renderList({ kind: 'all' }, { commits: WITH_MERGE });
 
       const radii = [...list().querySelectorAll('circle')].map((dot) => dot.getAttribute('r'));
       expect(new Set(radii).size).toBe(1);
@@ -231,7 +252,7 @@ describe('CommitList', () => {
     });
 
     it('draws the branch in a colour of its own and marks it shown with its merge', () => {
-      renderList({ kind: 'commit', sha: MERGE.sha }, WITH_MERGE);
+      renderList({ kind: 'commit', sha: MERGE.sha }, { commits: WITH_MERGE });
 
       const colors = Object.fromEntries(dotColors());
       expect(colors['aaaaaaa']).toBe('var(--commit-graph-branch-1)');
@@ -242,9 +263,135 @@ describe('CommitList', () => {
     });
 
     it('counts the commits of a branch too long to list', () => {
-      renderList({ kind: 'all' }, [COMMITS[0]!, { ...MERGE, mergedOmitted: 30 }]);
+      renderList({ kind: 'all' }, { commits: [COMMITS[0]!, { ...MERGE, mergedOmitted: 30 }] });
 
       expect(within(list()).getByText('커밋 30개 더')).toBeInTheDocument();
     });
+  });
+});
+
+describe('CommitList on a phone', () => {
+  const at = (y: number) => ({ touches: [{ clientX: 10, clientY: y }] });
+  const ended = (y: number) => ({ changedTouches: [{ clientX: 10, clientY: y }] });
+  // Rows sit 10px apart from y=10 in this test, the first commit at 10.
+  const rowUnder = (y: number) => row(new RegExp(String(y / 10).repeat(7)));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(document, 'elementFromPoint').mockImplementation((_x, y) => rowUnder(y));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  const hold = (y: number) => {
+    fireEvent.touchStart(rowUnder(y), at(y));
+    act(() => vi.advanceTimersByTime(500));
+  };
+
+  it('asks for a click on a short tap', () => {
+    const { onSelect } = renderList();
+
+    fireEvent.touchStart(rowUnder(20), at(20));
+    act(() => vi.advanceTimersByTime(300));
+    fireEvent.touchEnd(rowUnder(20), ended(20));
+    fireEvent.click(rowUnder(20));
+    act(() => vi.advanceTimersByTime(500));
+
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith({ kind: 'click', sha: COMMITS[1]!.sha });
+  });
+
+  it('asks for a long press once the finger is held still, and no click on release', () => {
+    const { onSelect } = renderList();
+
+    hold(20);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith({ kind: 'long-press', sha: COMMITS[1]!.sha });
+
+    expect(fireEvent.touchEnd(rowUnder(20), ended(20))).toBe(false);
+    expect(onSelect).toHaveBeenCalledOnce();
+  });
+
+  it('starts no long press when the finger moves away to scroll the list', () => {
+    const { onSelect } = renderList();
+
+    fireEvent.touchStart(rowUnder(20), at(20));
+    expect(fireEvent.touchMove(rowUnder(20), at(40))).toBe(true);
+    act(() => vi.advanceTimersByTime(500));
+
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('keeps the browser from scrolling, selecting text or opening its menu on a long press', () => {
+    const { pickFrom } = renderList();
+
+    hold(20);
+    pickFrom(COMMITS[1]!.sha);
+
+    expect(fireEvent.contextMenu(rowUnder(20))).toBe(false);
+    expect(fireEvent.touchMove(rowUnder(20), at(30))).toBe(false);
+    expect(list()).toHaveClass('select-none', '[-webkit-touch-callout:none]');
+  });
+
+  it('paints the run while the held finger drags and asks for a drop where it is lifted', () => {
+    const { onSelect, pickFrom } = renderList();
+
+    hold(20);
+    pickFrom(COMMITS[1]!.sha);
+    expect(previewed()).toEqual(['2222222']);
+    fireEvent.touchMove(rowUnder(20), at(40));
+    expect(previewed()).toEqual(['2222222', '3333333', '4444444']);
+    fireEvent.touchEnd(rowUnder(20), ended(40));
+
+    expect(onSelect).toHaveBeenLastCalledWith({
+      kind: 'drop',
+      fromSha: COMMITS[1]!.sha,
+      toSha: COMMITS[3]!.sha,
+    });
+  });
+
+  it('asks for nothing more when the held finger is lifted on the commit it pressed', () => {
+    const { onSelect, pickFrom } = renderList();
+
+    hold(20);
+    pickFrom(COMMITS[1]!.sha);
+    fireEvent.touchMove(rowUnder(20), at(30));
+    fireEvent.touchMove(rowUnder(20), at(20));
+    fireEvent.touchEnd(rowUnder(20), ended(20));
+
+    expect(onSelect).toHaveBeenCalledOnce();
+    expect(previewed()).toEqual(['2222222']);
+  });
+
+  it('shows that a run is being chosen above the list, with a cancel button', () => {
+    const { onSelect } = renderList(
+      { kind: 'commit', sha: COMMITS[0]!.sha },
+      { rangeStart: COMMITS[2]!.sha },
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('범위 고르는 중');
+    expect(previewed()).toEqual(['3333333']);
+    expect(painted()).toEqual(['1111111pin the old behavior']);
+
+    fireEvent.click(screen.getByRole('button', { name: '취소' }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith({ kind: 'cancel' });
+  });
+
+  it('shows no cancel button while no run is being chosen', () => {
+    renderList();
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '취소' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the list open in a drawer and names what is shown above it', () => {
+    renderList({ kind: 'commit', sha: COMMITS[0]!.sha }, { inDrawer: true });
+
+    expect(screen.queryByRole('button', { expanded: true })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: '리뷰 범위의 커밋' })).toHaveTextContent(
+      '커밋 4개1111111 pin the old behavior',
+    );
+    expect(list()).toBeInTheDocument();
   });
 });

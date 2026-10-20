@@ -1,4 +1,12 @@
-import { Columns, AlignLeft, Settings, PanelLeftClose, PanelLeft, Keyboard } from 'lucide-react';
+import {
+  Columns,
+  AlignLeft,
+  Settings,
+  PanelLeftClose,
+  PanelLeft,
+  Keyboard,
+  GitCommitHorizontal,
+} from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 import {
@@ -44,7 +52,7 @@ import { CommentsListModal } from './components/CommentsListModal';
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
-import { CommitList } from './components/CommitList';
+import { CommitList, ShownCommits } from './components/CommitList';
 import { FileList } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
@@ -180,6 +188,7 @@ function App() {
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
   // The phone drawer covers the diff, so it starts closed and does not touch the saved PC preference.
   const [isFileDrawerOpen, setIsFileDrawerOpen] = useState(false);
+  const [isCommitDrawerOpen, setIsCommitDrawerOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showSparkles, setShowSparkles] = useState(false);
   const [hasTriggeredSparkles, setHasTriggeredSparkles] = useState(false);
@@ -244,12 +253,18 @@ function App() {
     viewAnchor && JSON.stringify(viewAnchor.view) === JSON.stringify(shownView)
       ? viewAnchor.sha
       : null;
+  const [rangePick, setRangePick] = useState<{ view: ReviewView; sha: string } | null>(null);
+  const rangeStart =
+    rangePick && JSON.stringify(rangePick.view) === JSON.stringify(shownView)
+      ? rangePick.sha
+      : undefined;
   const takesComments = !showsPartOfReview || shownView.kind !== 'all';
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
   const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
-  const showsCommitList = !isMobile && review !== undefined && review.commits.length > 1;
+  const hasCommitList = review !== undefined && review.commits.length > 1;
+  const showsCommitList = !isMobile && hasCommitList;
 
   // New diff-aware comment system
   const {
@@ -1059,13 +1074,26 @@ function App() {
   const selectView = useCallback(
     (action: ReviewViewAction) => {
       if (!review) return;
-      const chosen = selectReviewView(review, { view: shownView, anchor: shownAnchor }, action);
+      const chosen = selectReviewView(
+        review,
+        { view: shownView, anchor: shownAnchor, ...(rangeStart !== undefined && { rangeStart }) },
+        action,
+      );
       if (!chosen) return;
       setViewAnchor({ view: chosen.view, sha: chosen.anchor });
+      setRangePick(
+        chosen.rangeStart === undefined ? null : { view: chosen.view, sha: chosen.rangeStart },
+      );
+      if (!chosen.selection) return;
+      setIsCommitDrawerOpen(false);
       showDiff(chosen.selection);
     },
-    [review, shownView, shownAnchor, showDiff],
+    [review, shownView, shownAnchor, rangeStart, showDiff],
   );
+  const closeCommitDrawer = useCallback(() => {
+    selectView({ kind: 'cancel' });
+    setIsCommitDrawerOpen(false);
+  }, [selectView]);
   const openReviewAt = useCallback(
     (commit: string) => showDiff(selectionAtCommit(selectedRevision, commit)),
     [selectedRevision, showDiff],
@@ -1514,6 +1542,24 @@ function App() {
               />
             </h1>
             <div className="flex items-center gap-1">
+              {isMobile && hasCommitList && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    isCommitDrawerOpen ? closeCommitDrawer() : setIsCommitDrawerOpen(true)
+                  }
+                  className="flex items-center gap-1.5 min-w-0 p-2 text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary rounded transition-colors"
+                  title="리뷰 범위의 커밋"
+                  aria-expanded={isCommitDrawerOpen}
+                  aria-controls="commit-drawer"
+                  aria-label="커밋 목록"
+                >
+                  <GitCommitHorizontal size={18} className="shrink-0" />
+                  <span className="min-w-0 max-w-40 truncate text-xs">
+                    <ShownCommits commits={review.commits} shown={shownView} />
+                  </span>
+                </button>
+              )}
               <button
                 onClick={() =>
                   isMobile
@@ -1744,6 +1790,33 @@ function App() {
           />
         )}
 
+        {isMobile && hasCommitList && (
+          <>
+            {isCommitDrawerOpen && (
+              <button
+                type="button"
+                aria-label="커밋 목록 닫기"
+                className="fixed inset-0 bg-black/40 z-30"
+                onClick={closeCommitDrawer}
+              />
+            )}
+            <aside
+              id="commit-drawer"
+              inert={!isCommitDrawerOpen}
+              className="fixed inset-y-0 right-0 z-40 w-[min(85vw,360px)] flex flex-col bg-github-bg-secondary border-l border-github-border transition-transform duration-300 ease-out"
+              style={{ transform: isCommitDrawerOpen ? 'translateX(0)' : 'translateX(100%)' }}
+            >
+              <CommitList
+                review={review}
+                shown={shownView}
+                onSelect={selectView}
+                rangeStart={rangeStart}
+                inDrawer
+              />
+            </aside>
+          </>
+        )}
+
         <div className="flex flex-1 overflow-hidden relative">
           <div
             className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
@@ -1771,7 +1844,12 @@ function App() {
               }}
             >
               {showsCommitList && (
-                <CommitList review={review} shown={shownView} onSelect={selectView} />
+                <CommitList
+                  review={review}
+                  shown={shownView}
+                  onSelect={selectView}
+                  rangeStart={rangeStart}
+                />
               )}
               <div className="flex-1 overflow-y-auto">
                 <FileList

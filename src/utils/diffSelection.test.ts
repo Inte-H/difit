@@ -411,6 +411,87 @@ describe('selectReviewView', () => {
     });
   });
 
+  describe('on a phone', () => {
+    it('starts a run at the long-pressed commit and leaves the shown diff as it is', () => {
+      expect(
+        selectReviewView(review, commitView('2'), { kind: 'long-press', sha: sha('3') }),
+      ).toEqual({
+        view: { kind: 'commit', sha: sha('2') },
+        selection: null,
+        anchor: sha('2'),
+        rangeStart: sha('3'),
+      });
+    });
+
+    it('shows the run from the long-pressed commit to the next one tapped, in either direction', () => {
+      const picking = { ...all, rangeStart: sha('2') };
+      expect(selectReviewView(review, picking, { kind: 'click', sha: sha('3') })).toEqual({
+        view: run('2', '3'),
+        selection: { baseCommitish: sha('1'), targetCommitish: sha('3') },
+        anchor: sha('2'),
+      });
+      expect(
+        selectReviewView(review, { ...all, rangeStart: sha('4') }, { kind: 'click', sha: sha('2') })
+          ?.view,
+      ).toEqual(run('2', '4'));
+    });
+
+    it('chooses the same run by dragging from the long-pressed commit as by tapping after it', () => {
+      const pressed = selectReviewView(review, commitView('1'), {
+        kind: 'long-press',
+        sha: sha('2'),
+      })!;
+
+      expect(
+        selectReviewView(review, pressed, { kind: 'drop', fromSha: sha('2'), toSha: sha('4') }),
+      ).toEqual(selectReviewView(review, pressed, { kind: 'click', sha: sha('4') }));
+    });
+
+    it('shows the long-pressed commit alone when it is tapped again', () => {
+      expect(
+        selectReviewView(review, { ...all, rangeStart: sha('3') }, { kind: 'click', sha: sha('3') })
+          ?.view,
+      ).toEqual({ kind: 'commit', sha: sha('3') });
+    });
+
+    it('starts the run again from a second long-pressed commit', () => {
+      expect(
+        selectReviewView(
+          review,
+          { ...all, rangeStart: sha('1') },
+          { kind: 'long-press', sha: sha('3') },
+        )?.rangeStart,
+      ).toBe(sha('3'));
+    });
+
+    it('stops choosing a run on cancel and keeps what was shown and anchored before', () => {
+      const pressed = selectReviewView(
+        review,
+        { view: run('2', '3'), anchor: sha('2') },
+        {
+          kind: 'long-press',
+          sha: sha('4'),
+        },
+      )!;
+
+      expect(selectReviewView(review, pressed, { kind: 'cancel' })).toEqual({
+        view: run('2', '3'),
+        selection: null,
+        anchor: sha('2'),
+      });
+    });
+
+    it('does nothing on cancel while no run is being chosen', () => {
+      expect(selectReviewView(review, commitView('2'), { kind: 'cancel' })).toBeNull();
+    });
+
+    it('stops choosing a run once another view is chosen', () => {
+      const picking = { ...commitView('2'), rangeStart: sha('3') };
+      expect(selectReviewView(review, picking, { kind: 'all' })).not.toHaveProperty('rangeStart');
+      expect(selectReviewView(review, picking, { kind: 'next' })).not.toHaveProperty('rangeStart');
+    });
+  });
+
   it('produces only pairs the server counts as views of the review', () => {
     const shownViews = [
       all,
@@ -428,10 +509,10 @@ describe('selectReviewView', () => {
       { kind: 'next' as const },
       { kind: 'all' as const },
     ];
-    for (const shown of shownViews) {
+    for (const shown of shownViews.flatMap((view) => [view, { ...view, rangeStart: sha('2') }])) {
       for (const action of actions) {
         const chosen = selectReviewView(review, shown, action);
-        if (!chosen) continue;
+        if (!chosen?.selection) continue;
         expect(isViewOfReview(chosen.selection, review)).toBe(true);
         if (chosen.view.kind === 'all') expect(chosen.selection).toBe(review.requested);
         else expect(reviewViewShown(chosen.selection, review)).toEqual(chosen.view);
