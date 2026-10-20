@@ -77,7 +77,6 @@ const FAILURE_MESSAGES: Record<DirectEditRejection, string> = {
   'missing-at-head': '이 파일이 HEAD에 없습니다. 뒤 커밋에서 지워졌거나 이름이 바뀌었습니다.',
   'dirty-file': '이 파일에 커밋하지 않은 변경이 있습니다. 먼저 커밋하거나 치운 뒤 고쳐 주세요.',
   'operation-in-progress': 'rebase, merge, cherry-pick이 도중에 멈춰 있어 커밋할 수 없습니다.',
-  'mixed-commits': '고른 줄들이 서로 다른 커밋에서 왔습니다. 커밋마다 나눠서 고쳐 주세요.',
   conflict: `뒤 커밋이 같은 줄이나 바로 옆 줄을 바꿔 두어 합칠 수 없습니다. ${EARLIER_EDIT_NOTE}`,
   'fold-conflict':
     '리뷰 범위 안의 어느 커밋에 접어도 autosquash가 충돌합니다. 뒤 커밋이 바꾼 줄과 떨어진 곳을 고쳐 주세요.',

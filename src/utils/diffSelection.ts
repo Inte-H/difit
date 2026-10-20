@@ -200,22 +200,27 @@ export function selectReviewView(
 }
 
 export interface ViewBinding {
-  view: DiffSelection;
+  view?: DiffSelection;
   fixupTarget: string;
-  snapshotCommit: string;
+  snapshotCommit?: string;
 }
 
 export function bindingForView(
   review: Pick<ReviewScope, 'selection' | 'commits'>,
   view: DiffSelection,
+  fixupTarget?: string,
 ): ViewBinding | undefined {
-  if (isSameView(view, review.selection)) return undefined;
-  const commit = reviewCommitViewed(view, review.commits);
-  if (!commit) return undefined;
+  if (isSameView(view, review.selection)) {
+    return fixupTarget === undefined ? undefined : { fixupTarget };
+  }
+  const run = commitsBetween(view, review.commits);
+  const first = run[0];
+  const last = run.at(-1);
+  if (!first || !last) return undefined;
   return {
-    view: createDiffSelection(commit.parentSha, commit.sha),
-    fixupTarget: commit.sha,
-    snapshotCommit: commit.sha,
+    view: createDiffSelection(first.parentSha, last.sha),
+    fixupTarget: fixupTarget ?? last.sha,
+    snapshotCommit: last.sha,
   };
 }
 

@@ -40,6 +40,7 @@ import {
 import { validateCommitish } from '../cli/utils.js';
 import { sendToClaudeSession, sessionMessageFor } from './claude-session.js';
 import { commitDirectEdit } from './direct-edit.js';
+import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
 import { searchSymbol } from './symbol-search.js';
@@ -69,6 +70,7 @@ import {
   type ThreadReviewState,
 } from '@/types/diff.js';
 import {
+  commitsOfView,
   createDiffSelection,
   diffSelectionsEqual,
   fixupCommitOf,
@@ -734,6 +736,49 @@ export async function startServer(options: ServerOptions): Promise<{
     } catch (error) {
       console.error('Error fetching blob:', error);
       res.status(404).json({ error: 'File not found' });
+    }
+  });
+
+  app.get('/api/fixup-target', async (req, res) => {
+    const { base, target, path, start, end, side } = req.query;
+    const startLine = Number(start);
+    const endLine = Number(end);
+    const filepathResult = parseRepositoryRelativePath(path);
+    const view =
+      typeof base === 'string' && typeof target === 'string'
+        ? createDiffSelection(base, target)
+        : undefined;
+    if (
+      !view ||
+      !filepathResult.ok ||
+      !Number.isInteger(startLine) ||
+      !Number.isInteger(endLine) ||
+      startLine < 1 ||
+      startLine > endLine ||
+      (side !== 'old' && side !== 'new')
+    ) {
+      res.status(400).json({ error: 'Invalid fixup target request' });
+      return;
+    }
+    const review = options.stdinDiff ? undefined : findReviewOf(view);
+    if (!review) {
+      res.status(404).json({ error: 'No review shows this view' });
+      return;
+    }
+    const commits = commitsOfView(view, review).map((commit) => commit.sha);
+    try {
+      const fixupTarget = await chooseFixupTarget(repositoryPath, {
+        view: { base: view.baseCommitish, target: view.targetCommitish },
+        filePath: filepathResult.path,
+        startLine,
+        endLine,
+        side,
+        ...(commits.length > 0 ? { commits } : {}),
+      });
+      res.json({ fixupTarget });
+    } catch (error) {
+      console.error('Error choosing fixup target:', error);
+      res.status(500).json({ error: 'Failed to choose fixup target' });
     }
   });
 

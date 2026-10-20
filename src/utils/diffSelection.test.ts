@@ -157,17 +157,25 @@ describe('views of a review', () => {
     });
   });
 
-  it('binds nothing to a comment made on the whole review or a run of commits', () => {
-    expect(bindingForView(review, review.selection)).toBeUndefined();
-    expect(
-      bindingForView(review, { baseCommitish: '0000000', targetCommitish: '2222222' }),
-    ).toBeUndefined();
+  it('binds a comment made on a run of commits to the run and the fixup target it was given', () => {
+    const run = { baseCommitish: '1111111', targetCommitish: '4444444' };
+    expect(bindingForView(review, run, sha('2'))).toEqual({
+      view: { baseCommitish: sha('1'), targetCommitish: sha('4') },
+      fixupTarget: sha('2'),
+      snapshotCommit: sha('4'),
+    });
+    expect(bindingForView(review, run)).toMatchObject({ fixupTarget: sha('4') });
+  });
 
-    const oneCommitReview = {
-      selection: { baseCommitish: '0000000', targetCommitish: '1111111' },
-      commits: commits.slice(0, 1),
-    };
-    expect(bindingForView(oneCommitReview, oneCommitReview.selection)).toBeUndefined();
+  it('binds only the fixup target to a comment made on the whole review', () => {
+    expect(bindingForView(review, review.selection, sha('2'))).toEqual({ fixupTarget: sha('2') });
+    expect(bindingForView(review, review.selection)).toBeUndefined();
+  });
+
+  it('binds nothing to a comment made on a view outside the review', () => {
+    expect(
+      bindingForView(review, { baseCommitish: 'fffffff', targetCommitish: '2222222' }, sha('2')),
+    ).toBeUndefined();
   });
 
   describe('the view a comment was made on', () => {

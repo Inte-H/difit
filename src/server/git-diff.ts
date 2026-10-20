@@ -27,7 +27,7 @@ import {
 } from '../utils/diffSelection.js';
 
 import { classifyChunks, isClassifiablePath } from './change-kind.js';
-import { runGit } from './direct-edit.js';
+import { runGit } from './run-git.js';
 import { isGeneratedFile } from './generated-file-check.js';
 
 // Hashes every diff line with its surrounding context but not the line numbers, so a rebase keeps

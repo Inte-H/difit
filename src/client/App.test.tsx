@@ -1949,6 +1949,7 @@ describe('App Component - Commits of the review', () => {
     fixupTarget: COMMITS[0]!.sha,
   });
   const fixupsFor: { current: unknown[] } = { current: [] };
+  let chosenFixupTarget: string | undefined;
   const firstRow = () =>
     waitFor(() => {
       const found = document.querySelector('[data-diff-line-row="true"]');
@@ -1974,6 +1975,7 @@ describe('App Component - Commits of the review', () => {
     review = REVIEW;
     firstStepLine = 'const a = 1;';
     fixupsFor.current = [];
+    chosenFixupTarget = undefined;
     requested = REVIEW.requested;
     mockDecisions = [];
     mockComments = [
@@ -1988,6 +1990,12 @@ describe('App Component - Commits of the review', () => {
         return Promise.resolve({
           ok: true,
           json: async () => ({ fixups: fixupsFor.current }),
+        } as Response);
+      }
+      if (url.startsWith('/api/fixup-target')) {
+        return Promise.resolve({
+          ok: chosenFixupTarget !== undefined,
+          json: async () => ({ fixupTarget: chosenFixupTarget }),
         } as Response);
       }
       const params = new URLSearchParams(url.split('?')[1]);
@@ -2102,20 +2110,120 @@ describe('App Component - Commits of the review', () => {
     );
   });
 
-  it('offers no line comments while a run of commits is shown', async () => {
-    review = {
-      selection: { baseCommitish: 'def4567', targetCommitish: '2222222' },
-      requested: { baseCommitish: full('def4567'), targetCommitish: full('2222222') },
-      commits: [
-        ...COMMITS,
-        { sha: full('2222222'), shortSha: '2222222', parentSha: full('abc1234'), subject: 'third' },
-      ],
-    };
+  const addCommentOnFirstLine = async (body: string) => {
+    fireEvent.mouseEnter((await firstRow()).children[2]!);
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Add a comment' }), { shiftKey: true });
+    fireEvent.change(await screen.findByPlaceholderText(/comment/i), { target: { value: body } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+  };
+  const addedThreads = () =>
+    vi
+      .mocked(useDiffComments)
+      .mock.results.flatMap(({ value }) => vi.mocked(value.addThread).mock.calls);
+  const fixupTargetQueries = () =>
+    vi
+      .mocked(global.fetch)
+      .mock.calls.map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/fixup-target'))
+      .map((url) => Object.fromEntries(new URLSearchParams(url.split('?')[1])));
+
+  const showFirstTwoOfThree = async () => {
+    review = THREE_COMMITS;
+    requested = THREE_COMMITS.requested;
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    fireEvent.click(commitButton(/abc1234/), { shiftKey: true });
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+  };
+
+  it('binds a comment made on a run of commits to the run and the commit the server chose', async () => {
+    chosenFixupTarget = COMMITS[0]!.sha;
+    await showFirstTwoOfThree();
+
+    await addCommentOnFirstLine('Fix this in the run');
+
+    await waitFor(() =>
+      expect(addedThreads()).toEqual([
+        [
+          expect.objectContaining({
+            body: 'Fix this in the run',
+            binding: {
+              view: { baseCommitish: COMMITS[0]!.parentSha, targetCommitish: COMMITS[1]!.sha },
+              fixupTarget: COMMITS[0]!.sha,
+              snapshotCommit: COMMITS[1]!.sha,
+            },
+          }),
+        ],
+      ]),
+    );
+    expect(fixupTargetQueries()).toEqual([
+      { base: 'def4567', target: 'abc1234', path: 'test.ts', start: '1', end: '1', side: 'new' },
+    ]);
+  });
+
+  it('binds a comment made on a run to its last commit when the server cannot choose', async () => {
+    await showFirstTwoOfThree();
+
+    await addCommentOnFirstLine('Fix this in the run');
+
+    await waitFor(() =>
+      expect(addedThreads()).toEqual([
+        [
+          expect.objectContaining({
+            binding: expect.objectContaining({ fixupTarget: COMMITS[1]!.sha }),
+          }),
+        ],
+      ]),
+    );
+  });
+
+  it('adds the comment through the thread list as it is once the server has answered', async () => {
+    let answer: ((response: Response) => void) | undefined;
+    const answered = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementation((input, init) =>
+      String(input).startsWith('/api/fixup-target')
+        ? new Promise<Response>((resolve) => {
+            answer = resolve;
+          })
+        : answered(input, init),
+    );
+    const { rerender } = renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+    await addCommentOnFirstLine('Fix this somewhere');
+    await waitFor(() => expect(answer).toBeDefined());
+    rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>,
+    );
+    const rendersBeforeAnswer = vi.mocked(useDiffComments).mock.results.length;
+    answer!({ ok: true, json: async () => ({ fixupTarget: COMMITS[0]!.sha }) } as Response);
+
+    await waitFor(() => expect(addedThreads()).toHaveLength(1));
+    const callers = vi
+      .mocked(useDiffComments)
+      .mock.results.map(({ value }, index) => [index, vi.mocked(value.addThread).mock.calls.length])
+      .filter(([, calls]) => calls > 0)
+      .map(([index]) => index);
+    expect(callers).toEqual([expect.any(Number)]);
+    expect(callers[0]).toBeGreaterThanOrEqual(rendersBeforeAnswer - 1);
+  });
+
+  it('binds only the chosen commit to a comment made on the whole review', async () => {
+    chosenFixupTarget = COMMITS[0]!.sha;
     renderApp();
     await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
 
-    fireEvent.mouseEnter((await firstRow()).children[2]!);
-    expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
+    await addCommentOnFirstLine('Fix this somewhere');
+
+    await waitFor(() =>
+      expect(addedThreads()).toEqual([
+        [expect.objectContaining({ binding: { fixupTarget: COMMITS[0]!.sha } })],
+      ]),
+    );
   });
 
   it('draws a comment made on one commit there and leaves it off the other commit', async () => {
