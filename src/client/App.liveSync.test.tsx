@@ -82,6 +82,7 @@ const fixup: ThreadFixup = {
   sha: 'f'.repeat(40),
   shortSha: 'fffffff',
   patchId: 'patch-1',
+  authoredAt: '2026-01-01T00:00:00Z',
   subject: 'fixup! rename b',
   threadIds: [THREAD_ID],
   files: [

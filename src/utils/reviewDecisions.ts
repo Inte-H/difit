@@ -247,6 +247,22 @@ function deletionTurnOn(
   return decidedAt(handover) >= turnBefore ? turn : null;
 }
 
+// The reviewer replied to the fixup under judgment: the last word is theirs and came after every
+// fixup still standing was written.
+function reviewerRepliedToFixup(
+  thread: ThreadTurn,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): boolean {
+  const last = thread.messages.at(-1);
+  if (last?.author !== REVIEWER_AUTHOR) return false;
+  const repliedAt = Date.parse(last.createdAt) || 0;
+  const isRejected = rejectionCheckFor(thread.id, decisions);
+  return fixups
+    .filter((fixup) => !isRejected(fixup))
+    .every((fixup) => repliedAt > (Date.parse(fixup.authoredAt) || 0));
+}
+
 // Null when the next move on the thread is not the agent's. Without fixups (a review with no pinned
 // commit) it is the agent's whenever the reviewer spoke last.
 function agentTurnOn(
@@ -267,6 +283,11 @@ function agentTurnOn(
   const state = deriveThreadReviewState(thread.id, fixups, decisions, thread);
   if (state === 'awaiting-fix') {
     return reviewerSpokeLast ? { state, label: reviewStateLabel(state) } : null;
+  }
+  if (state === 'awaiting-approval') {
+    return reviewerRepliedToFixup(thread, fixups, decisions)
+      ? { state, label: reviewStateLabel(state) }
+      : null;
   }
   if (state !== 'rejected' && state !== 'withdrawn') return null;
   const rejectedFixupSha = rejectionAwaitingAgent(thread, fixups, decisions, state);

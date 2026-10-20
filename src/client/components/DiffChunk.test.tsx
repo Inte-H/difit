@@ -248,6 +248,7 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     sha,
     shortSha: sha.slice(0, 7),
     patchId: `patch-${sha}`,
+    authoredAt: '2026-01-01T00:00:00Z',
     subject: 'fixup! add third',
     threadIds: ['t1'],
     files: [
@@ -398,6 +399,7 @@ describe('DiffChunk fixup overlay', () => {
     sha: 'abc1234abc1234',
     shortSha: 'abc1234',
     patchId: 'patch-abc1234',
+    authoredAt: '2026-01-01T00:00:00Z',
     subject: 'fixup! x',
     threadIds: ['t1'],
     files: [
@@ -727,6 +729,7 @@ describe('editing the reviewed code directly', () => {
       sha: 'e'.repeat(40),
       shortSha: 'eeeeeee',
       patchId: 'patch-e',
+      authoredAt: '2026-01-01T00:00:00Z',
       subject: 'fixup! x',
       threadIds: ['c1'],
       files: [],

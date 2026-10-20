@@ -1601,7 +1601,7 @@ index abc123..def456 100644
 
   describe('listThreadFixups', () => {
     const fixupLogEntry = (sha: string, subject: string, trailerValues: string, diff = '') =>
-      `\0${sha}\0cafe\0${subject}\0${trailerValues}\0\n${diff ? `\n${diff}\n` : ''}`;
+      `\0${sha}\0cafe\x002026-01-01T00:00:00+09:00\0${subject}\0${trailerValues}\0\n${diff ? `\n${diff}\n` : ''}`;
 
     it('returns nothing for working-tree targets or when the target is already HEAD', async () => {
       const gitRevparse = (parser as any).git.revparse;
@@ -1688,6 +1688,7 @@ index abc123..def456 100644
       expect(fixups[0]).toMatchObject({
         sha: fixupSha,
         shortSha: 'abcdef1',
+        authoredAt: '2026-01-01T00:00:00+09:00',
         subject: 'fixup! change b',
         threadIds: ['t1', 't2'],
       });

@@ -9,6 +9,7 @@ const fixup = (sha: string): ThreadFixup => ({
   sha,
   shortSha: sha.slice(0, 7),
   patchId: `patch-${sha}`,
+  authoredAt: '2026-01-01T00:00:00Z',
   subject: 'fixup! x',
   threadIds: ['t1'],
   files: [],

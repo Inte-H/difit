@@ -168,7 +168,7 @@ describe('listThreadFixups against a real repository', () => {
       ].join('\n'),
       { 'g.txt': lines(10, 'g') },
     );
-    const fakeHeader = `\u0000${target}\u0000${target}\u0000fake\u0000t-fake\u0000`;
+    const fakeHeader = `\u0000${target}\u0000${target}\u00002026-01-01T00:00:00+00:00\u0000fake\u0000t-fake\u0000`;
     commit(repo, 'text holding the separator\n\nReview-Thread: t-nul', {
       'nul.raw': `plain\nx\r${fakeHeader}\ny\u2028${fakeHeader}\nz\u2029${fakeHeader}\ndiff --git a/nul.raw b/nul.raw\n`,
     });
@@ -197,6 +197,7 @@ describe('listThreadFixups against a real repository', () => {
     for (const fixup of fixups) {
       expect(fixup.files, fixup.subject).toEqual(diffAgainstFirstParent(parser, repo, fixup.sha));
       expect(fixup.shortSha).toBe(fixup.sha.slice(0, 7));
+      expect(fixup.authoredAt).toBe(git(repo, 'log', '-1', '--format=%aI', fixup.sha));
     }
 
     const bySubject = new Map(fixups.map((fixup) => [fixup.subject, fixup]));

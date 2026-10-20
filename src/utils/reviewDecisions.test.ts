@@ -21,10 +21,15 @@ import {
   selectThreadsAwaitingAgent,
 } from './reviewDecisions';
 
-const fixup = (sha: string, threadIds = ['t1']): ThreadFixup => ({
+const fixup = (
+  sha: string,
+  threadIds = ['t1'],
+  authoredAt = '2026-01-01T00:00:00Z',
+): ThreadFixup => ({
   sha,
   shortSha: sha.slice(0, 7),
   patchId: `patch-${sha}`,
+  authoredAt,
   subject: 'fixup! x',
   threadIds,
   files: [],
@@ -439,6 +444,48 @@ describe('selectThreadsAwaitingAgent', () => {
     );
   });
 
+  it('takes a fixup waiting for approval once the reviewer replies after it', () => {
+    const pending = new Map([['t1', [fixup('aaaa', ['t1'], '2026-01-02T00:00:00+09:00')]]]);
+    const askedBack = thread('t1', ['User'], ['User', '2026-01-02T00:00:00Z']);
+    expect(selectThreadsAwaitingAgent([askedBack], pending, [])).toMatchObject([
+      { threadId: 't1', state: 'awaiting-approval', label: '승인 대기' },
+    ]);
+    expect(selectThreadsAwaitingAgent([askedBack], pending, [])[0]).not.toHaveProperty(
+      'rejectedFixupSha',
+    );
+
+    const askedBefore = thread('t1', ['User'], ['User', '2026-01-01T12:00:00Z']);
+    const answered = thread(
+      't1',
+      ['User'],
+      ['User', '2026-01-02T00:00:00Z'],
+      [undefined, '2026-01-03T00:00:00Z'],
+    );
+    expect(ids([askedBefore], pending)).toEqual([]);
+    expect(ids([answered], pending)).toEqual([]);
+
+    const fixedAgain = new Map([['t1', [fixup('bbbb', ['t1'], '2026-01-03T00:00:00Z')]]]);
+    expect(ids([askedBack], fixedAgain)).toEqual([]);
+  });
+
+  it('weighs a reply on a fixup waiting for approval against the fixups not rejected', () => {
+    const askedBack = thread('t1', ['User'], ['User', '2026-01-02T00:00:00Z']);
+    const fixups = new Map([
+      [
+        't1',
+        [
+          fixup('aaaa', ['t1'], '2026-01-01T00:00:00Z'),
+          fixup('bbbb', ['t1'], '2026-01-01T12:00:00Z'),
+        ],
+      ],
+    ]);
+    expect(ids([askedBack], fixups)).toEqual(['t1']);
+    const newerRejected = new Map([
+      ['t1', [fixup('aaaa'), fixup('bbbb', ['t1'], '2026-01-03T00:00:00Z')]],
+    ]);
+    expect(ids([askedBack], newerRejected, [decision('rejected', 'bbbb')])).toEqual(['t1']);
+  });
+
   it('takes a rejection with the fixup to drop while it is still in the range', () => {
     const rejected = [decision('rejected', 'aaaa', '2026-01-02T00:00:00Z')];
     const inRange = selectThreadsAwaitingAgent(
@@ -549,6 +596,19 @@ describe('isAgentResponding', () => {
     expect(isAgentResponding(asked, new Map(), [rejected, handed('2026-01-01T00:06:00Z')])).toBe(
       true,
     );
+  });
+
+  it('holds for a reply on a fixup waiting for approval until the agent answers', () => {
+    const pending = new Map([['t1', [fixup('aaaa', ['t1'], '2026-01-01T00:02:00Z')]]]);
+    const askedBack = thread(['User', '2026-01-01T00:00:00Z'], ['User', '2026-01-01T00:03:00Z']);
+    const handover = [handed('2026-01-01T00:04:00Z')];
+    expect(isAgentResponding(askedBack, pending, handover)).toBe(true);
+    const answered = thread(
+      ['User', '2026-01-01T00:00:00Z'],
+      ['User', '2026-01-01T00:03:00Z'],
+      ['Agent', '2026-01-01T00:05:00Z'],
+    );
+    expect(isAgentResponding(answered, pending, handover)).toBe(false);
   });
 
   it('ignores another thread’s handover', () => {
