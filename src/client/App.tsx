@@ -40,6 +40,7 @@ import {
   selectReviewView,
   selectionAtCommit,
 } from '../utils/diffSelection';
+import { countOpenThreadsByCommit } from '../utils/openCommentCounts';
 import {
   isThreadResolved,
   mergeReviewDecisions,
@@ -349,6 +350,13 @@ function App() {
   const openThreads = useMemo(
     () => selectOpenThreads(threads, fixupsByThread, decisions),
     [threads, fixupsByThread, decisions],
+  );
+  const openCountsByCommit = useMemo(
+    () =>
+      review && fixupsLoaded
+        ? countOpenThreadsByCommit(threads, fixupsByThread, decisions, review)
+        : undefined,
+    [review, fixupsLoaded, threads, fixupsByThread, decisions],
   );
   const resolvedThreadIds = useMemo(
     () =>
@@ -1826,6 +1834,7 @@ function App() {
                 onSelect={selectView}
                 rangeStart={rangeStart}
                 inDrawer
+                openCounts={openCountsByCommit}
               />
             </aside>
           </>
@@ -1863,6 +1872,7 @@ function App() {
                   shown={shownView}
                   onSelect={selectView}
                   rangeStart={rangeStart}
+                  openCounts={openCountsByCommit}
                 />
               )}
               <div className="flex-1 overflow-y-auto">

@@ -188,6 +188,20 @@ describe('CommitList', () => {
     expect(previewed()).toEqual([]);
   });
 
+  it('shows the open comments of a commit beside it and nothing beside a commit with none', () => {
+    render(
+      <CommitList
+        review={REVIEW}
+        shown={{ kind: 'all' }}
+        onSelect={vi.fn()}
+        openCounts={new Map([[COMMITS[1]!.sha, 2]])}
+      />,
+    );
+
+    expect(within(row(/2222222/)).getByTitle('열린 지적 2개')).toHaveTextContent('2');
+    expect(within(row(/1111111/)).queryByTitle(/^열린 지적/)).not.toBeInTheDocument();
+  });
+
   it('folds the list away and keeps naming what is shown', () => {
     renderList({ kind: 'commit', sha: COMMITS[0]!.sha });
 

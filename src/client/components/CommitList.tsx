@@ -5,6 +5,7 @@ import type { ReviewCommit, ReviewScope, ReviewView, ReviewViewAction } from '..
 import { layoutCommitGraph } from '../../utils/commitGraph';
 import { isSameCommit, selectReviewView } from '../../utils/diffSelection';
 
+import { CommentCount } from './CommentCount';
 import { CommitGraph } from './CommitGraph';
 
 interface CommitListProps {
@@ -13,6 +14,7 @@ interface CommitListProps {
   onSelect: (action: ReviewViewAction) => void;
   rangeStart?: string | undefined;
   inDrawer?: boolean;
+  openCounts?: ReadonlyMap<string, number> | undefined;
 }
 
 interface Drag {
@@ -84,6 +86,7 @@ export function CommitList({
   onSelect,
   rangeStart,
   inDrawer = false,
+  openCounts,
 }: CommitListProps) {
   const { commits } = review;
   const [isOpen, setIsOpen] = useState(true);
@@ -192,6 +195,10 @@ export function CommitList({
   const graphBleed = inDrawer ? '-my-3' : '-my-1.5';
   const itemClass = `${ITEM_CLASS} ${rowPadding}`;
   const graph = layoutCommitGraph(commits);
+  const openCountOf = (sha: string) => {
+    const count = openCounts?.get(sha) ?? 0;
+    return count > 0 && <CommentCount count={count} title={`열린 지적 ${count}개`} />;
+  };
   const title = (
     <>
       <span className="shrink-0 font-semibold text-github-text-primary">
@@ -276,6 +283,7 @@ export function CommitList({
                       <>
                         <code className="shrink-0 font-mono text-xs">{entry.commit.shortSha}</code>
                         <span className="min-w-0 truncate">{entry.commit.subject}</span>
+                        {openCountOf(entry.commit.sha)}
                       </>
                     ) : (
                       <span>커밋 {entry.count}개 더</span>
@@ -314,6 +322,7 @@ export function CommitList({
                     <CommitGraph cell={cell} bleed={graphBleed} />
                     <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
                     <span className="min-w-0 truncate">{commit.subject}</span>
+                    {openCountOf(commit.sha)}
                   </button>
                 </li>
               </Fragment>

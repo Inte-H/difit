@@ -8,7 +8,6 @@ import {
   FileX,
   FilePen,
   Search,
-  MessageSquare,
   ChevronsDownUp,
   ChevronsUpDown,
 } from 'lucide-react';
@@ -33,6 +32,7 @@ import { isThreadResolved } from '../../utils/reviewDecisions';
 import { isSafariBrowser } from '../utils/browser';
 
 import { Checkbox } from './Checkbox';
+import { CommentCount } from './CommentCount';
 
 interface FileListProps {
   files: DiffFile[];
@@ -506,12 +506,7 @@ export const FileList = memo(function FileList({
               {LEAVES_CODE_ALONE_LABEL[changeKind]}
             </span>
           )}
-          {commentCount > 0 && (
-            <span className="text-github-warning fixup-review:text-github-text-secondary text-sm font-medium ml-auto flex items-center gap-1">
-              <MessageSquare size={14} />
-              {commentCount}
-            </span>
-          )}
+          {commentCount > 0 && <CommentCount count={commentCount} />}
         </div>
       );
     }
