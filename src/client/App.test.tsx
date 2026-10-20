@@ -2058,6 +2058,35 @@ describe('App Component - Commits of the review', () => {
     expect(commitButton(/1111111/)).toBeInTheDocument();
   });
 
+  it('counts the open comments of each commit again as comments are added or resolved', async () => {
+    const onFirstStep = (id: string): DiffCommentThread => ({
+      ...createMockThread({ id, filePath: 'test.ts', line: 1, body: `On the first step ${id}` }),
+      fixupTarget: COMMITS[0]!.sha,
+    });
+    mockComments = [mockComments[0]!, onFirstStep('c2')];
+    const app = () => (
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>
+    );
+    const countOn = (name: RegExp) => within(commitButton(name)).queryByTitle(/^열린 지적/);
+
+    const { rerender } = renderApp();
+    await waitFor(() => expect(countOn(/1111111/)).toHaveAttribute('title', '열린 지적 1개'));
+    expect(countOn(/abc1234/)).toHaveAttribute('title', '열린 지적 1개');
+
+    mockComments = [...mockComments, onFirstStep('c3')];
+    rerender(app());
+    expect(countOn(/1111111/)).toHaveAttribute('title', '열린 지적 2개');
+
+    mockDecisions = [
+      { threadId: 'c1', kind: 'resolved', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+    ];
+    rerender(app());
+    expect(countOn(/abc1234/)).not.toBeInTheDocument();
+    expect(countOn(/1111111/)).toHaveAttribute('title', '열린 지적 2개');
+  });
+
   it('lists no commits for a review of one commit or one that is not pinned', async () => {
     review = { ...REVIEW, commits: COMMITS.slice(1) };
     const { unmount } = renderApp();
