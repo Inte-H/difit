@@ -2208,7 +2208,7 @@ describe('Server Integration Tests', () => {
       const status = await new Promise<number | undefined>((resolvePromise, reject) => {
         const req = request(
           {
-            host: '127.0.0.1',
+            host: 'localhost',
             port,
             path: `/api/direct-edit${PINNED}`,
             method: 'POST',
