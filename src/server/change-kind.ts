@@ -25,6 +25,7 @@ const GRAMMAR_BY_EXTENSION: Record<string, string> = {
   '.bash': 'tree-sitter-bash/tree-sitter-bash.wasm',
 };
 
+/** @public */
 export const GRAMMAR_FILES = [...new Set(Object.values(GRAMMAR_BY_EXTENSION))];
 
 // Larger files are left unclassified; each changed run costs one parse of the whole file.
