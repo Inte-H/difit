@@ -185,6 +185,16 @@ This section is unnecessary
 
 이 포크는 에이전트가 짠 브랜치를 사람이 리뷰하고 에이전트가 그 지적을 고쳐 오는 일을 difit 한 화면에서 끝까지 하려고 원래 difit에 기능을 더했다. 원래 difit은 지적을 복사해 에이전트에게 붙여 넣는 데서 끝나지만, 이 포크에서는 에이전트가 고친 것이 지적이 달린 줄 아래에 바로 나타난다.
 
+### 설치
+
+main에 병합할 때마다 GitHub 릴리스가 새로 올라온다. 최신 빌드는 아래 한 줄로 깐다.
+
+```bash
+npm i -g https://github.com/Inte-H/difit/releases/latest/download/difit.tgz
+```
+
+특정 빌드를 깔려면 `https://github.com/Inte-H/difit/releases/download/v<버전>/difit-<버전>.tgz`를 쓴다. 버전은 `5.0.12-inteh.3`처럼 원래 difit 버전 뒤에 포크 표시가 붙는다.
+
 ### 리뷰 흐름
 
 1. **리뷰 열기**: `difit feature main`처럼 브랜치 이름으로 연다. 리뷰는 연 순간의 커밋에 머문다

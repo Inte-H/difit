@@ -18,6 +18,7 @@ concurrency:
 jobs:
   deploy:
     name: Build and deploy GitHub Pages
+    if: github.repository == 'yoshiko-pg/difit'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
