@@ -291,6 +291,8 @@ export interface ReviewDecision {
 
 export type ThreadReviewState =
   | 'awaiting-fix'
+  // No fixup yet, and the agent replied to the reviewer: the reviewer's turn.
+  | 'answered'
   | 'awaiting-approval'
   | 'approved'
   | 'folded'

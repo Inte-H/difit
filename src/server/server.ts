@@ -29,11 +29,11 @@ import { getFileExtension } from '../utils/fileUtils.js';
 import { isSymbolName } from '../utils/symbolName.js';
 import {
   deriveThreadReviewState,
+  isAnswerableByEdit,
   isOpenedByEdit,
   isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
-  selectOpenThreads,
   selectThreadsAwaitingAgent,
 } from '../utils/reviewDecisions.js';
 
@@ -1286,12 +1286,10 @@ export async function startServer(options: ServerOptions): Promise<{
       const fixups = (await parser.listThreadFixups(selection)).filter((fixup) =>
         fixup.threadIds.includes(answered.id),
       );
-      const stillOpen = selectOpenThreads(
-        [answered],
-        new Map([[answered.id, fixups]]),
-        session.decisions,
-      );
-      if (stillOpen.length === 0) return refuse('thread-has-fixup');
+      const state = deriveThreadReviewState(answered.id, fixups, session.decisions, answered);
+      if (isThreadResolved(answered.id, session.decisions) || !isAnswerableByEdit(state)) {
+        return refuse('thread-has-fixup');
+      }
     }
 
     const threadId = answered?.id ?? createId();
@@ -1441,7 +1439,7 @@ export async function startServer(options: ServerOptions): Promise<{
             thread.id,
             fixupsByThread.get(thread.id) ?? [],
             session.decisions,
-            isOpenedByEdit(thread),
+            thread,
           ),
         ]),
       );
