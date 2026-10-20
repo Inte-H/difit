@@ -245,6 +245,21 @@ describe('comment subcommand integration', () => {
       expect(consoleOutput[0]).toContain('"threads"');
     });
 
+    it('leaves deleted threads out of the json output', async () => {
+      const deletion = { threadId: 'gone', kind: 'deleted', fixupSha: '', at: '2026-01-01' };
+      mockFetch.mockResolvedValue(
+        jsonResponse({ threads: [{ id: 'kept' }, { id: 'gone' }], decisions: [deletion] }),
+      );
+
+      const command = createCommentCommand();
+      await command.parseAsync(['node', 'difit', 'get', '--port', '4966', '--format', 'json']);
+
+      expect(JSON.parse(consoleOutput[0]!)).toEqual({
+        threads: [{ id: 'kept' }],
+        decisions: [deletion],
+      });
+    });
+
     it('handles connection error', async () => {
       mockFetch.mockRejectedValue(new TypeError('fetch failed'));
 

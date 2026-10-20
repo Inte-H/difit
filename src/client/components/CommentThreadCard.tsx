@@ -32,6 +32,7 @@ interface ThreadMessageItemProps {
   onUpdate: (newBody: string) => void;
   onCopy: () => string;
   onDelete?: () => void;
+  deleteLabel?: string;
   onClick?: (e: React.MouseEvent) => void;
 }
 
@@ -44,6 +45,7 @@ function ThreadMessageItem({
   onUpdate,
   onCopy,
   onDelete,
+  deleteLabel = 'Delete reply',
   onClick,
 }: ThreadMessageItemProps) {
   const [isEditing, setIsEditing] = useState(false);
@@ -185,8 +187,8 @@ function ThreadMessageItem({
                     setIsConfirming(true);
                   }}
                   className={`rounded border border-github-border bg-github-bg-tertiary p-1.5 text-github-danger transition-all hover:bg-github-bg-primary ${REVEAL_ON_HOVER}`}
-                  title="Delete reply"
-                  aria-label="Delete reply"
+                  title={deleteLabel}
+                  aria-label={deleteLabel}
                 >
                   <Trash2 size={12} />
                 </button>
@@ -246,6 +248,9 @@ export function CommentThreadCard({
   const [isReplying, setIsReplying] = useState(false);
   const { decisions, recordDecision } = useFixupOverlay();
   const isResolved = isThreadResolved(thread.id, decisions);
+  const isFolded = decisions.some(
+    (decision) => decision.threadId === thread.id && decision.kind === 'folded',
+  );
   const [isCollapsed, setIsCollapsed] = useState(isResolved);
   const [wasResolved, setWasResolved] = useState(isResolved);
   if (wasResolved !== isResolved && !(isResolved && isReplying)) {
@@ -415,6 +420,8 @@ export function CommentThreadCard({
             originalCode={thread.codeContent}
             onUpdate={(newBody) => onUpdateMessage(thread.id, rootMessage.id, newBody)}
             onCopy={() => messageText(rootMessage)}
+            {...(isFolded ? {} : { onDelete: () => recordDecision(thread.id, 'deleted', '') })}
+            deleteLabel="Delete comment"
           />
 
           {thread.messages.slice(1).map((message) => (

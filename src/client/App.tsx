@@ -42,6 +42,7 @@ import {
 } from '../utils/diffSelection';
 import { countOpenThreadsByCommit } from '../utils/openCommentCounts';
 import {
+  isThreadDeleted,
   isThreadResolved,
   mergeReviewDecisions,
   selectOpenThreads,
@@ -270,7 +271,7 @@ function App() {
   // New diff-aware comment system
   const {
     hasLoadedComments,
-    threads,
+    threads: storedThreads,
     decisions,
     replaceThreads,
     mergeDecisions,
@@ -289,6 +290,10 @@ function App() {
     undefined, // branchToHash map - could be populated from server data
     diffData?.repositoryId, // Repository identifier for storage isolation
     commentSelection?.baseMode,
+  );
+  const threads = useMemo(
+    () => storedThreads.filter((thread) => !isThreadDeleted(thread.id, decisions)),
+    [storedThreads, decisions],
   );
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
@@ -1223,7 +1228,7 @@ function App() {
         const { threads: serverThreads, decisions: serverDecisions } = await fetchServerComments();
         const nextThreads = shouldReplaceFromServer
           ? serverThreads
-          : mergeCommentThreads(serverThreads, threads).threads;
+          : mergeCommentThreads(serverThreads, storedThreads).threads;
         const nextDecisions = mergeReviewDecisions(serverDecisions, decisionsRef.current);
         if (cancelled) {
           return;
@@ -1268,8 +1273,8 @@ function App() {
     fetchServerComments,
     hasLoadedComments,
     replaceThreads,
+    storedThreads,
     syncThreadsToServer,
-    threads,
   ]);
 
   // Trigger sparkle animation when all files are viewed
@@ -1298,7 +1303,7 @@ function App() {
     }
 
     const data = JSON.stringify({
-      threads,
+      threads: storedThreads,
       decisions,
       baseVersion: serverCommentVersionRef.current ?? undefined,
     });
@@ -1319,14 +1324,14 @@ function App() {
       };
     }
 
-    syncThreadsToServer(threads, decisions).catch((syncError) => {
+    syncThreadsToServer(storedThreads, decisions).catch((syncError) => {
       console.error('Failed to sync comments:', syncError);
     });
 
     return () => {
       window.removeEventListener('beforeunload', sendCommentsBeforeUnload);
     };
-  }, [decisions, getCommentApiUrl, hasBootstrappedComments, syncThreadsToServer, threads]);
+  }, [decisions, getCommentApiUrl, hasBootstrappedComments, storedThreads, syncThreadsToServer]);
 
   // Establish SSE connection for tab close detection
   useEffect(() => {

@@ -1,6 +1,7 @@
 import { Command, Option } from 'commander';
 
 import { parseCommentImportValue } from '../utils/commentImports.js';
+import { isThreadDeleted, normalizeReviewDecisions } from '../utils/reviewDecisions.js';
 
 import { detectStdinSource, readStdin } from './utils.js';
 
@@ -18,6 +19,20 @@ function handleCommandError(error: unknown, port: number): never {
     console.error(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
   process.exit(1);
+}
+
+function withoutDeletedThreads(data: unknown): unknown {
+  if (typeof data !== 'object' || data === null) return data;
+  const { threads, decisions } = data as { threads?: unknown; decisions?: unknown };
+  if (!Array.isArray(threads)) return data;
+  const records = normalizeReviewDecisions(decisions);
+  return {
+    ...data,
+    threads: threads.filter(
+      (thread: { id?: unknown }) =>
+        typeof thread?.id !== 'string' || !isThreadDeleted(thread.id, records),
+    ),
+  };
 }
 
 async function parseCommentAddInput(json?: string): Promise<string> {
@@ -157,7 +172,7 @@ export function createCommentCommand(): Command {
 
         if (opts.format === 'json') {
           const data: unknown = await response.json();
-          console.log(JSON.stringify(data));
+          console.log(JSON.stringify(withoutDeletedThreads(data)));
         } else {
           const text = await response.text();
           if (text.trim()) {
