@@ -7,8 +7,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { GitDiffParser } from './git-diff';
 
 const runGitCalls = vi.hoisted(() => [] as string[][]);
-vi.mock('./direct-edit.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./direct-edit.js')>();
+vi.mock('./run-git.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./run-git.js')>();
   return {
     ...actual,
     runGit: (...args: Parameters<typeof actual.runGit>) => {

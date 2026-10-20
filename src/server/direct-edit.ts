@@ -1,5 +1,4 @@
 import { isUtf8 } from 'buffer';
-import { spawn } from 'child_process';
 import { existsSync, promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -9,6 +8,8 @@ import {
   type DirectEditRejection,
   REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
+
+import { type GitOptions, runGit } from './run-git.js';
 
 export interface DirectEdit {
   filePath: string;
@@ -31,59 +32,6 @@ export type DirectEditResult =
   | { ok: false; reason: DirectEditRejection; output?: string };
 
 type Rejected = Extract<DirectEditResult, { ok: false }>;
-
-interface GitRun {
-  code: number;
-  stdout: Buffer;
-  output: string;
-}
-
-interface GitOptions {
-  input?: Buffer;
-  env?: Record<string, string>;
-}
-
-const GIT_TIMEOUT_MS = 60_000;
-
-export function runGit(
-  repoPath: string,
-  args: string[],
-  options: GitOptions = {},
-): Promise<GitRun> {
-  return new Promise((resolvePromise, reject) => {
-    const child = spawn('git', args, {
-      cwd: repoPath,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...options.env },
-    });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      // SIGTERM lets git remove its lock files on the way out.
-      child.kill('SIGTERM');
-    }, GIT_TIMEOUT_MS);
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
-    child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once('close', (code) => {
-      clearTimeout(timer);
-      const out = Buffer.concat(stdout);
-      const output = `${out.toString('utf8')}${Buffer.concat(stderr).toString('utf8')}`.trim();
-      resolvePromise({
-        code: code ?? 1,
-        stdout: out,
-        output: timedOut ? `${output}\ngit ${args[0]} timed out`.trim() : output,
-      });
-    });
-    child.stdin.end(options.input);
-  });
-}
 
 async function git(repoPath: string, args: string[], options?: GitOptions): Promise<Buffer> {
   const run = await runGit(repoPath, args, options);
