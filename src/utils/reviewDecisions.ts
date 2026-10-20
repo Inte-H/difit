@@ -15,6 +15,7 @@ const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
   'folded',
   'resolved',
   'unresolved',
+  'handed',
 ];
 
 const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
@@ -183,10 +184,12 @@ type ThreadForAgent = Pick<
   'id' | 'filePath' | 'position' | 'messages' | 'fixupTarget'
 >;
 
+type ThreadTurn = Pick<DiffCommentThread, 'id' | 'messages'>;
+
 // A rejection stays the agent's turn until a new fixup lands, the rejected one is dropped
 // (withdrawn only), or the agent has the last word after it.
 function rejectionAwaitingAgent(
-  thread: ThreadForAgent,
+  thread: ThreadTurn,
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
   state: 'rejected' | 'withdrawn',
@@ -204,40 +207,48 @@ function rejectionAwaitingAgent(
   return leftInRange;
 }
 
-// Unresolved threads whose next move is the agent's. Without fixups (a review with no pinned commit) that is
-// any thread where the reviewer spoke last.
+// Null when the next move on the thread is not the agent's. Without fixups (a review with no pinned
+// commit) it is the agent's whenever the reviewer spoke last.
+function agentTurnOn(
+  thread: ThreadTurn,
+  fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
+  decisions: ReviewDecision[],
+): Pick<ThreadAwaitingAgent, 'state' | 'label' | 'rejectedFixupSha'> | null {
+  if (isThreadResolved(thread.id, decisions)) return null;
+  const reviewerSpokeLast = thread.messages.at(-1)?.author === REVIEWER_AUTHOR;
+  if (!fixupsByThread) return reviewerSpokeLast ? {} : null;
+
+  const fixups = fixupsByThread.get(thread.id) ?? [];
+  const state = deriveThreadReviewState(thread.id, fixups, decisions, thread);
+  if (state === 'awaiting-fix') {
+    return reviewerSpokeLast ? { state, label: reviewStateLabel(state) } : null;
+  }
+  if (state !== 'rejected' && state !== 'withdrawn') return null;
+  const rejectedFixupSha = rejectionAwaitingAgent(thread, fixups, decisions, state);
+  if (rejectedFixupSha === null) return null;
+  return {
+    state,
+    label: reviewStateLabel(state),
+    ...(rejectedFixupSha === undefined ? {} : { rejectedFixupSha }),
+  };
+}
+
 export function selectThreadsAwaitingAgent(
   threads: ThreadForAgent[],
   fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
   decisions: ReviewDecision[],
 ): ThreadAwaitingAgent[] {
   return threads.flatMap((thread): ThreadAwaitingAgent[] => {
-    if (isThreadResolved(thread.id, decisions)) return [];
-    const last = thread.messages.at(-1);
-    const base = {
-      threadId: thread.id,
-      filePath: thread.filePath,
-      position: thread.position,
-      message: last?.body ?? '',
-      ...(thread.fixupTarget === undefined ? {} : { fixupTarget: thread.fixupTarget }),
-    };
-    const reviewerSpokeLast = last?.author === REVIEWER_AUTHOR;
-    if (!fixupsByThread) return reviewerSpokeLast ? [base] : [];
-
-    const fixups = fixupsByThread.get(thread.id) ?? [];
-    const state = deriveThreadReviewState(thread.id, fixups, decisions, thread);
-    if (state === 'awaiting-fix') {
-      return reviewerSpokeLast ? [{ ...base, state, label: reviewStateLabel(state) }] : [];
-    }
-    if (state !== 'rejected' && state !== 'withdrawn') return [];
-    const rejectedFixupSha = rejectionAwaitingAgent(thread, fixups, decisions, state);
-    if (rejectedFixupSha === null) return [];
+    const turn = agentTurnOn(thread, fixupsByThread, decisions);
+    if (!turn) return [];
     return [
       {
-        ...base,
-        state,
-        label: reviewStateLabel(state),
-        ...(rejectedFixupSha === undefined ? {} : { rejectedFixupSha }),
+        threadId: thread.id,
+        filePath: thread.filePath,
+        position: thread.position,
+        message: thread.messages.at(-1)?.body ?? '',
+        ...(thread.fixupTarget === undefined ? {} : { fixupTarget: thread.fixupTarget }),
+        ...turn,
       },
     ];
   });
@@ -252,4 +263,22 @@ export function pendingFixupFor(
   const isRejected = rejectionCheckFor(threadId, decisions);
   const pending = fixups.filter((fixup) => !isRejected(fixup));
   return pending.length === 1 ? (pending[0] ?? null) : null;
+}
+
+// Handed over since the agent's turn began, by the last message or rejection, and not answered yet.
+export function isAgentResponding(
+  thread: ThreadTurn,
+  fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
+  decisions: ReviewDecision[],
+): boolean {
+  const own = decisions.filter((decision) => decision.threadId === thread.id);
+  const handover = latestOf(own, ['handed']);
+  if (!handover) return false;
+  if (!agentTurnOn(thread, fixupsByThread, decisions)) return false;
+  const rejection = latestOf(own, ['rejected']);
+  const turnStart = Math.max(
+    Date.parse(thread.messages.at(-1)?.createdAt ?? '') || 0,
+    rejection ? decidedAt(rejection) : 0,
+  );
+  return decidedAt(handover) >= turnStart;
 }

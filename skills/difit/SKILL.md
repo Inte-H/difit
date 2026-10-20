@@ -106,6 +106,8 @@ A background command wakes you only when it exits, so while a review server you 
 
 In Claude Code, a server started from your session (including `--background`) also sends each thread that newly became your turn into your session as a message from another session. Its first line is `difit review: your turn on <threadId> [<label>], ...; read with difit comment get --port <port> --format json`, and each following line is the same JSON `difit comment wait` prints. Answer it as below and keep `difit comment wait` running all the same: the message shape is undocumented and may stop arriving silently. When the same `threadId` with the same `state` comes both ways, answer it once.
 
+Once a thread reaches you either way, its card shows `응답 중` until you reply to it or push its fixup. It needs no action from you.
+
 The user can also edit code in the viewer. difit then commits a `fixup! <target SHA>` commit with a `Review-Thread` trailer on top of HEAD and records it as approved. Its author is `reviewer-edit`.
 
 ### Answering a comment
