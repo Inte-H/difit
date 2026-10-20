@@ -23,9 +23,9 @@ const REVIEW = {
   commits: COMMITS,
 };
 
-function renderList(shown: ReviewView = { kind: 'all' }) {
+function renderList(shown: ReviewView = { kind: 'all' }, commits: ReviewCommit[] = COMMITS) {
   const onSelect = vi.fn();
-  render(<CommitList review={REVIEW} shown={shown} onSelect={onSelect} />);
+  render(<CommitList review={{ ...REVIEW, commits }} shown={shown} onSelect={onSelect} />);
   return { onSelect };
 }
 
@@ -176,5 +176,60 @@ describe('CommitList', () => {
     expect(screen.getByRole('button', { expanded: false })).toHaveTextContent(
       '1111111 pin the old behavior',
     );
+  });
+
+  describe('commit graph', () => {
+    const MERGE: ReviewCommit = {
+      ...commit('3', 'merge the side branch'),
+      merged: [
+        { sha: 'a'.repeat(40), shortSha: 'aaaaaaa', subject: 'side first' },
+        { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', subject: 'side second' },
+      ],
+    };
+    const WITH_MERGE = [COMMITS[0]!, COMMITS[1]!, MERGE, COMMITS[3]!];
+    const litDots = () =>
+      [...list().querySelectorAll('li')]
+        .filter((item) => item.querySelector('circle[data-lit]'))
+        .map((item) => item.textContent?.slice(0, 7));
+    const branchRow = (text: string) => within(list()).getByText(text).closest('li')!;
+
+    it('draws a dot on the line for every commit and fills the shown ones', () => {
+      renderList({ kind: 'range', startSha: COMMITS[1]!.sha, endSha: COMMITS[2]!.sha });
+
+      expect(list().querySelectorAll('circle')).toHaveLength(4);
+      expect(litDots()).toEqual(['2222222', '3333333']);
+    });
+
+    it('lists the commits a merge brings in just above it, where they cannot be chosen', () => {
+      const { onSelect } = renderList({ kind: 'all' }, WITH_MERGE);
+
+      expect([...list().querySelectorAll('li')].map((item) => item.textContent)).toEqual([
+        '전체',
+        '1111111pin the old behavior',
+        '2222222change the behavior',
+        'aaaaaaaside first',
+        'bbbbbbbside second',
+        '3333333merge the side branch',
+        '4444444document it',
+      ]);
+      expect(within(branchRow('side first')).queryByRole('button')).not.toBeInTheDocument();
+
+      fireEvent.click(within(list()).getByText('side first'));
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it('paints the branch together with its shown merge', () => {
+      renderList({ kind: 'commit', sha: MERGE.sha }, WITH_MERGE);
+
+      expect(litDots()).toEqual(['aaaaaaa', 'bbbbbbb', '3333333']);
+      expect(branchRow('side first')).toHaveAttribute('aria-current', 'true');
+      expect(painted()).toEqual(['3333333merge the side branch']);
+    });
+
+    it('counts the commits of a branch too long to list', () => {
+      renderList({ kind: 'all' }, [COMMITS[0]!, { ...MERGE, mergedOmitted: 30 }]);
+
+      expect(within(list()).getByText('커밋 30개 더')).toBeInTheDocument();
+    });
   });
 });

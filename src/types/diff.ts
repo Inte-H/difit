@@ -53,11 +53,21 @@ export interface DiffSelection {
   baseMode?: BaseMode;
 }
 
+export interface MergedCommit {
+  sha: string;
+  shortSha: string;
+  subject: string;
+}
+
 export interface ReviewCommit {
   sha: string;
   shortSha: string;
   parentSha: string;
   subject: string;
+  // On a merge, the commits of the review it brings in that no earlier commit of the list holds,
+  // oldest first; the oldest beyond a limit are only counted in `mergedOmitted`.
+  merged?: MergedCommit[];
+  mergedOmitted?: number;
 }
 
 export interface ReviewScope {
