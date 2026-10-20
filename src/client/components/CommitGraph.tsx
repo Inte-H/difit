@@ -14,37 +14,67 @@ const STROKE_WIDTH = 2;
 
 const branchColor = (color: number) => BRANCH_COLORS[color % BRANCH_COLORS.length];
 
-// Fills the row's height, so the lines of rows next to each other meet.
-export function CommitGraph({ cell }: { cell: CommitGraphCell }) {
+// Square caps overlap the next row's line by a pixel, so rows of a fractional height show no seam.
+export function CommitGraph({ cell, bleed }: { cell: CommitGraphCell; bleed: string }) {
   const x = LANE_X[0];
   return (
-    <span className="relative shrink-0 self-stretch -my-1.5 w-[32px]" aria-hidden="true">
+    <span className={`relative shrink-0 self-stretch ${bleed} w-[32px]`} aria-hidden="true">
       <svg className="absolute inset-0 h-full w-full overflow-visible">
         {cell.above && (
-          <line x1={x} y1="0" x2={x} y2="50%" stroke={MAIN_COLOR} strokeWidth={STROKE_WIDTH} />
+          <line
+            x1={x}
+            y1="0"
+            x2={x}
+            y2="50%"
+            stroke={MAIN_COLOR}
+            strokeWidth={STROKE_WIDTH}
+            strokeLinecap="square"
+          />
         )}
         {cell.below && (
-          <line x1={x} y1="50%" x2={x} y2="100%" stroke={MAIN_COLOR} strokeWidth={STROKE_WIDTH} />
+          <line
+            x1={x}
+            y1="50%"
+            x2={x}
+            y2="100%"
+            stroke={MAIN_COLOR}
+            strokeWidth={STROKE_WIDTH}
+            strokeLinecap="square"
+          />
         )}
         {cell.branch && (
-          <svg viewBox="0 0 32 32" preserveAspectRatio="none" width="100%" height="100%">
+          <svg
+            viewBox="0 0 32 32"
+            preserveAspectRatio="none"
+            width="100%"
+            height="100%"
+            overflow="visible"
+          >
             <path
               d={BRANCH_PATH[cell.branch.shape]}
               fill="none"
               vectorEffect="non-scaling-stroke"
               stroke={branchColor(cell.branch.color)}
               strokeWidth={STROKE_WIDTH}
+              strokeLinecap="square"
             />
           </svg>
         )}
         {cell.forkBelow !== null && (
-          <svg viewBox="0 0 32 32" preserveAspectRatio="none" width="100%" height="100%">
+          <svg
+            viewBox="0 0 32 32"
+            preserveAspectRatio="none"
+            width="100%"
+            height="100%"
+            overflow="visible"
+          >
             <path
               d={FORK_BELOW_PATH}
               fill="none"
               vectorEffect="non-scaling-stroke"
               stroke={branchColor(cell.forkBelow)}
               strokeWidth={STROKE_WIDTH}
+              strokeLinecap="square"
             />
           </svg>
         )}

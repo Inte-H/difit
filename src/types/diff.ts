@@ -86,6 +86,8 @@ export type ReviewViewAction =
   | { kind: 'click'; sha: string }
   | { kind: 'shift-click'; sha: string }
   | { kind: 'drop'; fromSha: string; toSha: string }
+  | { kind: 'long-press'; sha: string }
+  | { kind: 'cancel' }
   | { kind: 'previous' }
   | { kind: 'next' }
   | { kind: 'all' };

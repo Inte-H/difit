@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type TouchEvent } from 'react';
 
-import type { ReviewScope, ReviewView, ReviewViewAction } from '../../types/diff';
+import type { ReviewCommit, ReviewScope, ReviewView, ReviewViewAction } from '../../types/diff';
 import { layoutCommitGraph } from '../../utils/commitGraph';
 import { isSameCommit, selectReviewView } from '../../utils/diffSelection';
 
@@ -11,6 +11,8 @@ interface CommitListProps {
   review: Pick<ReviewScope, 'requested' | 'commits'>;
   shown: ReviewView;
   onSelect: (action: ReviewViewAction) => void;
+  rangeStart?: string | undefined;
+  inDrawer?: boolean;
 }
 
 interface Drag {
@@ -18,20 +20,77 @@ interface Drag {
   overSha: string | null;
 }
 
+interface Press {
+  sha: string;
+  x: number;
+  y: number;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const LONG_PRESS_MS = 500;
+const TAP_SLOP_PX = 10;
+
 const ITEM_CLASS =
-  'w-full flex items-center gap-2 px-4 py-1.5 text-left text-sm hover:bg-github-bg-tertiary transition-colors';
+  'w-full flex items-center gap-2 px-4 text-left text-sm hover:bg-github-bg-tertiary transition-colors';
 const CURRENT_CLASS = 'bg-github-bg-tertiary text-github-text-primary font-medium';
 const CURRENT_COMMIT_CLASS = `${CURRENT_CLASS} shadow-[inset_2px_0_0_var(--color-github-accent)]`;
 const PREVIEW_CLASS = 'outline-1 outline-dashed -outline-offset-1 outline-github-text-secondary';
-const MERGED_CLASS = 'flex items-center gap-2 px-4 py-1.5 text-sm text-github-text-muted';
+const MERGED_CLASS = 'flex items-center gap-2 px-4 text-sm text-github-text-muted';
 const CURRENT_MERGED_CLASS =
   'bg-github-bg-tertiary text-github-text-secondary shadow-[inset_2px_0_0_var(--color-github-accent)]';
 
-export function CommitList({ review, shown, onSelect }: CommitListProps) {
+const commitUnder = (x: number, y: number) =>
+  document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-commit-sha]')?.dataset.commitSha ??
+  null;
+
+export function ShownCommits({
+  commits,
+  shown,
+}: {
+  commits: readonly ReviewCommit[];
+  shown: ReviewView;
+}) {
+  const find = (sha: string) => commits.find((commit) => isSameCommit(commit.sha, sha));
+  if (shown.kind === 'commit') {
+    const single = find(shown.sha);
+    if (single) {
+      return (
+        <>
+          <code className="font-mono">{single.shortSha}</code> {single.subject}
+        </>
+      );
+    }
+  }
+  if (shown.kind === 'range') {
+    const first = find(shown.startSha);
+    const last = find(shown.endSha);
+    if (first && last) {
+      return (
+        <>
+          <code className="font-mono" title={`${first.subject} ~ ${last.subject}`}>
+            {first.shortSha}~{last.shortSha}
+          </code>{' '}
+          ({commits.indexOf(last) - commits.indexOf(first) + 1}개)
+        </>
+      );
+    }
+  }
+  return '전체';
+}
+
+export function CommitList({
+  review,
+  shown,
+  onSelect,
+  rangeStart,
+  inDrawer = false,
+}: CommitListProps) {
   const { commits } = review;
   const [isOpen, setIsOpen] = useState(true);
   const [drag, setDrag] = useState<Drag | null>(null);
   const isDragging = drag !== null;
+  const listRef = useRef<HTMLUListElement>(null);
+  const pressRef = useRef<Press | null>(null);
 
   useEffect(() => {
     if (!isDragging) return;
@@ -39,6 +98,74 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
     window.addEventListener('mouseup', cancel);
     return () => window.removeEventListener('mouseup', cancel);
   }, [isDragging]);
+
+  const isListShown = inDrawer || isOpen;
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list) return;
+    const onTouchMove = (event: globalThis.TouchEvent) => {
+      const press = pressRef.current;
+      const touch = event.touches[0];
+      if (!press || !touch) return;
+      if (press.timer !== null) {
+        if (Math.hypot(touch.clientX - press.x, touch.clientY - press.y) > TAP_SLOP_PX) {
+          clearTimeout(press.timer);
+          pressRef.current = null;
+        }
+        return;
+      }
+      event.preventDefault();
+      const overSha = commitUnder(touch.clientX, touch.clientY);
+      setDrag((current) => current && { ...current, overSha });
+    };
+    list.addEventListener('touchmove', onTouchMove, { passive: false });
+    return () => list.removeEventListener('touchmove', onTouchMove);
+  }, [isListShown]);
+
+  useEffect(
+    () => () => {
+      const timer = pressRef.current?.timer;
+      if (timer != null) clearTimeout(timer);
+    },
+    [],
+  );
+
+  const startPress = (sha: string, event: TouchEvent) => {
+    const touch = event.touches[0];
+    const previous = pressRef.current?.timer;
+    if (previous != null) clearTimeout(previous);
+    if (!touch || event.touches.length > 1) {
+      pressRef.current = null;
+      return;
+    }
+    const press: Press = { sha, x: touch.clientX, y: touch.clientY, timer: null };
+    press.timer = setTimeout(() => {
+      press.timer = null;
+      setDrag({ fromSha: sha, overSha: null });
+      onSelect({ kind: 'long-press', sha });
+    }, LONG_PRESS_MS);
+    pressRef.current = press;
+  };
+  const endPress = (event: TouchEvent) => {
+    const press = pressRef.current;
+    pressRef.current = null;
+    if (!press) return;
+    if (press.timer !== null) {
+      clearTimeout(press.timer);
+      return;
+    }
+    event.preventDefault();
+    setDrag(null);
+    const touch = event.changedTouches[0];
+    const toSha = touch ? commitUnder(touch.clientX, touch.clientY) : null;
+    if (toSha && toSha !== press.sha) onSelect({ kind: 'drop', fromSha: press.sha, toSha });
+  };
+  const cancelPress = () => {
+    const timer = pressRef.current?.timer;
+    if (timer != null) clearTimeout(timer);
+    pressRef.current = null;
+    setDrag(null);
+  };
 
   const indexOf = (sha: string) => commits.findIndex((commit) => isSameCommit(commit.sha, sha));
   const spanOf = (view: ReviewView): [number, number] =>
@@ -56,53 +183,77 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
           { kind: 'drop', fromSha: drag.fromSha, toSha: drag.overSha },
         )
       : null;
-  const [previewStart, previewEnd] = preview ? spanOf(preview.view) : [-1, -2];
-  const first = shown.kind === 'range' ? commits[shownStart] : undefined;
-  const last = shown.kind === 'range' ? commits[shownEnd] : undefined;
-  const single = shown.kind === 'commit' ? commits[shownStart] : undefined;
+  const [previewStart, previewEnd] = preview
+    ? spanOf(preview.view)
+    : rangeStart !== undefined
+      ? spanOf({ kind: 'commit', sha: rangeStart })
+      : [-1, -2];
+  const rowPadding = inDrawer ? 'py-3' : 'py-1.5';
+  const graphBleed = inDrawer ? '-my-3' : '-my-1.5';
+  const itemClass = `${ITEM_CLASS} ${rowPadding}`;
   const graph = layoutCommitGraph(commits);
+  const title = (
+    <>
+      <span className="shrink-0 font-semibold text-github-text-primary">
+        커밋 {commits.length}개
+      </span>
+      <span className="min-w-0 truncate text-github-text-secondary">
+        <ShownCommits commits={commits} shown={shown} />
+      </span>
+    </>
+  );
 
   return (
-    <section className="shrink-0 border-b border-github-border" aria-label="리뷰 범위의 커밋">
-      <button
-        type="button"
-        onClick={() => setIsOpen((open) => !open)}
-        aria-expanded={isOpen}
-        className="w-full flex items-center gap-2 px-4 py-2 text-sm bg-github-bg-tertiary hover:bg-github-bg-primary transition-colors"
-      >
-        {isOpen ? (
-          <ChevronDown size={16} className="shrink-0 text-github-text-secondary" />
-        ) : (
-          <ChevronRight size={16} className="shrink-0 text-github-text-secondary" />
-        )}
-        <span className="shrink-0 font-semibold text-github-text-primary">
-          커밋 {commits.length}개
-        </span>
-        <span className="min-w-0 truncate text-github-text-secondary">
-          {single ? (
-            <>
-              <code className="font-mono">{single.shortSha}</code> {single.subject}
-            </>
-          ) : first && last ? (
-            <>
-              <code className="font-mono" title={`${first.subject} ~ ${last.subject}`}>
-                {first.shortSha}~{last.shortSha}
-              </code>{' '}
-              ({shownEnd - shownStart + 1}개)
-            </>
+    <section
+      className={
+        inDrawer ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0 border-b border-github-border'
+      }
+      aria-label="리뷰 범위의 커밋"
+    >
+      {rangeStart !== undefined ? (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-2 text-sm bg-github-bg-tertiary">
+          <span role="status" className="min-w-0 flex-1 truncate text-github-text-primary">
+            범위 고르는 중
+          </span>
+          <button
+            type="button"
+            onClick={() => onSelect({ kind: 'cancel' })}
+            className="shrink-0 px-2 py-0.5 text-sm text-github-text-secondary border border-github-border rounded hover:text-github-text-primary hover:bg-github-bg-primary transition-colors"
+          >
+            취소
+          </button>
+        </div>
+      ) : inDrawer ? (
+        <div className="shrink-0 flex items-center gap-2 px-4 py-2 text-sm bg-github-bg-tertiary">
+          {title}
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsOpen((open) => !open)}
+          aria-expanded={isOpen}
+          className="w-full flex items-center gap-2 px-4 py-2 text-sm bg-github-bg-tertiary hover:bg-github-bg-primary transition-colors"
+        >
+          {isOpen ? (
+            <ChevronDown size={16} className="shrink-0 text-github-text-secondary" />
           ) : (
-            '전체'
+            <ChevronRight size={16} className="shrink-0 text-github-text-secondary" />
           )}
-        </span>
-      </button>
-      {isOpen && (
-        <ul className="max-h-60 overflow-y-auto py-1 m-0 list-none p-0 select-none">
+          {title}
+        </button>
+      )}
+      {isListShown && (
+        <ul
+          ref={listRef}
+          onContextMenu={(event) => event.preventDefault()}
+          className={`${inDrawer ? 'flex-1' : 'max-h-60'} overflow-y-auto py-1 m-0 list-none p-0 select-none [-webkit-touch-callout:none]`}
+        >
           <li>
             <button
               type="button"
               onClick={() => onSelect({ kind: 'all' })}
               aria-current={shown.kind === 'all' ? true : undefined}
-              className={`${ITEM_CLASS} ${shown.kind === 'all' ? CURRENT_CLASS : 'text-github-text-secondary'}`}
+              className={`${itemClass} ${shown.kind === 'all' ? CURRENT_CLASS : 'text-github-text-secondary'}`}
             >
               <span className="w-[32px] shrink-0" />
               전체
@@ -118,9 +269,9 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
                     key={entry.kind === 'commit' ? entry.commit.sha : `${commit.sha}:omitted`}
                     aria-current={isCurrent ? true : undefined}
                     title={entry.kind === 'commit' ? entry.commit.subject : undefined}
-                    className={`${MERGED_CLASS} ${isCurrent ? CURRENT_MERGED_CLASS : ''}`}
+                    className={`${MERGED_CLASS} ${rowPadding} ${isCurrent ? CURRENT_MERGED_CLASS : ''}`}
                   >
-                    <CommitGraph cell={entry.cell} />
+                    <CommitGraph cell={entry.cell} bleed={graphBleed} />
                     {entry.kind === 'commit' ? (
                       <>
                         <code className="shrink-0 font-mono text-xs">{entry.commit.shortSha}</code>
@@ -134,6 +285,7 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
                 <li>
                   <button
                     type="button"
+                    data-commit-sha={commit.sha}
                     onMouseDown={(event) => {
                       if (event.button === 0 && !event.shiftKey) {
                         setDrag({ fromSha: commit.sha, overSha: null });
@@ -148,15 +300,18 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
                       }
                       setDrag(null);
                     }}
+                    onTouchStart={(event) => startPress(commit.sha, event)}
+                    onTouchEnd={endPress}
+                    onTouchCancel={cancelPress}
                     onClick={(event) =>
                       onSelect({ kind: event.shiftKey ? 'shift-click' : 'click', sha: commit.sha })
                     }
                     aria-current={isCurrent ? true : undefined}
                     data-drag-preview={isPreviewed ? '' : undefined}
                     title={commit.subject}
-                    className={`${ITEM_CLASS} ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
+                    className={`${itemClass} ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
                   >
-                    <CommitGraph cell={cell} />
+                    <CommitGraph cell={cell} bleed={graphBleed} />
                     <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
                     <span className="min-w-0 truncate">{commit.subject}</span>
                   </button>

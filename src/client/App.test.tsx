@@ -2384,6 +2384,122 @@ describe('App Component - Commits of the review', () => {
       fireEvent.mouseEnter(row);
       expect(screen.queryByRole('button', { name: 'Add a comment' })).not.toBeInTheDocument();
     });
+
+    describe('on a phone', () => {
+      const drawerButton = () => screen.getByRole('button', { name: '커밋 목록' });
+      const longPress = async (name: RegExp) => {
+        fireEvent.touchStart(commitButton(name), { touches: [{ clientX: 10, clientY: 10 }] });
+        await act(() => new Promise((resolve) => setTimeout(resolve, 550)));
+        fireEvent.touchEnd(commitButton(name), { changedTouches: [{ clientX: 10, clientY: 10 }] });
+      };
+
+      beforeEach(() => {
+        vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+        vi.spyOn(document, 'elementFromPoint').mockReturnValue(null);
+      });
+
+      afterEach(() => {
+        vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+        vi.mocked(document.elementFromPoint).mockRestore();
+      });
+
+      it('opens the commits in a drawer from the header and closes it once a commit is tapped', async () => {
+        renderApp();
+        await screen.findByText('Look here');
+        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        expect(drawerButton()).toHaveTextContent('전체');
+
+        fireEvent.click(drawerButton());
+        expect(drawerButton()).toHaveAttribute('aria-expanded', 'true');
+        fireEvent.click(commitButton(/abc1234/));
+
+        await waitFor(() =>
+          expect(diffQueries().at(-1)).toEqual([COMMITS[1]!.parentSha, COMMITS[1]!.sha]),
+        );
+        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        await waitFor(() => expect(drawerButton()).toHaveTextContent('abc1234'));
+      });
+
+      it('closes the drawer from outside it without changing what is shown', async () => {
+        renderApp();
+        await screen.findByText('Look here');
+        const queries = diffQueries().length;
+
+        fireEvent.click(drawerButton());
+        fireEvent.click(screen.getByRole('button', { name: '커밋 목록 닫기' }));
+
+        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        expect(diffQueries()).toHaveLength(queries);
+      });
+
+      it('shows the run between a long-pressed commit and the next one tapped', async () => {
+        renderApp();
+        await screen.findByText('Look here');
+        fireEvent.click(drawerButton());
+        const queries = diffQueries().length;
+
+        await longPress(/1111111/);
+        expect(screen.getByRole('status')).toHaveTextContent('범위 고르는 중');
+        expect(diffQueries()).toHaveLength(queries);
+        expect(drawerButton()).toHaveAttribute('aria-expanded', 'true');
+        fireEvent.click(commitButton(/abc1234/));
+
+        await waitFor(() =>
+          expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[1]!.sha]),
+        );
+        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        await waitFor(() =>
+          expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'),
+        );
+        expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true');
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      });
+
+      it('goes back to choosing as before on cancel', async () => {
+        renderApp();
+        await screen.findByText('Look here');
+        fireEvent.click(drawerButton());
+        fireEvent.click(commitButton(/abc1234/));
+        await waitFor(() =>
+          expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'),
+        );
+        fireEvent.click(drawerButton());
+        const queries = diffQueries().length;
+
+        await longPress(/2222222/);
+        fireEvent.click(screen.getByRole('button', { name: '취소' }));
+
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
+        expect(diffQueries()).toHaveLength(queries);
+        expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
+        fireEvent.click(commitButton(/1111111/));
+        await waitFor(() =>
+          expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]),
+        );
+      });
+
+      it('stops choosing a run when the drawer is closed', async () => {
+        renderApp();
+        await screen.findByText('Look here');
+        fireEvent.click(drawerButton());
+        await longPress(/1111111/);
+
+        fireEvent.click(screen.getByRole('button', { name: '커밋 목록 닫기' }));
+        fireEvent.click(drawerButton());
+
+        expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  it('offers no commit drawer on a phone for a review of one commit', async () => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+    review = { ...REVIEW, commits: COMMITS.slice(1) };
+    renderApp();
+    await screen.findByText('Look here');
+
+    expect(screen.queryByRole('button', { name: '커밋 목록' })).not.toBeInTheDocument();
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
   });
 
   it('goes back to the whole review to show a comment picked from the list', async () => {

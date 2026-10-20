@@ -140,13 +140,16 @@ export function isViewOfReview(
 
 export interface ReviewViewChoice {
   view: ReviewView;
-  selection: DiffSelection;
+  // Null while the shown diff stays as it is.
+  selection: DiffSelection | null;
   anchor: string | null;
+  // The long-pressed commit, while the other end of a run is still to be chosen.
+  rangeStart?: string;
 }
 
 export function selectReviewView(
   review: Pick<ReviewScope, 'requested' | 'commits'>,
-  current: Pick<ReviewViewChoice, 'view' | 'anchor'>,
+  current: Pick<ReviewViewChoice, 'view' | 'anchor' | 'rangeStart'>,
   action: ReviewViewAction,
 ): ReviewViewChoice | null {
   const { commits } = review;
@@ -174,13 +177,20 @@ export function selectReviewView(
     const commit = commits[index];
     return commit ? runOf(index, index, commit.sha) : null;
   };
-  const { view } = current;
+  const { view, rangeStart } = current;
 
   switch (action.kind) {
     case 'all':
       return whole(null);
     case 'click':
+      if (rangeStart !== undefined)
+        return runOf(indexOf(rangeStart), indexOf(action.sha), rangeStart);
       return commitAt(indexOf(action.sha));
+    case 'long-press':
+      if (indexOf(action.sha) === -1) return null;
+      return { view, selection: null, anchor: current.anchor, rangeStart: action.sha };
+    case 'cancel':
+      return rangeStart === undefined ? null : { view, selection: null, anchor: current.anchor };
     case 'shift-click': {
       const anchor =
         current.anchor ??
