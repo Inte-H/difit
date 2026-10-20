@@ -48,7 +48,7 @@ export function useDirectEditing(
 
   return {
     controls,
-    targetCommit: overlay.targetCommit,
+    targetCommit: controls?.commit ?? null,
     editing: controls ? editing : null,
     close: () => setEditing(null),
     editLine: controls ? editLine : undefined,

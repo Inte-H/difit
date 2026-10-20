@@ -802,4 +802,107 @@ describe('commitDirectEdit', () => {
       expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
     });
   });
+
+  describe('made on part of the review', () => {
+    const autosquash = (repo: string, onto: string) =>
+      execFileSync('git', ['rebase', '-q', '-i', '--autosquash', onto], {
+        cwd: repo,
+        env: { ...process.env, GIT_SEQUENCE_EDITOR: ':' },
+      });
+
+    function stackedRepo() {
+      const repo = createRepo();
+      const base = commit(repo, 'base', { 'f.ts': 'a\nb\nc\n' });
+      const one = commit(repo, 'add note', { 'f.ts': 'a\n// note\nb\nc\n' });
+      const two = commit(repo, 'add header', { 'f.ts': '// header\na\n// note\nb\nc\n' });
+      const three = commit(repo, 'rename c', { 'f.ts': '// header\na\n// note\nb\ncee\n' });
+      commit(repo, 'after review', { 'g.ts': 'g\n' });
+      return { repo, base, one, two, three };
+    }
+
+    it('fixes a line of one commit in the middle of the review, on top of later commits', async () => {
+      const { repo, base, one, three } = stackedRepo();
+
+      const result = await commitDirectEdit(
+        repo,
+        { base, target: three },
+        edit({ startLine: 2, endLine: 2, original: ['// note'], replacement: ['// better'] }),
+        { base, target: one, commits: [one] },
+      );
+
+      expect(result).toMatchObject({ ok: true, fixupTarget: one });
+      expect(read(repo, 'f.ts')).toBe('// header\na\n// better\nb\ncee\n');
+      autosquash(repo, base);
+      expect(git(repo, 'log', '--format=%s')).toBe(
+        ['after review', 'rename c', 'add header', 'add note', 'base'].join('\n'),
+      );
+      expect(git(repo, 'show', 'HEAD~3:f.ts')).toBe('a\n// better\nb\nc');
+    });
+
+    it('fixes a line the commit left as it was into that commit', async () => {
+      const { repo, base, one, two, three } = stackedRepo();
+
+      const result = await commitDirectEdit(
+        repo,
+        { base, target: three },
+        edit({ startLine: 2, endLine: 2, original: ['a'], replacement: ['A'] }),
+        { base: one, target: two, commits: [two] },
+      );
+
+      expect(result).toMatchObject({ ok: true, fixupTarget: two });
+      expect(read(repo, 'f.ts')).toBe('// header\nA\n// note\nb\ncee\n');
+    });
+
+    it('fixes a line of a run of commits into the one that last changed it', async () => {
+      const { repo, base, one, two, three } = stackedRepo();
+
+      const result = await commitDirectEdit(
+        repo,
+        { base, target: three },
+        edit({ startLine: 3, endLine: 3, original: ['// note'], replacement: ['// noted'] }),
+        { base, target: two, commits: [one, two] },
+      );
+
+      expect(result).toMatchObject({ ok: true, fixupTarget: one });
+      expect(read(repo, 'f.ts')).toBe('// header\na\n// noted\nb\ncee\n');
+      autosquash(repo, base);
+      expect(git(repo, 'show', 'HEAD~3:f.ts')).toBe('a\n// noted\nb\nc');
+    });
+
+    it('refuses an edit on a commit still on the branch once the review target has left it', async () => {
+      const { repo, base, one, three } = stackedRepo();
+      git(repo, 'reset', '-q', '--hard', one);
+      commit(repo, 'other work', { 'g.ts': 'other\n' });
+      const head = git(repo, 'rev-parse', 'HEAD');
+
+      const result = await commitDirectEdit(
+        repo,
+        { base, target: three },
+        edit({ startLine: 2, endLine: 2, original: ['// note'], replacement: ['// better'] }),
+        { base, target: one, commits: [one] },
+      );
+
+      expect(result).toEqual({ ok: false, reason: 'target-not-in-head' });
+      expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
+    });
+
+    it('passes over a commit the view does not list, as an earlier round of fixups', async () => {
+      const repo = createRepo();
+      const base = commit(repo, 'base', { 'f.ts': 'a\n' });
+      const one = commit(repo, 'add note', { 'f.ts': 'a\n// note\n' });
+      const fixup = commit(repo, `fixup! ${one}`, { 'f.ts': 'a\n// note!\n' });
+
+      const result = await commitDirectEdit(
+        repo,
+        { base, target: fixup },
+        edit({ startLine: 2, endLine: 2, original: ['// note!'], replacement: ['// noted'] }),
+        { base, target: fixup, commits: [one] },
+      );
+
+      expect(result).toMatchObject({ ok: true, fixupTarget: one });
+      autosquash(repo, base);
+      expect(git(repo, 'log', '--format=%s')).toBe(['add note', 'base'].join('\n'));
+      expect(git(repo, 'show', 'HEAD:f.ts')).toBe('a\n// noted');
+    });
+  });
 });

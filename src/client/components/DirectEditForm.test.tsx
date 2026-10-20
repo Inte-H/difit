@@ -7,6 +7,7 @@ import { DirectEditForm } from './DirectEditForm';
 
 function controls(overrides: Partial<DirectEditControls> = {}): DirectEditControls {
   return {
+    commit: 'b7c2e10',
     submit: vi.fn().mockResolvedValue(null),
     ...overrides,
   };

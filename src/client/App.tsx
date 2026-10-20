@@ -1134,10 +1134,24 @@ function App() {
     },
     [getCommentApiUrl, mergeDecisions, replaceThreads],
   );
-  const directEdit = useMemo<DirectEditControls | null>(
-    () => (diffData?.directEditAvailable && targetCommit ? { submit: submitDirectEdit } : null),
-    [diffData?.directEditAvailable, targetCommit, submitDirectEdit],
-  );
+  const directEdit = useMemo<DirectEditControls | null>(() => {
+    if (!diffData?.directEditAvailable || !targetCommit) return null;
+    if (!showsPartOfReview) return { commit: targetCommit, submit: submitDirectEdit };
+    const view = {
+      base: resolvedSelection.baseCommitish,
+      target: resolvedSelection.targetCommitish,
+    };
+    return {
+      commit: view.target,
+      submit: (request) => submitDirectEdit({ ...request, view }),
+    };
+  }, [
+    diffData?.directEditAvailable,
+    targetCommit,
+    showsPartOfReview,
+    resolvedSelection,
+    submitDirectEdit,
+  ]);
   const fixupOverlay = useMemo<FixupOverlayState>(
     () => ({
       enabled: showFixupOverlay,

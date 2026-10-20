@@ -342,6 +342,8 @@ export interface DirectEditRequest {
   original: string[];
   replacement: string[];
   threadId?: string;
+  // The commit or run of commits the lines were edited in; the whole review when left out.
+  view?: { base: string; target: string };
 }
 
 export type DirectEditRejection =

@@ -70,12 +70,14 @@ import {
   type ThreadReviewState,
 } from '@/types/diff.js';
 import {
+  bindingForView,
   commitsOfView,
   createDiffSelection,
   diffSelectionsEqual,
   fixupCommitOf,
   getDiffSelectionKey,
   isCommitHash,
+  isSameView,
   isViewOfReview,
 } from '../utils/diffSelection.js';
 
@@ -466,9 +468,7 @@ export async function startServer(options: ServerOptions): Promise<{
       ...responseDiffData,
       ignoreWhitespace,
       openInEditorAvailable: !options.stdinDiff,
-      directEditAvailable:
-        canEditDirectly(currentCommentSelection) &&
-        diffSelectionsEqual(viewSelection, currentCommentSelection),
+      directEditAvailable: canEditDirectly(currentCommentSelection),
       symbolSearchAvailable: !options.stdinDiff,
       baseCommitish,
       targetCommitish,
@@ -1215,7 +1215,7 @@ export async function startServer(options: ServerOptions): Promise<{
 
   function parseDirectEditRequest(body: unknown): DirectEditRequest | null {
     if (!body || typeof body !== 'object') return null;
-    const { filePath, startLine, endLine, original, replacement, threadId } = body as Record<
+    const { filePath, startLine, endLine, original, replacement, threadId, view } = body as Record<
       string,
       unknown
     >;
@@ -1235,7 +1235,20 @@ export async function startServer(options: ServerOptions): Promise<{
     ) {
       return null;
     }
-    return { filePath, startLine, endLine, original, replacement, threadId };
+    if (view === undefined) {
+      return { filePath, startLine, endLine, original, replacement, threadId };
+    }
+    const { base, target } = (view ?? {}) as Record<string, unknown>;
+    if (typeof base !== 'string' || typeof target !== 'string') return null;
+    return {
+      filePath,
+      startLine,
+      endLine,
+      original,
+      replacement,
+      threadId,
+      view: { base, target },
+    };
   }
 
   const refuse = (
@@ -1252,8 +1265,14 @@ export async function startServer(options: ServerOptions): Promise<{
 
   async function applyDirectEdit(
     selection: DiffSelection,
+    review: ReviewScope | undefined,
+    view: DiffSelection,
     request: DirectEditRequest,
   ): Promise<{ status: number; body: DirectEditResponse }> {
+    const commits =
+      review && !isSameView(view, review.selection)
+        ? commitsOfView(view, review).map((commit) => commit.sha)
+        : [];
     const session = getOrCreateCommentSession(selection);
     const answered =
       request.threadId === undefined
@@ -1287,8 +1306,14 @@ export async function startServer(options: ServerOptions): Promise<{
         replacement: request.replacement,
         threadId,
       },
+      {
+        base: view.baseCommitish,
+        target: view.targetCommitish,
+        ...(commits.length > 0 ? { commits } : {}),
+      },
     );
     if (!result.ok) return refuse(result.reason, result.output);
+    const binding = review && bindingForView(review, view, result.fixupTarget);
 
     const patchId = (await parser.readThreadFixup(result.sha))?.patchId;
     const now = new Date().toISOString();
@@ -1321,9 +1346,11 @@ export async function startServer(options: ServerOptions): Promise<{
             },
             codeSnapshot: {
               content: request.original.join('\n'),
-              commit: selection.targetCommitish,
+              commit: binding?.snapshotCommit ?? selection.targetCommitish,
             },
             messages: [message],
+            ...(binding?.view ? { view: binding.view } : {}),
+            ...(binding ? { fixupTarget: binding.fixupTarget } : {}),
           },
         ];
     updateCommentSession(
@@ -1372,13 +1399,21 @@ export async function startServer(options: ServerOptions): Promise<{
     }
     const request = parseDirectEditRequest(req.body);
     const filepathResult = request ? parseRepositoryRelativePath(request.filePath) : null;
-    if (!request || !filepathResult?.ok) {
+    const review = findReviewOf(selection);
+    const view = request?.view
+      ? createDiffSelection(request.view.base, request.view.target)
+      : selection;
+    if (
+      !request ||
+      !filepathResult?.ok ||
+      (request.view && !(review && isViewOfReview(view, review)))
+    ) {
       res.status(400).json({ error: 'Invalid direct edit request' });
       return;
     }
 
     const run = directEditQueue.then(() =>
-      applyDirectEdit(selection, { ...request, filePath: filepathResult.path }),
+      applyDirectEdit(selection, review, view, { ...request, filePath: filepathResult.path }),
     );
     directEditQueue = run.catch(() => undefined);
     try {
