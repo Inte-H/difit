@@ -311,7 +311,8 @@ export function useDiffComments(
             updatedAt: now,
           },
         ],
-        ...(binding ? { view: binding.view, fixupTarget: binding.fixupTarget } : {}),
+        ...(binding?.view ? { view: binding.view } : {}),
+        ...(binding ? { fixupTarget: binding.fixupTarget } : {}),
       };
 
       const newThreads = [...threads, newThread];

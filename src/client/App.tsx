@@ -25,6 +25,7 @@ import {
   fixupCommitOf,
   getDiffSelectionKey,
   isCommitHash,
+  isViewOfReview,
   madeViewElsewhere,
   normalizeBaseMode,
   reviewViewShown,
@@ -90,6 +91,7 @@ import {
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
 import { directEditFailureMessage } from './utils/directEdit';
+import { fetchFixupTarget } from './utils/fixupTarget';
 import { buildFileLineIndex, placeThread } from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
@@ -242,7 +244,7 @@ function App() {
     viewAnchor && JSON.stringify(viewAnchor.view) === JSON.stringify(shownView)
       ? viewAnchor.sha
       : null;
-  const takesComments = !showsPartOfReview || shownView.kind === 'commit';
+  const takesComments = !showsPartOfReview || shownView.kind !== 'all';
 
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
@@ -274,6 +276,8 @@ function App() {
   );
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
+  const addThreadRef = useRef(addThread);
+  addThreadRef.current = addThread;
 
   const showMobileCommentsBar = isMobile && threads.length > 0;
   const commentsContextKey = useMemo(() => {
@@ -1294,14 +1298,18 @@ function App() {
   }, []);
 
   const handleAddComment = useCallback(
-    (
+    async (
       file: string,
       line: LineNumber,
       body: string,
       codeContent?: string,
       side?: DiffSide,
     ): Promise<void> => {
-      addThread({
+      const ofReview = review && resolvedSelection && isViewOfReview(resolvedSelection, review);
+      const fixupTarget = ofReview
+        ? await fetchFixupTarget(resolvedSelection, file, line, side || 'new')
+        : undefined;
+      addThreadRef.current({
         filePath: file,
         body,
         side: side || 'new',
@@ -1313,12 +1321,10 @@ function App() {
                 language: undefined,
               }
             : undefined,
-        binding:
-          review && resolvedSelection ? bindingForView(review, resolvedSelection) : undefined,
+        binding: ofReview ? bindingForView(review, resolvedSelection, fixupTarget) : undefined,
       });
-      return Promise.resolve();
     },
-    [addThread, review, resolvedSelection],
+    [review, resolvedSelection],
   );
 
   const showCopyAllNotice = (notice: CopyAllNotice) => {

@@ -171,3 +171,122 @@ it('folds the fixup for a comment made on one commit into that commit', async ()
   await decide({ kind: 'folded', fixupSha: fixup, targetSha: newPin });
   expect(await text('/api/comments-output')).toContain('discount.test.js:L3 [접힘]');
 });
+
+it('folds the fixups for comments made on a run and on the whole review into the commits that made their lines', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-'));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }));
+  git(repo, ['init', '-q']);
+  git(repo, ['checkout', '-q', '-b', 'main']);
+  const base = commit(repo, 'base', {
+    'discount.js': 'export function discount(price) {\n  return price * 0.1;\n}\n',
+  });
+  const pin = commit(repo, 'test: pin current discount', { 'discount.test.js': PINNING_TEST });
+  const fix = commit(repo, 'fix: round discount down', {
+    'discount.js': 'export function discount(price) {\n  return Math.floor(price * 0.1);\n}\n',
+  });
+  const docs = commit(repo, 'docs: say discounts round down', { 'README.md': 'Rounds down.\n' });
+
+  const { port, server } = await startServer({
+    selection: createDiffSelection(base, docs),
+    repoPath: repo,
+    preferredPort: 9270,
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server?.close(() => resolve())));
+  const api = (path: string) => `http://localhost:${port}${path}`;
+
+  const whole = (await (await fetch(api('/api/diff'))).json()) as DiffResponse;
+  const review = whole.review!;
+  const reviewQuery = `?base=${review.selection.baseCommitish}&target=${review.selection.targetCommitish}`;
+  const run = (await (
+    await fetch(api(`/api/diff?base=${base}&target=${fix}`))
+  ).json()) as DiffResponse;
+  const bind = async (shown: DiffResponse, path: string, line: number) => {
+    const view = createDiffSelection(shown.baseCommitish!, shown.targetCommitish!);
+    const params = new URLSearchParams({
+      base: view.baseCommitish,
+      target: view.targetCommitish,
+      path,
+      start: String(line),
+      end: String(line),
+      side: 'new',
+    });
+    const { fixupTarget } = (await (
+      await fetch(api(`/api/fixup-target?${params.toString()}`))
+    ).json()) as { fixupTarget: string };
+    return bindingForView(review, view, fixupTarget)!;
+  };
+  const onRun = await bind(run, 'discount.test.js', 3);
+  const onWhole = await bind(whole, 'discount.js', 2);
+  expect(onRun).toEqual({
+    view: { baseCommitish: base, targetCommitish: fix },
+    fixupTarget: pin,
+    snapshotCommit: fix,
+  });
+  expect(onWhole).toEqual({ fixupTarget: fix });
+  const status = async (query: Record<string, string>) =>
+    (await fetch(api(`/api/fixup-target?${new URLSearchParams(query).toString()}`))).status;
+  const line = { path: 'discount.js', start: '1', end: '1' };
+  expect(await status({ base: docs, target: base, side: 'new', ...line })).toBe(404);
+  expect(await status({ base, target: fix, side: 'middle', ...line })).toBe(400);
+
+  const at = '2026-10-20T00:00:00Z';
+  const thread = (id: string, filePath: string, line: number, content: string) => ({
+    id,
+    filePath,
+    createdAt: at,
+    updatedAt: at,
+    position: { side: 'new', line },
+    codeSnapshot: { content, commit: docs },
+    messages: [{ id, body: 'Fix this.', author: 'User', createdAt: at, updatedAt: at }],
+  });
+  await fetch(api(`/api/comments${reviewQuery}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      threads: [
+        {
+          ...thread('t1', 'discount.test.js', 3, "test('discount', () => {"),
+          codeSnapshot: { content: "test('discount', () => {", commit: onRun.snapshotCommit },
+          view: onRun.view,
+          fixupTarget: onRun.fixupTarget,
+        },
+        {
+          ...thread('t2', 'discount.js', 2, '  return Math.floor(price * 0.1);'),
+          fixupTarget: onWhole.fixupTarget,
+        },
+      ],
+    }),
+  });
+
+  const json = (await (await fetch(api('/api/comments-json'))).json()) as {
+    threads: Array<{ id: string; fixupTarget?: string }>;
+  };
+  expect(json.threads.map(({ id, fixupTarget }) => ({ id, fixupTarget }))).toEqual([
+    { id: 't1', fixupTarget: pin },
+    { id: 't2', fixupTarget: fix },
+  ]);
+
+  writeFileSync(
+    join(repo, 'discount.test.js'),
+    PINNING_TEST.replace("test('discount'", "test('takes ten percent without rounding'"),
+  );
+  git(repo, ['commit', '-q', '-a', `--fixup=${pin}`, '--trailer', 'Review-Thread: t1']);
+  writeFileSync(
+    join(repo, 'discount.js'),
+    'export function discount(price) {\n  return Math.floor(price / 10);\n}\n',
+  );
+  git(repo, ['commit', '-q', '-a', `--fixup=${fix}`, '--trailer', 'Review-Thread: t2']);
+  const before = git(repo, ['rev-parse', 'HEAD']);
+  git(repo, ['rebase', '-q', '-i', '--autosquash', base], { GIT_SEQUENCE_EDITOR: ':' });
+
+  expect(git(repo, ['diff', '--exit-code', before, 'HEAD'])).toBe('');
+  expect(git(repo, ['log', '--format=%s', `${base}..HEAD`]).split('\n')).toEqual([
+    'docs: say discounts round down',
+    'fix: round discount down',
+    'test: pin current discount',
+  ]);
+  expect(git(repo, ['show', 'HEAD~2:discount.test.js'])).toContain(
+    "test('takes ten percent without rounding'",
+  );
+  expect(git(repo, ['show', 'HEAD~1:discount.js'])).toContain('Math.floor(price / 10)');
+});
