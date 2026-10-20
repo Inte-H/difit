@@ -58,6 +58,7 @@ type ClassifiableFile = Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks' 
 
 interface FixupLogEntry {
   sha: string;
+  parents: string[];
   firstParent: string | undefined;
   isMerge: boolean;
   subject: string;
@@ -71,6 +72,7 @@ function parseFixupLog(raw: string): FixupLogEntry[] {
     const [, sha, parents, subject, trailerValues] = header;
     return {
       sha,
+      parents: parents.split(' ').filter((parent) => parent.length > 0),
       firstParent: parents.split(' ')[0] || undefined,
       isMerge: parents.includes(' '),
       subject,
@@ -91,6 +93,7 @@ export class GitDiffParser {
   private static readonly GENERATED_HEADER_SCAN_BYTES = 4 * 1024;
   private static readonly GITATTRIBUTES_CHECK_CHUNK_SIZE = 200;
   private static readonly CHANGE_KIND_BUDGET_MS = 2_000;
+  private static readonly MERGED_COMMITS_LIMIT = 20;
   private readonly classifiedFixupFiles = new Map<string, ThreadFixup['files']>();
 
   constructor(repoPath = process.cwd()) {
@@ -746,20 +749,66 @@ export class GitDiffParser {
     }
 
     const base = await this.resolveBaseCommitish(selection);
+    const range = `${base}..${targetCommitish}`;
     const log = await this.git.raw([
       'log',
       '--reverse',
       '--first-parent',
       '--no-show-signature',
       FIXUP_LOG_FORMAT,
-      `${base}..${targetCommitish}`,
+      range,
       '--',
     ]);
-    return parseFixupLog(log).flatMap(({ sha, firstParent, subject, threadIds }) =>
+    const mainline = parseFixupLog(log);
+    const mergedOf = mainline.some((entry) => entry.isMerge)
+      ? await this.listMergedCommits(mainline, range)
+      : new Map<string, Pick<ReviewCommit, 'merged' | 'mergedOmitted'>>();
+    return mainline.flatMap(({ sha, firstParent, subject, threadIds }) =>
       firstParent && threadIds.length === 0 && !AUTOSQUASH_PREFIX.test(subject)
-        ? [{ sha, shortSha: shortHash(sha), parentSha: firstParent, subject }]
+        ? [{ sha, shortSha: shortHash(sha), parentSha: firstParent, subject, ...mergedOf.get(sha) }]
         : [],
     );
+  }
+
+  // A commit that two merges bring in belongs to the older one, which brought it in first.
+  private async listMergedCommits(
+    mainline: readonly FixupLogEntry[],
+    range: string,
+  ): Promise<Map<string, Pick<ReviewCommit, 'merged' | 'mergedOmitted'>>> {
+    const all = parseFixupLog(
+      await this.git.raw([
+        'log',
+        '--reverse',
+        '--topo-order',
+        '--no-show-signature',
+        FIXUP_LOG_FORMAT,
+        range,
+        '--',
+      ]),
+    );
+    const bySha = new Map(all.map((entry) => [entry.sha, entry]));
+    const order = new Map(all.map((entry, index) => [entry.sha, index]));
+    const claimed = new Set(mainline.map((entry) => entry.sha));
+    const mergedOf = new Map<string, Pick<ReviewCommit, 'merged' | 'mergedOmitted'>>();
+    for (const merge of mainline) {
+      const found: FixupLogEntry[] = [];
+      const pending = merge.parents.slice(1);
+      for (let sha = pending.pop(); sha !== undefined; sha = pending.pop()) {
+        const entry = bySha.get(sha);
+        if (!entry || claimed.has(sha)) continue;
+        claimed.add(sha);
+        found.push(entry);
+        pending.push(...entry.parents);
+      }
+      if (found.length === 0) continue;
+      found.sort((a, b) => (order.get(a.sha) ?? 0) - (order.get(b.sha) ?? 0));
+      const kept = found.slice(-GitDiffParser.MERGED_COMMITS_LIMIT);
+      mergedOf.set(merge.sha, {
+        merged: kept.map(({ sha, subject }) => ({ sha, shortSha: shortHash(sha), subject })),
+        ...(found.length > kept.length ? { mergedOmitted: found.length - kept.length } : {}),
+      });
+    }
+    return mergedOf;
   }
 
   // Counts the commits on `ref` that neither the target nor `since` holds, leaving out fixups;

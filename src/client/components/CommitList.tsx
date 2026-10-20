@@ -1,8 +1,11 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 
 import type { ReviewScope, ReviewView, ReviewViewAction } from '../../types/diff';
+import { layoutCommitGraph } from '../../utils/commitGraph';
 import { isSameCommit, selectReviewView } from '../../utils/diffSelection';
+
+import { CommitGraph } from './CommitGraph';
 
 interface CommitListProps {
   review: Pick<ReviewScope, 'requested' | 'commits'>;
@@ -20,6 +23,9 @@ const ITEM_CLASS =
 const CURRENT_CLASS = 'bg-github-bg-tertiary text-github-text-primary font-medium';
 const CURRENT_COMMIT_CLASS = `${CURRENT_CLASS} shadow-[inset_2px_0_0_var(--color-github-accent)]`;
 const PREVIEW_CLASS = 'outline-1 outline-dashed -outline-offset-1 outline-github-text-secondary';
+const MERGED_CLASS = 'flex items-center gap-2 px-4 py-1.5 text-sm text-github-text-muted';
+const CURRENT_MERGED_CLASS =
+  'bg-github-bg-tertiary text-github-text-secondary shadow-[inset_2px_0_0_var(--color-github-accent)]';
 
 export function CommitList({ review, shown, onSelect }: CommitListProps) {
   const { commits } = review;
@@ -54,6 +60,7 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
   const first = shown.kind === 'range' ? commits[shownStart] : undefined;
   const last = shown.kind === 'range' ? commits[shownEnd] : undefined;
   const single = shown.kind === 'commit' ? commits[shownStart] : undefined;
+  const graph = layoutCommitGraph(commits);
 
   return (
     <section className="shrink-0 border-b border-github-border" aria-label="리뷰 범위의 커밋">
@@ -97,42 +104,64 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
               aria-current={shown.kind === 'all' ? true : undefined}
               className={`${ITEM_CLASS} ${shown.kind === 'all' ? CURRENT_CLASS : 'text-github-text-secondary'}`}
             >
+              <span className="w-[32px] shrink-0" />
               전체
             </button>
           </li>
-          {commits.map((commit, index) => {
+          {graph.map(({ commit, cell, merged }, index) => {
             const isCurrent = index >= shownStart && index <= shownEnd;
             const isPreviewed = index >= previewStart && index <= previewEnd;
             return (
-              <li key={commit.sha}>
-                <button
-                  type="button"
-                  onMouseDown={(event) => {
-                    if (event.button === 0 && !event.shiftKey) {
-                      setDrag({ fromSha: commit.sha, overSha: null });
+              <Fragment key={commit.sha}>
+                {merged.map((entry) => (
+                  <li
+                    key={entry.kind === 'commit' ? entry.commit.sha : `${commit.sha}:omitted`}
+                    aria-current={isCurrent ? true : undefined}
+                    title={entry.kind === 'commit' ? entry.commit.subject : undefined}
+                    className={`${MERGED_CLASS} ${isCurrent ? CURRENT_MERGED_CLASS : ''}`}
+                  >
+                    <CommitGraph cell={entry.cell} />
+                    {entry.kind === 'commit' ? (
+                      <>
+                        <code className="shrink-0 font-mono text-xs">{entry.commit.shortSha}</code>
+                        <span className="min-w-0 truncate">{entry.commit.subject}</span>
+                      </>
+                    ) : (
+                      <span>커밋 {entry.count}개 더</span>
+                    )}
+                  </li>
+                ))}
+                <li>
+                  <button
+                    type="button"
+                    onMouseDown={(event) => {
+                      if (event.button === 0 && !event.shiftKey) {
+                        setDrag({ fromSha: commit.sha, overSha: null });
+                      }
+                    }}
+                    onMouseEnter={() =>
+                      setDrag((current) => current && { ...current, overSha: commit.sha })
                     }
-                  }}
-                  onMouseEnter={() =>
-                    setDrag((current) => current && { ...current, overSha: commit.sha })
-                  }
-                  onMouseUp={() => {
-                    if (drag && drag.fromSha !== commit.sha) {
-                      onSelect({ kind: 'drop', fromSha: drag.fromSha, toSha: commit.sha });
+                    onMouseUp={() => {
+                      if (drag && drag.fromSha !== commit.sha) {
+                        onSelect({ kind: 'drop', fromSha: drag.fromSha, toSha: commit.sha });
+                      }
+                      setDrag(null);
+                    }}
+                    onClick={(event) =>
+                      onSelect({ kind: event.shiftKey ? 'shift-click' : 'click', sha: commit.sha })
                     }
-                    setDrag(null);
-                  }}
-                  onClick={(event) =>
-                    onSelect({ kind: event.shiftKey ? 'shift-click' : 'click', sha: commit.sha })
-                  }
-                  aria-current={isCurrent ? true : undefined}
-                  data-drag-preview={isPreviewed ? '' : undefined}
-                  title={commit.subject}
-                  className={`${ITEM_CLASS} ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
-                >
-                  <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
-                  <span className="min-w-0 truncate">{commit.subject}</span>
-                </button>
-              </li>
+                    aria-current={isCurrent ? true : undefined}
+                    data-drag-preview={isPreviewed ? '' : undefined}
+                    title={commit.subject}
+                    className={`${ITEM_CLASS} ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
+                  >
+                    <CommitGraph cell={cell} />
+                    <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
+                    <span className="min-w-0 truncate">{commit.subject}</span>
+                  </button>
+                </li>
+              </Fragment>
             );
           })}
         </ul>

@@ -391,6 +391,11 @@ describe('listReviewCommits against a real repository', () => {
     parentSha,
     subject,
   });
+  const mergedEntry = (sha: string, subject: string) => ({
+    sha,
+    shortSha: sha.slice(0, 7),
+    subject,
+  });
 
   it('lists the commits of the range oldest first, leaving out fixups', async () => {
     const repo = createRepo();
@@ -411,7 +416,7 @@ describe('listReviewCommits against a real repository', () => {
     const repo = createRepo();
     const base = commit(repo, 'base', { 'f.txt': 'a\n' });
     git(repo, 'checkout', '-q', '-b', 'side');
-    commit(repo, 'side work', { 'g.txt': 'g\n' });
+    const sideWork = commit(repo, 'side work', { 'g.txt': 'g\n' });
     git(repo, 'checkout', '-q', 'main');
     const mainWork = commit(repo, 'main work', { 'f.txt': 'b\n' });
     const merged = merge(repo, 'side', 'merge side');
@@ -420,7 +425,57 @@ describe('listReviewCommits against a real repository', () => {
 
     expect(
       await parser.listReviewCommits({ baseCommitish: base, targetCommitish: merged }),
-    ).toEqual([entry(mainWork, base, 'main work'), entry(merged, mainWork, 'merge side')]);
+    ).toEqual([
+      entry(mainWork, base, 'main work'),
+      { ...entry(merged, mainWork, 'merge side'), merged: [mergedEntry(sideWork, 'side work')] },
+    ]);
+  });
+
+  it('gives each merge the commits only it brings in, oldest first', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    git(repo, 'checkout', '-q', '-b', 'one');
+    const oneFirst = commit(repo, 'one first', { 'one.txt': '1\n' });
+    const oneSecond = commit(repo, 'one second', { 'one.txt': '2\n' });
+    git(repo, 'checkout', '-q', '-b', 'two');
+    const twoWork = commit(repo, 'two work', { 'two.txt': '1\n' });
+    git(repo, 'checkout', '-q', 'main');
+    const mergeOne = merge(repo, 'one', 'merge one');
+    const mergeTwo = merge(repo, 'two', 'merge two');
+    const after = commit(repo, 'after', { 'f.txt': 'b\n' });
+
+    const parser = new GitDiffParser(repo);
+
+    expect(await parser.listReviewCommits({ baseCommitish: base, targetCommitish: after })).toEqual(
+      [
+        {
+          ...entry(mergeOne, base, 'merge one'),
+          merged: [mergedEntry(oneFirst, 'one first'), mergedEntry(oneSecond, 'one second')],
+        },
+        { ...entry(mergeTwo, mergeOne, 'merge two'), merged: [mergedEntry(twoWork, 'two work')] },
+        entry(after, mergeTwo, 'after'),
+      ],
+    );
+  });
+
+  it('keeps the newest commits a merge brings in and counts the rest', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    git(repo, 'checkout', '-q', '-b', 'side');
+    const side = Array.from({ length: 22 }, (_, index) =>
+      commit(repo, `side ${index + 1}`, { 'g.txt': `${index}\n` }),
+    );
+    git(repo, 'checkout', '-q', 'main');
+    const merged = merge(repo, 'side', 'merge side');
+
+    const parser = new GitDiffParser(repo);
+    const [mergeEntry] = await parser.listReviewCommits({
+      baseCommitish: base,
+      targetCommitish: merged,
+    });
+
+    expect(mergeEntry?.merged?.map(({ sha }) => sha)).toEqual(side.slice(2));
+    expect(mergeEntry?.mergedOmitted).toBe(2);
   });
 
   it('reads the range from the merge base when the review asks for it', async () => {

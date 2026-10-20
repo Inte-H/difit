@@ -247,6 +247,21 @@ tr.drag-selected-last td::after {
   --word-highlight-color: #fffd54;
 }
 
+/* Commit graph branch colors, at least 4.5:1 against every sidebar background of their theme.
+   They stay clear of the first-parent line's accent in every color vision mode (green, or blue
+   for deuteranopia) and of yellow, which marks the fixup overlay. */
+[data-theme="dark"] {
+  --commit-graph-branch-1: #db61a2;
+  --commit-graph-branch-2: #a371f7;
+  --commit-graph-branch-3: #f0883e;
+}
+
+[data-theme="light"] {
+  --commit-graph-branch-1: #bf3989;
+  --commit-graph-branch-2: #8250df;
+  --commit-graph-branch-3: #bc4c00;
+}
+
 /* Word-level diff highlighting */
 .word-diff-added {
   background-color: var(--word-diff-added-bg);
