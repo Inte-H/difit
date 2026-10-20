@@ -11,6 +11,7 @@ import type {
 } from '../../types/diff';
 import {
   deriveThreadReviewState,
+  isAnswerableByEdit,
   isOpenedByEdit,
   isThreadResolved,
   pendingFixupFor,
@@ -101,7 +102,7 @@ export function threadReviewControls(
   if (overlay.targetCommit === null) return undefined;
   const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
   return {
-    state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, isOpenedByEdit(thread)),
+    state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, thread),
     fixupSha: pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
     targetCommit: overlay.targetCommit,
     onDecide: overlay.recordDecision,
@@ -115,7 +116,7 @@ export function canAnswerByEdit(overlay: FixupOverlayState, thread: CommentThrea
   if (!overlay.directEdit || (thread.side ?? 'new') !== 'new' || thread.isOutdated) return false;
   if (isOpenedByEdit(thread) || isThreadResolved(thread.id, overlay.decisions)) return false;
   const state = threadReviewControls(overlay, thread)?.state;
-  return state === 'awaiting-fix' || state === 'rejected';
+  return state !== undefined && isAnswerableByEdit(state);
 }
 
 export function threadAnsweredByEdit(

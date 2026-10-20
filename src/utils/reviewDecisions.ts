@@ -1,7 +1,6 @@
 import {
   REVIEWER_AUTHOR,
   REVIEWER_EDIT_AUTHOR,
-  type DiffCommentMessage,
   type DiffCommentThread,
   type ReviewDecision,
   type ThreadAwaitingAgent,
@@ -20,6 +19,7 @@ const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
 
 const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
   'awaiting-fix': '수정 중',
+  answered: '답변 완료',
   'awaiting-approval': '승인 대기',
   approved: '승인됨',
   folded: '접힘',
@@ -112,15 +112,20 @@ export function isThreadResolved(threadId: string, decisions: ReviewDecision[]):
   return latestOf(own, ['resolved', 'unresolved'])?.kind === 'resolved';
 }
 
-export function isOpenedByEdit(thread: { messages?: ReadonlyArray<{ author?: string }> }): boolean {
+type ThreadMessages = { messages?: ReadonlyArray<{ author?: string }> };
+
+export function isOpenedByEdit(thread: ThreadMessages): boolean {
   return thread.messages?.[0]?.author === REVIEWER_EDIT_AUTHOR;
 }
+
+const isAgentMessage = (message: { author?: string }) =>
+  message.author !== REVIEWER_AUTHOR && message.author !== REVIEWER_EDIT_AUTHOR;
 
 export function deriveThreadReviewState(
   threadId: string,
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
-  openedByEdit = false,
+  thread: ThreadMessages = {},
 ): ThreadReviewState {
   const own = decisions.filter((decision) => decision.threadId === threadId);
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
@@ -140,14 +145,23 @@ export function deriveThreadReviewState(
   // With no fixup left, the approved one is being folded and the fold record has not landed yet.
   if (approvalStands && unrejected.every(matcherFor([approval]))) return 'approved';
   if (unrejected.length > 0) return 'awaiting-approval';
-  if (!own.some((decision) => decision.kind === 'rejected')) return 'awaiting-fix';
-  return openedByEdit ? 'withdrawn' : 'rejected';
+  if (!own.some((decision) => decision.kind === 'rejected')) {
+    const messages = thread.messages ?? [];
+    const last = messages.at(-1);
+    const agentReplied =
+      last !== undefined && isAgentMessage(last) && !messages.every(isAgentMessage);
+    return agentReplied ? 'answered' : 'awaiting-fix';
+  }
+  return isOpenedByEdit(thread) ? 'withdrawn' : 'rejected';
 }
 
-// Unresolved threads the agent still owes an answer: nothing to judge yet, or the last answer was rejected.
-export function selectOpenThreads<
-  T extends { id: string; messages?: ReadonlyArray<{ author?: string }> },
->(
+// States with no fixup under judgment, where an edit in the viewer can still answer the thread.
+export function isAnswerableByEdit(state: ThreadReviewState): boolean {
+  return state === 'awaiting-fix' || state === 'answered' || state === 'rejected';
+}
+
+// Unresolved threads the agent still owes an answer: no answer yet, or the last answer was rejected.
+export function selectOpenThreads<T extends { id: string } & ThreadMessages>(
   threads: T[],
   fixupsByThread: ReadonlyMap<string, ThreadFixup[]>,
   decisions: ReviewDecision[],
@@ -158,7 +172,7 @@ export function selectOpenThreads<
       thread.id,
       fixupsByThread.get(thread.id) ?? [],
       decisions,
-      isOpenedByEdit(thread),
+      thread,
     );
     return state === 'awaiting-fix' || state === 'rejected';
   });
@@ -168,9 +182,6 @@ type ThreadForAgent = Pick<
   DiffCommentThread,
   'id' | 'filePath' | 'position' | 'messages' | 'fixupTarget'
 >;
-
-const isAgentMessage = (message: DiffCommentMessage) =>
-  message.author !== REVIEWER_AUTHOR && message.author !== REVIEWER_EDIT_AUTHOR;
 
 // A rejection stays the agent's turn until a new fixup lands, the rejected one is dropped
 // (withdrawn only), or the agent has the last word after it.
@@ -214,7 +225,7 @@ export function selectThreadsAwaitingAgent(
     if (!fixupsByThread) return reviewerSpokeLast ? [base] : [];
 
     const fixups = fixupsByThread.get(thread.id) ?? [];
-    const state = deriveThreadReviewState(thread.id, fixups, decisions, isOpenedByEdit(thread));
+    const state = deriveThreadReviewState(thread.id, fixups, decisions, thread);
     if (state === 'awaiting-fix') {
       return reviewerSpokeLast ? [{ ...base, state, label: reviewStateLabel(state) }] : [];
     }

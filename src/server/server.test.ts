@@ -913,9 +913,31 @@ describe('Server Integration Tests', () => {
         ]),
       });
 
+      await fetch(`http://localhost:${port}/api/comment-imports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          {
+            type: 'thread',
+            filePath: 'test.js',
+            position: { side: 'new', line: 60 },
+            body: 'Why this way?',
+            author: 'User',
+          },
+          {
+            type: 'reply',
+            filePath: 'test.js',
+            position: { side: 'new', line: 60 },
+            body: 'Because of the cache',
+            author: 'Agent',
+          },
+        ]),
+      });
+
       const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
 
       expect(output).toContain('test.js:L10 [수정 중]\nNo answer yet');
+      expect(output).toContain('test.js:L60 [답변 완료]\nWhy this way?');
       expect(output).toContain('test.js:L20 [승인 대기]\nAnswered');
       expect(output).toContain('test.js:L30 [다시 수정 중]\nRejected');
       expect(output).toContain('test.js:L40 [승인됨]\nApproved');
@@ -2159,6 +2181,35 @@ describe('Server Integration Tests', () => {
       });
 
       expect((await postEdit(port, editBody({ threadId: 'c1' }))).status).toBe(200);
+    });
+
+    it('answers a comment the agent replied to in words', async () => {
+      const port = await startPinned();
+      await fetch(`http://localhost:${port}/api/comment-imports${PINNED}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          {
+            type: 'thread',
+            filePath: 'test.js',
+            position: { side: 'new', line: 3 },
+            body: 'Why?',
+            author: 'User',
+          },
+          {
+            type: 'reply',
+            filePath: 'test.js',
+            position: { side: 'new', line: 3 },
+            body: 'Because',
+            author: 'Agent',
+          },
+        ]),
+      });
+      const { threads } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as any;
+
+      expect((await postEdit(port, editBody({ threadId: threads[0].id }))).status).toBe(200);
     });
 
     it('does not reopen a thread that an earlier edit opened', async () => {

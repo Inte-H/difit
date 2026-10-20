@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { REVIEWER_EDIT_AUTHOR, type ReviewDecision, type ThreadFixup } from '../types/diff';
+import {
+  AGENT_AUTHOR,
+  REVIEWER_AUTHOR,
+  REVIEWER_EDIT_AUTHOR,
+  type ReviewDecision,
+  type ThreadFixup,
+} from '../types/diff';
 
 import {
   deriveThreadReviewState,
@@ -28,6 +34,8 @@ const decision = (
   at = '2026-01-01T00:00:00Z',
   threadId = 't1',
 ): ReviewDecision => ({ threadId, kind, fixupSha, at });
+
+const openedByEdit = { messages: [{ author: REVIEWER_EDIT_AUTHOR }] };
 
 describe('deriveThreadReviewState', () => {
   it('follows the latest of an approval and its undo', () => {
@@ -144,16 +152,48 @@ describe('deriveThreadReviewState', () => {
     const approved = decision('approved', 'aaaa', '2026-01-01T00:00:00Z');
     const rejected = decision('rejected', 'aaaa', '2026-01-02T00:00:00Z');
     expect(deriveThreadReviewState('t1', [fixup('aaaa')], [approved, rejected])).toBe('rejected');
-    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [approved, rejected], true)).toBe(
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [approved, rejected], openedByEdit)).toBe(
       'withdrawn',
     );
   });
 
   it('closes a thread the reviewer opened by editing once its fixup is rejected', () => {
     const rejected = [decision('rejected', 'aaaa')];
-    expect(deriveThreadReviewState('t1', [fixup('aaaa')], rejected, true)).toBe('withdrawn');
-    expect(deriveThreadReviewState('t1', [], rejected, true)).toBe('withdrawn');
-    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [], true)).toBe('awaiting-approval');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], rejected, openedByEdit)).toBe(
+      'withdrawn',
+    );
+    expect(deriveThreadReviewState('t1', [], rejected, openedByEdit)).toBe('withdrawn');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [], openedByEdit)).toBe(
+      'awaiting-approval',
+    );
+  });
+
+  it('hands a thread back to the reviewer once the agent answers it in words', () => {
+    const asked = { messages: [{ author: REVIEWER_AUTHOR }] };
+    const answered = { messages: [...asked.messages, { author: AGENT_AUTHOR }] };
+    expect(deriveThreadReviewState('t1', [], [], asked)).toBe('awaiting-fix');
+    expect(deriveThreadReviewState('t1', [], [], answered)).toBe('answered');
+    expect(
+      deriveThreadReviewState('t1', [], [], {
+        messages: [...answered.messages, { author: REVIEWER_AUTHOR }],
+      }),
+    ).toBe('awaiting-fix');
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [], answered)).toBe('awaiting-approval');
+  });
+
+  it('counts any author other than the reviewer and the reviewer’s edits as the agent', () => {
+    expect(
+      deriveThreadReviewState('t1', [], [], {
+        messages: [{ author: REVIEWER_AUTHOR }, { author: 'claude' }],
+      }),
+    ).toBe('answered');
+  });
+
+  it('keeps a thread the agent opened itself waiting for a fix', () => {
+    expect(deriveThreadReviewState('t1', [], [], { messages: [{ author: AGENT_AUTHOR }] })).toBe(
+      'awaiting-fix',
+    );
+    expect(deriveThreadReviewState('t1', [], [], { messages: [{}] })).toBe('awaiting-fix');
   });
 
   it('ignores other threads’ decisions', () => {
@@ -175,6 +215,7 @@ describe('reviewStateLabel', () => {
     expect(reviewStateLabel('folded')).toBe('접힘');
     expect(reviewStateLabel('rejected')).toBe('다시 수정 중');
     expect(reviewStateLabel('withdrawn')).toBe('되돌림');
+    expect(reviewStateLabel('answered')).toBe('답변 완료');
   });
 
   it('tells a rejected thread apart from one still waiting for its first fixup', () => {
@@ -258,6 +299,19 @@ describe('selectOpenThreads', () => {
         (t) => t.id,
       ),
     ).toEqual(['open', 'rejected']);
+  });
+
+  it('leaves out a thread the agent answered in words until the reviewer speaks again', () => {
+    const asked = { id: 'asked', messages: [{ author: REVIEWER_AUTHOR }] };
+    const answered = { ...asked, messages: [...asked.messages, { author: AGENT_AUTHOR }] };
+    expect(selectOpenThreads([answered], new Map(), [])).toEqual([]);
+    expect(
+      selectOpenThreads(
+        [{ ...answered, messages: [...answered.messages, { author: REVIEWER_AUTHOR }] }],
+        new Map(),
+        [],
+      ),
+    ).toHaveLength(1);
   });
 
   it('returns nothing when every thread has been answered or settled', () => {
