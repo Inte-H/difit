@@ -19,14 +19,12 @@ const mergedCommit = (name: string): MergedCommit => ({
   subject: name,
 });
 
-// One letter per part: the first-parent line above and below the dot (l line, - none), the dot (C
-// commit, B branch commit, - none) and the branch line (f fork, t through, j join, - none) followed by
-// the number of its branch.
 function draw(cell: CommitGraphCell): string {
   const line = (drawn: boolean) => (drawn ? 'l' : '-');
   const dot = !cell.dot ? '-' : cell.dot.lane === 0 ? 'C' : 'B';
   const branch = cell.branch ? `${cell.branch.shape[0]}${cell.branch.color}` : '-';
-  return `${line(cell.above)}${dot}${line(cell.below)}${branch}`;
+  const fork = cell.forkBelow === null ? '' : ` v${cell.forkBelow}`;
+  return `${line(cell.above)}${dot}${line(cell.below)}${branch}${fork}`;
 }
 
 function drawAll(commits: ReviewCommit[]): string[] {
@@ -48,10 +46,10 @@ describe('layoutCommitGraph', () => {
     ]);
   });
 
-  it('draws the commits a merge brings in on a branch that forks above them and joins at the merge', () => {
+  it('keeps the branch straight beside its commits, curving off below the commit above and into the merge', () => {
     expect(drawAll([commit('a'), commit('m', ['x', 'y']), commit('b')])).toEqual([
-      'a lCl-',
-      'x lBlf0',
+      'a lCl- v0',
+      'x lBlt0',
       'y lBlt0',
       'm lClj0',
       'b lC--',
@@ -61,8 +59,8 @@ describe('layoutCommitGraph', () => {
   it('gives every merge its own branch, numbered in the order of the merges', () => {
     expect(drawAll([commit('m1', ['x']), commit('m2', ['y', 'z'])])).toEqual([
       'x lBlf0',
-      'm1 lClj0',
-      'y lBlf1',
+      'm1 lClj0 v1',
+      'y lBlt1',
       'z lBlt1',
       'm2 lC-j1',
     ]);

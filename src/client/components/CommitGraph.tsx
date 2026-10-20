@@ -5,10 +5,11 @@ const MAIN_COLOR = 'var(--color-github-accent)';
 const BRANCH_COLORS = [1, 2, 3].map((n) => `var(--commit-graph-branch-${n})`);
 // Drawn on a 32 by 32 box stretched to the row's height.
 const BRANCH_PATH = {
-  fork: 'M9 0 C9 9 23 7 23 16 L23 32',
+  fork: 'M9 0 A14 16 0 0 0 23 16 L23 32',
   through: 'M23 0 L23 32',
-  join: 'M23 0 C23 9 9 7 9 16',
+  join: 'M23 0 A14 16 0 0 1 9 16',
 } as const;
+const FORK_BELOW_PATH = 'M9 16 A14 16 0 0 1 23 32';
 const STROKE_WIDTH = 2;
 
 const branchColor = (color: number) => BRANCH_COLORS[color % BRANCH_COLORS.length];
@@ -32,6 +33,17 @@ export function CommitGraph({ cell }: { cell: CommitGraphCell }) {
               fill="none"
               vectorEffect="non-scaling-stroke"
               stroke={branchColor(cell.branch.color)}
+              strokeWidth={STROKE_WIDTH}
+            />
+          </svg>
+        )}
+        {cell.forkBelow !== null && (
+          <svg viewBox="0 0 32 32" preserveAspectRatio="none" width="100%" height="100%">
+            <path
+              d={FORK_BELOW_PATH}
+              fill="none"
+              vectorEffect="non-scaling-stroke"
+              stroke={branchColor(cell.forkBelow)}
               strokeWidth={STROKE_WIDTH}
             />
           </svg>
