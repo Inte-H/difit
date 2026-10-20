@@ -2056,6 +2056,27 @@ describe('App Component - Commits of the review', () => {
     ]);
   });
 
+  it('shows the whole review on a second click of the shown commit and that commit again on Back', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    const lengthBefore = window.history.length;
+
+    fireEvent.click(commitButton(/1111111/));
+
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([
+      REVIEW.requested.baseCommitish,
+      REVIEW.requested.targetCommitish,
+    ]);
+    expect(window.history.length).toBe(lengthBefore + 1);
+
+    act(() => window.history.back());
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]);
+  });
+
   it('draws a comment from before commit views only on the whole review and its last commit', async () => {
     renderApp();
     await screen.findByText('Look here');

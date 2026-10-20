@@ -185,6 +185,7 @@ export function selectReviewView(
     case 'click':
       if (rangeStart !== undefined)
         return runOf(indexOf(rangeStart), indexOf(action.sha), rangeStart);
+      if (view.kind === 'commit' && isSameCommit(view.sha, action.sha)) return whole(null);
       return commitAt(indexOf(action.sha));
     case 'long-press':
       if (indexOf(action.sha) === -1) return null;

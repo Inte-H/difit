@@ -266,6 +266,30 @@ describe('selectReviewView', () => {
     });
   });
 
+  it('shows the whole review on a click of the commit shown alone, and another commit on a click of it', () => {
+    expect(selectReviewView(review, commitView('2'), { kind: 'click', sha: sha('2') })).toEqual({
+      view: { kind: 'all' },
+      selection: review.requested,
+      anchor: null,
+    });
+    expect(selectReviewView(review, commitView('2'), { kind: 'click', sha: sha('3') })).toEqual({
+      view: { kind: 'commit', sha: sha('3') },
+      selection: { baseCommitish: sha('2'), targetCommitish: sha('3') },
+      anchor: sha('3'),
+    });
+  });
+
+  it('shows one commit of a run on a click of it, its ends included', () => {
+    const shown = { view: run('1', '3'), anchor: sha('1') };
+    for (const digit of ['1', '2', '3']) {
+      expect(selectReviewView(review, shown, { kind: 'click', sha: sha(digit) })).toEqual({
+        view: { kind: 'commit', sha: sha(digit) },
+        selection: { baseCommitish: sha(String(Number(digit) - 1)), targetCommitish: sha(digit) },
+        anchor: sha(digit),
+      });
+    }
+  });
+
   it('shows the run from the anchor to a later commit on a Shift+click', () => {
     expect(
       selectReviewView(review, commitView('1'), { kind: 'shift-click', sha: sha('3') }),
