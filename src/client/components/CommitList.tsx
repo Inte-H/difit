@@ -60,7 +60,7 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
   const first = shown.kind === 'range' ? commits[shownStart] : undefined;
   const last = shown.kind === 'range' ? commits[shownEnd] : undefined;
   const single = shown.kind === 'commit' ? commits[shownStart] : undefined;
-  const graph = layoutCommitGraph(commits, shown.kind === 'all' ? null : [shownStart, shownEnd]);
+  const graph = layoutCommitGraph(commits);
 
   return (
     <section className="shrink-0 border-b border-github-border" aria-label="리뷰 범위의 커밋">

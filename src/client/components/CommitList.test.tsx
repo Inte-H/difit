@@ -187,17 +187,21 @@ describe('CommitList', () => {
       ],
     };
     const WITH_MERGE = [COMMITS[0]!, COMMITS[1]!, MERGE, COMMITS[3]!];
-    const litDots = () =>
+    const dotColors = () =>
       [...list().querySelectorAll('li')]
-        .filter((item) => item.querySelector('circle[data-lit]'))
-        .map((item) => item.textContent?.slice(0, 7));
+        .filter((item) => item.querySelector('circle'))
+        .map((item) => [
+          item.textContent?.slice(0, 7),
+          item.querySelector('circle')?.getAttribute('fill'),
+        ]);
     const branchRow = (text: string) => within(list()).getByText(text).closest('li')!;
 
-    it('draws a dot on the line for every commit and fills the shown ones', () => {
+    it('draws a dot on the line for every commit in the colour of the line, whatever is shown', () => {
       renderList({ kind: 'range', startSha: COMMITS[1]!.sha, endSha: COMMITS[2]!.sha });
 
-      expect(list().querySelectorAll('circle')).toHaveLength(4);
-      expect(litDots()).toEqual(['2222222', '3333333']);
+      expect(dotColors().map(([, color]) => color)).toEqual(
+        Array(4).fill('var(--color-github-accent)'),
+      );
     });
 
     it('lists the commits a merge brings in just above it, where they cannot be chosen', () => {
@@ -226,10 +230,13 @@ describe('CommitList', () => {
       expect(radii).toHaveLength(6);
     });
 
-    it('paints the branch together with its shown merge', () => {
+    it('draws the branch in a colour of its own and marks it shown with its merge', () => {
       renderList({ kind: 'commit', sha: MERGE.sha }, WITH_MERGE);
 
-      expect(litDots()).toEqual(['aaaaaaa', 'bbbbbbb', '3333333']);
+      const colors = Object.fromEntries(dotColors());
+      expect(colors['aaaaaaa']).toBe('var(--commit-graph-branch-1)');
+      expect(colors['bbbbbbb']).toBe('var(--commit-graph-branch-1)');
+      expect(colors['3333333']).toBe('var(--color-github-accent)');
       expect(branchRow('side first')).toHaveAttribute('aria-current', 'true');
       expect(painted()).toEqual(['3333333merge the side branch']);
     });
