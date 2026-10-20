@@ -342,7 +342,6 @@ export type DirectEditRejection =
   | 'missing-at-head'
   | 'dirty-file'
   | 'operation-in-progress'
-  | 'mixed-commits'
   | 'conflict'
   | 'fold-conflict'
   | 'no-change'

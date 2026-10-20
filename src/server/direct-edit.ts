@@ -9,6 +9,7 @@ import {
   REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
 
+import { chooseFixupTarget } from './fixup-target.js';
 import { type GitOptions, runGit } from './run-git.js';
 
 export interface DirectEdit {
@@ -173,38 +174,6 @@ async function hasOperationInProgress(repoPath: string): Promise<boolean> {
     ])
   ).split('\n');
   return paths.some((path) => existsSync(resolve(repoPath, path)));
-}
-
-// The range commit that added the lines, or the reviewed commit when the range left them as they
-// were; null when the lines came from more than one commit of the range.
-async function findBlamedCommit(
-  repoPath: string,
-  range: ReviewedRange,
-  path: string,
-  edited: EditedFile,
-): Promise<string | null> {
-  const [inRange, blame] = await Promise.all([
-    gitText(repoPath, ['rev-list', `${range.base}..${range.target}`]),
-    gitText(repoPath, [
-      'blame',
-      '--porcelain',
-      '--no-ignore-revs-file',
-      '-L',
-      `${edited.startLine},${edited.endLine}`,
-      `${range.base}..${range.target}`,
-      '--',
-      path,
-    ]),
-  ]);
-  const commits = new Set(inRange.split('\n'));
-  const authors = new Set(
-    blame
-      .split('\n')
-      .map((line) => /^([0-9a-f]{40,64}) \d+ \d+/.exec(line)?.[1])
-      .filter((sha): sha is string => sha !== undefined && commits.has(sha)),
-  );
-  if (authors.size > 1) return null;
-  return [...authors][0] ?? range.target;
 }
 
 async function withScratchDir<T>(work: (dir: string) => Promise<T>): Promise<T> {
@@ -524,8 +493,13 @@ export async function commitDirectEdit(
   const edited = applyEdit(reviewed, edit);
   if (!edited) return { ok: false, reason: 'stale-view' };
 
-  const blamed = await findBlamedCommit(repoPath, range, edit.filePath, edited);
-  if (!blamed) return { ok: false, reason: 'mixed-commits' };
+  const blamed = await chooseFixupTarget(repoPath, {
+    view: range,
+    filePath: edit.filePath,
+    startLine: edited.startLine,
+    endLine: edited.endLine,
+    side: 'new',
+  });
 
   // A commit that lands meanwhile makes the update fail; the edit is then merged onto it afresh,
   // so the fixup never carries that commit's changes backwards.

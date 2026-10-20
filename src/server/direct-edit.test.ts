@@ -710,9 +710,8 @@ describe('commitDirectEdit', () => {
       expect(git(repo, 'show', 'HEAD:f.ts')).toBe('x\ny');
     });
 
-    it('refuses lines that came from different commits in the range', async () => {
+    it('aims at the latest commit when the edited lines came from different commits', async () => {
       const { repo, base, two } = rangeRepo();
-      const head = git(repo, 'rev-parse', 'HEAD');
 
       const result = await commitDirectEdit(
         repo,
@@ -720,8 +719,7 @@ describe('commitDirectEdit', () => {
         edit({ startLine: 2, endLine: 4, original: ['// x', 'y', '// y'], replacement: ['y'] }),
       );
 
-      expect(result).toEqual({ ok: false, reason: 'mixed-commits' });
-      expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
+      expect(result).toMatchObject({ ok: true, fixupTarget: two });
     });
 
     it('looks only at the lines the edit changed when choosing the commit', async () => {
