@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -350,6 +350,49 @@ describe('CommentThreadCard', () => {
       expect(copy).not.toHaveClass('[@media(hover:hover)]:opacity-0');
       expect(edit).toHaveClass(...hideUntilHover);
       expect(remove).toHaveClass(...hideUntilHover);
+    });
+  });
+
+  describe('deleting the whole comment', () => {
+    const renderCard = (thread: CommentThread, decisions: ReviewDecision[] = []) => {
+      const recordDecision = vi.fn();
+      render(
+        <FixupOverlayProvider value={{ ...EMPTY_FIXUP_OVERLAY, decisions, recordDecision }}>
+          <CommentThreadCard
+            thread={thread}
+            onResolveThread={vi.fn()}
+            onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+            onRemoveMessage={vi.fn()}
+            onUpdateMessage={vi.fn()}
+          />
+        </FixupOverlayProvider>,
+      );
+      return recordDecision;
+    };
+
+    it('deletes a comment the reviewer wrote, replies and all, after asking', async () => {
+      const user = userEvent.setup();
+      const recordDecision = renderCard(mockThread);
+
+      await user.click(screen.getByTitle('Delete comment'));
+      expect(recordDecision).not.toHaveBeenCalled();
+      await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+      expect(recordDecision).toHaveBeenCalledWith('thread-1', 'deleted', '');
+    });
+
+    it('offers no delete on a comment the agent opened or one already folded', () => {
+      renderCard({
+        ...mockThread,
+        messages: [{ ...mockThread.messages[0]!, author: 'Agent' }],
+      });
+      expect(screen.queryByTitle('Delete comment')).not.toBeInTheDocument();
+      cleanup();
+
+      renderCard(mockThread, [
+        { threadId: 'thread-1', kind: 'folded', fixupSha: 'aaaa', at: '2026-01-01T00:00:00Z' },
+      ]);
+      expect(screen.queryByTitle('Delete comment')).not.toBeInTheDocument();
     });
   });
 

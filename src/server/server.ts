@@ -32,6 +32,7 @@ import {
   isAgentResponding,
   isAnswerableByEdit,
   isOpenedByEdit,
+  isThreadDeleted,
   isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
@@ -1148,7 +1149,11 @@ export async function startServer(options: ServerOptions): Promise<{
       const importId = createHash('sha256')
         .update(serializeCommentImports(commentImports))
         .digest('hex');
-      const merged = mergeCommentImports(session.threads, commentImports);
+      const merged = mergeCommentImports(
+        session.threads,
+        commentImports,
+        (thread) => !isThreadDeleted(thread.id, session.decisions),
+      );
       const changed = updateCommentSession(selection, merged.threads);
 
       res.json({
@@ -1482,7 +1487,9 @@ export async function startServer(options: ServerOptions): Promise<{
   async function renderCommentsOutput(selection: DiffSelection): Promise<string> {
     const session = getOrCreateCommentSession(selection);
     const threads = session.threads.filter(
-      (thread) => !isThreadResolved(thread.id, session.decisions),
+      (thread) =>
+        !isThreadResolved(thread.id, session.decisions) &&
+        !isThreadDeleted(thread.id, session.decisions),
     );
     if (threads.length === 0) return '';
     const reviewStates = await threadReviewStatesFor(selection);

@@ -615,6 +615,50 @@ describe('App Component - Clear Comments Functionality', () => {
       });
     });
 
+    it('still sends a deleted thread to the server', async () => {
+      const kept = createMockThread({ id: 'kept', filePath: 'test.ts', line: 10, body: 'Kept' });
+      const gone = createMockThread({ id: 'gone', filePath: 'test.ts', line: 20, body: 'Gone' });
+      mockComments = [kept, gone];
+      mockDecisions = [
+        { threadId: 'gone', kind: 'deleted', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+      ];
+
+      vi.mocked(global.fetch).mockImplementation((input) => {
+        const url = String(input);
+        if (url.startsWith('/api/comments-json')) {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ threads: [], decisions: [] }),
+          } as Response);
+        }
+        if (url.startsWith('/api/comments')) {
+          return Promise.resolve({ ok: true, json: async () => ({ success: true }) } as Response);
+        }
+        if (url === '/api/revisions') {
+          return Promise.resolve({ ok: true, json: async () => null } as Response);
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => mockDiffResponse,
+          blob: async () => ({ size: 1024 }),
+        } as Response);
+      });
+
+      renderApp();
+
+      expect(await screen.findByText('Copy All Prompt (1)')).toBeInTheDocument();
+      await waitFor(() => {
+        const posts = vi
+          .mocked(global.fetch)
+          .mock.calls.filter(([url]) => String(url).startsWith('/api/comments?'));
+        const [, request] = posts[0] as [string, RequestInit];
+        expect(JSON.parse(String(request.body)).threads.map((t: { id: string }) => t.id)).toEqual([
+          'kept',
+          'gone',
+        ]);
+      });
+    });
+
     it('preserves server-provided comments after clearing local comments on startup', async () => {
       mockComments = [
         createMockThread({

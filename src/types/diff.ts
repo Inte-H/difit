@@ -276,14 +276,16 @@ export type ReviewDecisionKind =
   | 'resolved'
   | 'unresolved'
   // The server passed the thread to the agent through comment wait or a session message.
-  | 'handed';
+  | 'handed'
+  // The reviewer deleted the thread; it stays stored but hidden.
+  | 'deleted';
 
 // Threads carry no resolved state; a thread's screen state is derived from these
 // records plus the fixup commits found by trailer.
 export interface ReviewDecision {
   threadId: string;
   kind: ReviewDecisionKind;
-  // Empty for a resolution, a reopening or a handover, which judge no fixup.
+  // Empty for a resolution, a reopening, a handover or a deletion, which judge no fixup.
   fixupSha: string;
   // Identifies the fixup's changes across rebases that rewrite fixupSha.
   patchId?: string;
@@ -300,7 +302,8 @@ export type ThreadReviewState =
   | 'folded'
   | 'rejected'
   // A thread the reviewer opened by editing, whose edit was then rejected; nobody fixes it again.
-  | 'withdrawn';
+  | 'withdrawn'
+  | 'deleted';
 
 // A commit carrying a `Review-Thread: <threadId>` trailer is the agent's answer to that thread.
 export const REVIEW_THREAD_TRAILER = 'Review-Thread';
@@ -317,9 +320,9 @@ export const AGENT_AUTHOR = 'Agent';
 export interface ThreadAwaitingAgent {
   threadId: string;
   // Absent on reviews without fixup states, where any reviewer word left unanswered counts.
-  state?: Extract<ThreadReviewState, 'awaiting-fix' | 'rejected' | 'withdrawn'>;
+  state?: Extract<ThreadReviewState, 'awaiting-fix' | 'rejected' | 'withdrawn' | 'deleted'>;
   label?: string;
-  // The rejected fixup still in the range, to drop before fixing again.
+  // A fixup still in the range that has to be dropped: rejected, or answering a deleted thread.
   rejectedFixupSha?: string;
   filePath: string;
   position: DiffCommentPosition;

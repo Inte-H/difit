@@ -981,6 +981,86 @@ describe('Server Integration Tests', () => {
       expect(await (await fetch(`http://localhost:${port}/api/comments-output`)).text()).toBe('');
     });
 
+    it('GET /api/comments-output leaves out deleted threads', async () => {
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          comments: [
+            { id: 'kept', file: 'test.js', line: 10, body: 'Still open' },
+            { id: 'gone', file: 'test.js', line: 20, body: 'Made by mistake' },
+          ],
+        }),
+      });
+      await fetch(`http://localhost:${port}/api/decisions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify([
+          { threadId: 'gone', kind: 'deleted', fixupSha: '', at: '2026-01-01' },
+        ]),
+      });
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+
+      expect(output).toContain('Still open');
+      expect(output).not.toContain('Made by mistake');
+      expect(output).toContain('Total comments: 1');
+    });
+
+    it('POST /api/comment-imports neither answers nor brings back a deleted thread', async () => {
+      const at = (minute: number) => `2026-01-01T00:0${minute}:00Z`;
+      const thread = (id: string, minute: number) => ({
+        id,
+        filePath: 'test.js',
+        createdAt: at(minute),
+        updatedAt: at(minute),
+        position: { side: 'new', line: 3 },
+        messages: [{ id, body: id, author: 'User', createdAt: at(minute), updatedAt: at(minute) }],
+      });
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threads: [thread('live', 0), thread('gone', 1)],
+          decisions: [{ threadId: 'gone', kind: 'deleted', fixupSha: '', at: at(2) }],
+        }),
+      });
+
+      await fetch(`http://localhost:${port}/api/comment-imports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'reply',
+          filePath: 'test.js',
+          position: { side: 'new', line: 3 },
+          body: 'Answer',
+          author: 'Agent',
+        }),
+      });
+
+      const { threads } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json`)
+      ).json()) as { threads: Array<{ id: string; messages: unknown[] }> };
+      expect(threads.map((t) => [t.id, t.messages.length])).toEqual([
+        ['live', 2],
+        ['gone', 1],
+      ]);
+
+      await fetch(`http://localhost:${port}/api/comment-imports`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'thread',
+          filePath: 'test.js',
+          position: { side: 'new', line: 3 },
+          body: 'gone',
+          author: 'User',
+        }),
+      });
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      expect(output).toContain('Total comments: 1');
+    });
+
     it('POST /api/decisions rejects a body that is not a list of decisions', async () => {
       const post = (body: unknown) =>
         fetch(`http://localhost:${port}/api/decisions`, {
@@ -2993,6 +3073,67 @@ describe('Server Integration Tests', () => {
       const content = JSON.parse(received[0]!.trim().split('\n').at(-1)!).message.content as string;
       expect(content.split('\n')[0]).toContain('c1 [다시 수정 중], e1 [되돌림]');
       expect(content).toContain(`"rejectedFixupSha":"${FIXUP}"`);
+    });
+
+    it('asks the agent to drop the fixup of a deleted thread until it leaves the range', async () => {
+      const { port } = await startPinned();
+      const parser = parserInstances.at(-1)!;
+      const fixup = {
+        sha: FIXUP,
+        shortSha: 'bbbbbbb',
+        patchId: 'p1',
+        subject: 'fixup! x',
+        threadIds: ['c1'],
+        files: [],
+      };
+      parser.listThreadFixups.mockResolvedValue([fixup]);
+      const deletion = {
+        threadId: 'c1',
+        kind: 'deleted',
+        fixupSha: '',
+        at: '2026-01-02T00:00:00Z',
+      };
+      await postFromPage(port, { threads: [reviewerThread('c1')], decisions: [deletion] });
+
+      const parse = (text: string) => JSON.parse(text.split('data: ')[1]!.split('\n')[0]!);
+      const expected = [
+        { threadId: 'c1', state: 'deleted', label: '지움', rejectedFixupSha: FIXUP },
+      ];
+      expect(parse(await readWait(port))).toMatchObject(expected);
+      expect(parse(await readWait(port))).toMatchObject(expected);
+
+      parser.listThreadFixups.mockResolvedValue([]);
+      const controller = new AbortController();
+      const waited = readWait(port, controller.signal).catch(() => 'aborted');
+      await settle();
+      controller.abort();
+      expect(await waited).toBe('aborted');
+    });
+
+    it('tells the agent once to stop work on a thread deleted while it was handed over', async () => {
+      const { port } = await startPinned();
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+      await readWait(port);
+      const { decisions } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as { decisions: unknown[] };
+      await postFromPage(port, {
+        threads: [reviewerThread('c1')],
+        decisions: [
+          ...decisions,
+          { threadId: 'c1', kind: 'deleted', fixupSha: '', at: new Date().toISOString() },
+        ],
+      });
+
+      const notice = await readWait(port);
+      expect(notice).toContain('"state":"deleted"');
+      expect(notice).not.toContain('rejectedFixupSha');
+
+      const controller = new AbortController();
+      const waited = readWait(port, controller.signal).catch(() => 'aborted');
+      await settle();
+      controller.abort();
+      expect(await waited).toBe('aborted');
     });
 
     it('keeps the review going when the session socket is gone', async () => {

@@ -16,6 +16,7 @@ const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
   'resolved',
   'unresolved',
   'handed',
+  'deleted',
 ];
 
 const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
@@ -26,6 +27,7 @@ const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
   folded: '접힘',
   rejected: '다시 수정 중',
   withdrawn: '되돌림',
+  deleted: '지움',
 };
 
 export function reviewStateLabel(state: ThreadReviewState): string {
@@ -115,6 +117,12 @@ export function isThreadResolved(threadId: string, decisions: ReviewDecision[]):
 
 type ThreadMessages = { messages?: ReadonlyArray<{ author?: string }> };
 
+export function isThreadDeleted(threadId: string, decisions: ReviewDecision[]): boolean {
+  return decisions.some(
+    (decision) => decision.threadId === threadId && decision.kind === 'deleted',
+  );
+}
+
 export function isOpenedByEdit(thread: ThreadMessages): boolean {
   return thread.messages?.[0]?.author === REVIEWER_EDIT_AUTHOR;
 }
@@ -130,6 +138,7 @@ export function deriveThreadReviewState(
 ): ThreadReviewState {
   const own = decisions.filter((decision) => decision.threadId === threadId);
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
+  if (own.some((decision) => decision.kind === 'deleted')) return 'deleted';
 
   const isRejected = rejectionCheckFor(threadId, decisions);
   const unrejected = fixups.filter((fixup) => !isRejected(fixup));
@@ -207,6 +216,37 @@ function rejectionAwaitingAgent(
   return leftInRange;
 }
 
+// When the agent's current turn on the thread began: its last message, latest rejection or deletion.
+function turnStartOf(thread: ThreadTurn, decisions: ReviewDecision[]): number {
+  const own = decisions.filter((decision) => decision.threadId === thread.id);
+  const restart = latestOf(own, ['rejected', 'deleted']);
+  return Math.max(
+    Date.parse(thread.messages.at(-1)?.createdAt ?? '') || 0,
+    restart ? decidedAt(restart) : 0,
+  );
+}
+
+// A deleted thread is the agent's turn while its fixup is still in the range, or once, to stop work
+// it was handed and had not answered.
+function deletionTurnOn(
+  thread: ThreadTurn,
+  fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
+  decisions: ReviewDecision[],
+  deletion: ReviewDecision,
+): Pick<ThreadAwaitingAgent, 'state' | 'label' | 'rejectedFixupSha'> | null {
+  const turn = { state: 'deleted' as const, label: reviewStateLabel('deleted') };
+  const leftInRange = fixupsByThread?.get(thread.id)?.[0]?.sha;
+  if (leftInRange !== undefined) return { ...turn, rejectedFixupSha: leftInRange };
+  const own = decisions.filter((decision) => decision.threadId === thread.id);
+  const handover = latestOf(own, ['handed']);
+  if (!handover || decidedAt(handover) >= decidedAt(deletion)) return null;
+  const turnBefore = turnStartOf(
+    thread,
+    own.filter((decision) => decision.kind !== 'deleted'),
+  );
+  return decidedAt(handover) >= turnBefore ? turn : null;
+}
+
 // Null when the next move on the thread is not the agent's. Without fixups (a review with no pinned
 // commit) it is the agent's whenever the reviewer spoke last.
 function agentTurnOn(
@@ -214,6 +254,11 @@ function agentTurnOn(
   fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
   decisions: ReviewDecision[],
 ): Pick<ThreadAwaitingAgent, 'state' | 'label' | 'rejectedFixupSha'> | null {
+  const deletion = latestOf(
+    decisions.filter((decision) => decision.threadId === thread.id),
+    ['deleted'],
+  );
+  if (deletion) return deletionTurnOn(thread, fixupsByThread, decisions, deletion);
   if (isThreadResolved(thread.id, decisions)) return null;
   const reviewerSpokeLast = thread.messages.at(-1)?.author === REVIEWER_AUTHOR;
   if (!fixupsByThread) return reviewerSpokeLast ? {} : null;
@@ -275,10 +320,5 @@ export function isAgentResponding(
   const handover = latestOf(own, ['handed']);
   if (!handover) return false;
   if (!agentTurnOn(thread, fixupsByThread, decisions)) return false;
-  const rejection = latestOf(own, ['rejected']);
-  const turnStart = Math.max(
-    Date.parse(thread.messages.at(-1)?.createdAt ?? '') || 0,
-    rejection ? decidedAt(rejection) : 0,
-  );
-  return decidedAt(handover) >= turnStart;
+  return decidedAt(handover) >= turnStartOf(thread, own);
 }

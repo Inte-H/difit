@@ -11,6 +11,7 @@ import {
 import {
   deriveThreadReviewState,
   isAgentResponding,
+  isThreadDeleted,
   isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
@@ -554,5 +555,66 @@ describe('isAgentResponding', () => {
     expect(
       isAgentResponding(asked, new Map(), [decision('handed', '', '2026-01-01T00:01:00Z', 't2')]),
     ).toBe(false);
+  });
+});
+
+describe('deleted threads', () => {
+  const thread = (...messages: Array<[string, string]>) => ({
+    id: 't1',
+    filePath: 'a.ts',
+    position: { side: 'new' as const, line: 1 },
+    messages: messages.map(([author, createdAt], index) => ({
+      id: `m${index}`,
+      body: 'x',
+      author,
+      createdAt,
+      updatedAt: createdAt,
+    })),
+  });
+  const asked = thread(['User', '2026-01-01T00:00:00Z']);
+  const deleted = (at = '2026-01-01T00:05:00Z') => decision('deleted', '', at);
+  const handed = (at: string) => decision('handed', '', at);
+  const turns = (
+    byThread: Map<string, ThreadFixup[]> | undefined,
+    decisions: ReviewDecision[],
+    target = asked,
+  ) => selectThreadsAwaitingAgent([target], byThread, decisions);
+
+  it('takes a deleted thread out of every state and list', () => {
+    expect(isThreadDeleted('t1', [deleted()])).toBe(true);
+    expect(isThreadDeleted('t1', [decision('deleted', '', undefined, 't2')])).toBe(false);
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], [deleted()], asked)).toBe('deleted');
+    expect(reviewStateLabel('deleted')).toBe('지움');
+    expect(selectOpenThreads([asked], new Map(), [deleted()])).toEqual([]);
+  });
+
+  it('asks the agent to drop a fixup the deleted thread left in the range', () => {
+    const byThread = new Map([['t1', [fixup('aaaa')]]]);
+    for (const extra of [[], [decision('approved', 'aaaa')], [handed('2026-01-01T00:09:00Z')]]) {
+      expect(turns(byThread, [...extra, deleted()])).toMatchObject([
+        { threadId: 't1', state: 'deleted', label: '지움', rejectedFixupSha: 'aaaa' },
+      ]);
+    }
+    expect(turns(new Map(), [deleted()])).toEqual([]);
+    expect(isAgentResponding(asked, byThread, [deleted()])).toBe(false);
+    expect(isAgentResponding(asked, byThread, [deleted(), handed('2026-01-01T00:06:00Z')])).toBe(
+      true,
+    );
+  });
+
+  it('tells an agent still working on the thread to stop, once', () => {
+    const working = [handed('2026-01-01T00:01:00Z'), deleted()];
+    expect(turns(new Map(), working)).toMatchObject([{ state: 'deleted' }]);
+    expect(turns(undefined, working)).toMatchObject([{ state: 'deleted' }]);
+    expect(isAgentResponding(asked, new Map(), working)).toBe(false);
+
+    const told = [...working, handed('2026-01-01T00:06:00Z')];
+    expect(turns(new Map(), told)).toEqual([]);
+  });
+
+  it('leaves the agent alone when it had already answered or never got the thread', () => {
+    const replied = thread(['User', '2026-01-01T00:00:00Z'], ['Agent', '2026-01-01T00:02:00Z']);
+    expect(turns(new Map(), [handed('2026-01-01T00:01:00Z'), deleted()], replied)).toEqual([]);
+    expect(turns(new Map(), [deleted()])).toEqual([]);
   });
 });

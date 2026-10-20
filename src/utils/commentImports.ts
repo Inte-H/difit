@@ -550,6 +550,7 @@ export function serializeCommentImports(commentImports: CommentImport[]): string
 export function mergeCommentImports(
   existingThreads: DiffCommentThread[],
   commentImports: CommentImport[],
+  takesReplies: (thread: DiffCommentThread) => boolean = () => true,
 ): MergeCommentImportsResult {
   // Clone (don't shallow-copy) so appending a reply doesn't mutate the caller's
   // thread objects in place — otherwise the server can't detect the change and
@@ -574,7 +575,8 @@ export function mergeCommentImports(
       .filter(
         (thread) =>
           thread.filePath === commentImport.filePath &&
-          positionsMatch(thread.position, commentImport.position),
+          positionsMatch(thread.position, commentImport.position) &&
+          takesReplies(thread),
       )
       .sort(sortByNewestThread);
 
