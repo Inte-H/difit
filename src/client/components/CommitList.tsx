@@ -104,7 +104,7 @@ export function CommitList({ review, shown, onSelect }: CommitListProps) {
               aria-current={shown.kind === 'all' ? true : undefined}
               className={`${ITEM_CLASS} ${shown.kind === 'all' ? CURRENT_CLASS : 'text-github-text-secondary'}`}
             >
-              <span className="w-8 shrink-0" />
+              <span className="w-[32px] shrink-0" />
               전체
             </button>
           </li>

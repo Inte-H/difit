@@ -19,7 +19,7 @@ function strokeOf(stroke: CommitGraphStroke) {
 export function CommitGraph({ cell }: { cell: CommitGraphCell }) {
   const x = LANE_X[0];
   return (
-    <span className="relative shrink-0 self-stretch -my-1.5 w-8" aria-hidden="true">
+    <span className="relative shrink-0 self-stretch -my-1.5 w-[32px]" aria-hidden="true">
       <svg className="absolute inset-0 h-full w-full overflow-visible">
         {cell.above && <line x1={x} y1="0" x2={x} y2="50%" {...strokeOf(cell.above)} />}
         {cell.below && <line x1={x} y1="50%" x2={x} y2="100%" {...strokeOf(cell.below)} />}
