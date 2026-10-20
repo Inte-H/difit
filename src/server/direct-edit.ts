@@ -14,7 +14,7 @@ import { type GitOptions, runGit } from './run-git.js';
 
 export interface DirectEdit {
   filePath: string;
-  // 1-based, inclusive, counted in the reviewed commit's version of the file.
+  // 1-based, inclusive, counted in the version of the file at the edited view's last commit.
   startLine: number;
   endLine: number;
   // The lines as the reviewer saw them; a mismatch means the view is out of date.
@@ -26,6 +26,12 @@ export interface DirectEdit {
 export interface ReviewedRange {
   base: string;
   target: string;
+}
+
+// The part of the review the reviewer edited in; the fixup folds into one of its commits.
+export interface EditedView extends ReviewedRange {
+  // Oldest first, full SHAs; every commit in the range when left out.
+  commits?: readonly string[];
 }
 
 export type DirectEditResult =
@@ -260,12 +266,13 @@ function autosquashGroups(commits: TodoCommit[]): TodoCommit[][] {
 async function findFoldTarget(
   repoPath: string,
   range: ReviewedRange,
+  view: EditedView,
   blamed: string,
   head: string,
   path: string,
   fixup: Change,
 ): Promise<string | null> {
-  const [listing, touching, reviewed] = await Promise.all([
+  const [listing, touching, viewed] = await Promise.all([
     gitText(repoPath, [
       'log',
       '--reverse',
@@ -276,7 +283,10 @@ async function findFoldTarget(
       `${range.base}..${head}`,
     ]),
     gitText(repoPath, ['rev-list', `${range.base}..${head}`, '--', literal(path)]),
-    gitText(repoPath, ['rev-list', `${range.base}..${range.target}`]),
+    view.commits ??
+      gitText(repoPath, ['rev-list', `${view.base}..${view.target}`]).then((shas) =>
+        shas.split('\n'),
+      ),
   ]);
   const commits = listing
     .split('\n')
@@ -286,7 +296,7 @@ async function findFoldTarget(
       return { sha, subject };
     });
   const touched = new Set(touching.split('\n'));
-  const inReview = new Set(reviewed.split('\n'));
+  const inView = new Set(viewed);
   const changes = new Map<string, Change>();
   await Promise.all(
     commits
@@ -309,7 +319,7 @@ async function findFoldTarget(
       .filter(
         (commit, index) =>
           commit.sha === blamed ||
-          (index > blamedAt && inReview.has(commit.sha) && touched.has(commit.sha)),
+          (index > blamedAt && inView.has(commit.sha) && touched.has(commit.sha)),
       )
       .map((commit) => commit.sha),
   );
@@ -390,6 +400,7 @@ async function writeFixupCommit(
 async function prepareFixup(
   repoPath: string,
   range: ReviewedRange,
+  view: EditedView,
   edit: DirectEdit,
   reviewed: Buffer,
   edited: EditedFile,
@@ -417,7 +428,7 @@ async function prepareFixup(
   if (!clean) return { ok: false, reason: 'conflict' };
   if (merged.equals(atHead)) return { ok: false, reason: 'no-change' };
 
-  const fixupTarget = await findFoldTarget(repoPath, range, blamed, head, edit.filePath, {
+  const fixupTarget = await findFoldTarget(repoPath, range, view, blamed, head, edit.filePath, {
     before: atHead,
     after: merged,
   });
@@ -479,12 +490,17 @@ export async function commitDirectEdit(
   repoPath: string,
   requested: ReviewedRange,
   edit: DirectEdit,
+  requestedView: EditedView = requested,
 ): Promise<DirectEditResult> {
-  const range = {
-    base: await gitText(repoPath, ['rev-parse', '--verify', `${requested.base}^{commit}`]),
-    target: await gitText(repoPath, ['rev-parse', '--verify', `${requested.target}^{commit}`]),
+  const resolve = (commitish: string) =>
+    gitText(repoPath, ['rev-parse', '--verify', `${commitish}^{commit}`]);
+  const range = { base: await resolve(requested.base), target: await resolve(requested.target) };
+  const view: EditedView = {
+    ...requestedView,
+    base: await resolve(requestedView.base),
+    target: await resolve(requestedView.target),
   };
-  const reviewedEntry = await readTreeEntry(repoPath, range.target, edit.filePath);
+  const reviewedEntry = await readTreeEntry(repoPath, view.target, edit.filePath);
   if (!reviewedEntry) return { ok: false, reason: 'stale-view' };
   if (!REGULAR_FILE_MODES.has(reviewedEntry.mode)) return { ok: false, reason: 'not-a-file' };
   const reviewed = await git(repoPath, ['cat-file', 'blob', reviewedEntry.oid]);
@@ -494,18 +510,19 @@ export async function commitDirectEdit(
   if (!edited) return { ok: false, reason: 'stale-view' };
 
   const blamed = await chooseFixupTarget(repoPath, {
-    view: range,
+    view,
     filePath: edit.filePath,
     startLine: edited.startLine,
     endLine: edited.endLine,
     side: 'new',
+    ...(view.commits ? { commits: view.commits } : {}),
   });
 
   // A commit that lands meanwhile makes the update fail; the edit is then merged onto it afresh,
   // so the fixup never carries that commit's changes backwards.
   let output: string | undefined;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-    const prepared = await prepareFixup(repoPath, range, edit, reviewed, edited, blamed);
+    const prepared = await prepareFixup(repoPath, range, view, edit, reviewed, edited, blamed);
     if (!prepared.ok) return prepared;
     const { fixup } = prepared;
     const moved = await runGit(repoPath, [

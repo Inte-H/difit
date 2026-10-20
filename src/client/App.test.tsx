@@ -1658,7 +1658,7 @@ describe('App Component - Direct edit', () => {
     at: '2026-01-01T00:00:00Z',
   };
 
-  function serve(editResponse: { status: number; body: unknown }) {
+  function serve(editResponse: { status: number; body: unknown }, shown = editableReview) {
     vi.mocked(global.fetch).mockImplementation((input) => {
       const url = String(input);
       if (url.startsWith('/api/direct-edit')) {
@@ -1685,7 +1685,7 @@ describe('App Component - Direct edit', () => {
       }
       return Promise.resolve({
         ok: true,
-        json: async () => editableReview,
+        json: async () => shown,
         blob: async () => ({ size: 1024 }),
       } as Response);
     });
@@ -1749,6 +1749,42 @@ describe('App Component - Direct edit', () => {
     expect(mockReplaceThreads).toHaveBeenCalledWith([editedThread]);
     await waitFor(() => expect(callsTo('/api/fixups').length).toBeGreaterThan(1));
     expect(screen.queryByLabelText('고칠 코드')).not.toBeInTheDocument();
+  });
+
+  it('edits the lines of the one commit shown and says which commit to the server', async () => {
+    const full = (short: string) => short.padEnd(40, '0');
+    serve(
+      { status: 200, body: { success: true, threads: [], decisions: [] } },
+      {
+        ...editableReview,
+        baseCommitish: 'def4567',
+        targetCommitish: '1111111',
+        requestedBaseCommitish: full('def4567'),
+        requestedTargetCommitish: full('1111111'),
+        review: {
+          selection: { baseCommitish: 'def4567', targetCommitish: 'abc1234' },
+          requested: { baseCommitish: full('def4567'), targetCommitish: full('abc1234') },
+          commits: [
+            { sha: full('1111111'), shortSha: '1111111', parentSha: full('def4567'), subject: 'a' },
+            { sha: full('abc1234'), shortSha: 'abc1234', parentSha: full('1111111'), subject: 'b' },
+          ],
+        },
+      },
+    );
+
+    await editLineTwo('');
+
+    await waitFor(() => expect(callsTo('/api/direct-edit')).toHaveLength(1));
+    expect(callsTo('/api/blob/').map(([url]) => String(url))).toContain(
+      '/api/blob/test.ts?ref=1111111',
+    );
+    const [url, init] = callsTo('/api/direct-edit')[0]!;
+    expect(String(url)).toBe('/api/direct-edit?base=def4567&target=abc1234');
+    expect(JSON.parse(String(init?.body))).toMatchObject({
+      startLine: 2,
+      original: ['// says what a is'],
+      view: { base: 'def4567', target: '1111111' },
+    });
   });
 
   it('keeps the edit open and says why when the server refuses it', async () => {

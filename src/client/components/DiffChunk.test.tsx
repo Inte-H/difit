@@ -544,7 +544,7 @@ describe('editing the reviewed code directly', () => {
     const value: FixupOverlayState = {
       ...EMPTY_FIXUP_OVERLAY,
       targetCommit: 'b7c2e10',
-      directEdit: { submit },
+      directEdit: { commit: 'b7c2e10', submit },
       ...overlay,
     };
     const blob = new TextEncoder().encode(
@@ -676,7 +676,7 @@ describe('editing the reviewed code directly', () => {
           value={{
             ...EMPTY_FIXUP_OVERLAY,
             targetCommit: 'b7c2e10',
-            directEdit: { submit: vi.fn() },
+            directEdit: { commit: 'b7c2e10', submit: vi.fn() },
           }}
         >
           <DiffChunk

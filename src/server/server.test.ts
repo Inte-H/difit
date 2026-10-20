@@ -2071,6 +2071,7 @@ describe('Server Integration Tests', () => {
           replacement: [],
           threadId: data.threadId,
         }),
+        { base: 'def4567', target: 'abc1234' },
       );
       const { threads, decisions } = (await (
         await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
@@ -2400,7 +2401,7 @@ describe('Server Integration Tests', () => {
       expect(body.directEditAvailable).toBe(true);
     });
 
-    it('keeps the same review while one of its commits is shown, without direct edits', async () => {
+    it('keeps the same review while one of its commits is shown, with direct edits', async () => {
       const port = await startReview();
       await view(port);
 
@@ -2412,7 +2413,75 @@ describe('Server Integration Tests', () => {
         baseCommitish: 'def4567',
         targetCommitish: 'abc1234',
       });
-      expect(body.directEditAvailable).toBe(false);
+      expect(body.directEditAvailable).toBe(true);
+    });
+
+    describe('with a direct edit made on one commit', () => {
+      const editOnSecond = (view: { base: string; target: string } | undefined) =>
+        fetch(`http://localhost:${port}/api/direct-edit${REVIEW}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filePath: 'test.js',
+            startLine: 3,
+            endLine: 3,
+            original: ['// one'],
+            replacement: [],
+            view,
+          }),
+        });
+      let port: number;
+
+      beforeEach(async () => {
+        commitDirectEdit.mockReset();
+        commitDirectEdit.mockResolvedValue({
+          ok: true,
+          sha: 'f'.repeat(40),
+          fixupTarget: full('abc1234'),
+        });
+        port = await startReview();
+        await view(port, SECOND);
+      });
+
+      it('fixes the lines of that commit and binds the thread to it', async () => {
+        const response = await editOnSecond({ base: full('1111111'), target: full('abc1234') });
+
+        expect(response.status).toBe(200);
+        expect(commitDirectEdit).toHaveBeenCalledWith(
+          expect.any(String),
+          { base: 'def4567', target: 'abc1234' },
+          expect.objectContaining({ startLine: 3, original: ['// one'] }),
+          { base: full('1111111'), target: full('abc1234'), commits: [full('abc1234')] },
+        );
+        const { threads } = (await (
+          await fetch(`http://localhost:${port}/api/comments-json${REVIEW}`)
+        ).json()) as any;
+        expect(threads).toHaveLength(1);
+        expect(threads[0]).toMatchObject({
+          view: { baseCommitish: full('1111111'), targetCommitish: full('abc1234') },
+          fixupTarget: full('abc1234'),
+          codeSnapshot: { content: '// one', commit: full('abc1234') },
+        });
+      });
+
+      it('leaves every commit of the range a candidate for an edit on the whole review', async () => {
+        const response = await editOnSecond(undefined);
+
+        expect(response.status).toBe(200);
+        expect(commitDirectEdit).toHaveBeenCalledWith(
+          expect.any(String),
+          { base: 'def4567', target: 'abc1234' },
+          expect.anything(),
+          { base: 'def4567', target: 'abc1234' },
+        );
+      });
+
+      it('rejects a view that is not part of the review', async () => {
+        const response = await editOnSecond({ base: full('9999999'), target: full('abc1234') });
+
+        expect(response.status).toBe(400);
+        expect(commitDirectEdit).not.toHaveBeenCalled();
+      });
     });
 
     describe('with a run of its commits shown', () => {
@@ -2432,7 +2501,7 @@ describe('Server Integration Tests', () => {
         reviewCommits.list = RUN_COMMITS;
       });
 
-      it('keeps the same review, without direct edits', async () => {
+      it('keeps the same review, with direct edits', async () => {
         const port = await startReview();
         await view(port);
 
@@ -2445,7 +2514,7 @@ describe('Server Integration Tests', () => {
           targetCommitish: 'abc1234',
         });
         expect(body.review.commits).toEqual(RUN_COMMITS);
-        expect(body.directEditAvailable).toBe(false);
+        expect(body.directEditAvailable).toBe(true);
       });
 
       it('files a comment sent for the run under the review', async () => {

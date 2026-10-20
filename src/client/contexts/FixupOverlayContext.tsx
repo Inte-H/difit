@@ -23,6 +23,8 @@ export interface DirectEditFailure {
 }
 
 export interface DirectEditControls {
+  // The commit whose version of the file the edited lines come from.
+  commit: string;
   // Resolves to null once the fixup commit is made.
   submit: (request: DirectEditRequest) => Promise<DirectEditFailure | null>;
 }
