@@ -218,6 +218,14 @@ describe('CommitList', () => {
       expect(onSelect).not.toHaveBeenCalled();
     });
 
+    it('draws the dots of the branch the same size as the others', () => {
+      renderList({ kind: 'all' }, WITH_MERGE);
+
+      const radii = [...list().querySelectorAll('circle')].map((dot) => dot.getAttribute('r'));
+      expect(new Set(radii).size).toBe(1);
+      expect(radii).toHaveLength(6);
+    });
+
     it('paints the branch together with its shown merge', () => {
       renderList({ kind: 'commit', sha: MERGE.sha }, WITH_MERGE);
 

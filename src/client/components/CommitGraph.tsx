@@ -38,7 +38,7 @@ export function CommitGraph({ cell }: { cell: CommitGraphCell }) {
             data-lit={cell.dot.lit ? '' : undefined}
             cx={LANE_X[cell.dot.lane]}
             cy="50%"
-            r={cell.dot.lane === 0 ? 5 : 3.5}
+            r={5}
             fill={cell.dot.lit ? LIT : 'var(--color-github-bg-secondary)'}
             stroke={cell.dot.lit ? LIT : DIM_DOT}
             strokeWidth={2}
