@@ -29,6 +29,7 @@ import { getFileExtension } from '../utils/fileUtils.js';
 import { isSymbolName } from '../utils/symbolName.js';
 import {
   deriveThreadReviewState,
+  isAgentResponding,
   isAnswerableByEdit,
   isOpenedByEdit,
   isThreadResolved,
@@ -1004,15 +1005,42 @@ export async function startServer(options: ServerOptions): Promise<{
     return byThread;
   }
 
-  async function threadsAwaitingAgentFor(selection: DiffSelection): Promise<ThreadAwaitingAgent[]> {
+  async function threadsAwaitingAgentFor(selection: DiffSelection): Promise<{
+    waiting: ThreadAwaitingAgent[];
+    fixupsByThread?: Map<string, ThreadFixup[]>;
+  }> {
     try {
       const fixupsByThread = await fixupsByThreadFor(selection);
       const session = getOrCreateCommentSession(selection);
-      return selectThreadsAwaitingAgent(session.threads, fixupsByThread, session.decisions);
+      return {
+        waiting: selectThreadsAwaitingAgent(session.threads, fixupsByThread, session.decisions),
+        ...(fixupsByThread ? { fixupsByThread } : {}),
+      };
     } catch (error) {
       console.error('Error listing fixups:', error);
-      return [];
+      return { waiting: [] };
     }
+  }
+
+  // A thread passed again within the same turn keeps its first handover.
+  function recordHandover(
+    selection: DiffSelection,
+    waiting: ThreadAwaitingAgent[],
+    fixupsByThread: Map<string, ThreadFixup[]> | undefined,
+  ) {
+    const session = getOrCreateCommentSession(selection);
+    const at = new Date().toISOString();
+    const handovers = waiting.flatMap(({ threadId }): ReviewDecision[] => {
+      const thread = session.threads.find((candidate) => candidate.id === threadId);
+      if (!thread || isAgentResponding(thread, fixupsByThread, session.decisions)) return [];
+      return [{ threadId, kind: 'handed', fixupSha: '', at }];
+    });
+    if (handovers.length === 0) return;
+    updateCommentSession(
+      selection,
+      session.threads,
+      mergeReviewDecisions(session.decisions, handovers),
+    );
   }
 
   interface CommentWait {
@@ -1065,7 +1093,9 @@ export async function startServer(options: ServerOptions): Promise<{
         fixupsByThread,
         after.decisions,
       ).filter((waiting) => !known.has(turnKey(after.threads, waiting)));
-      if (fresh.length > 0) await sendToClaudeSession(sessionMessageFor(port, fresh));
+      if (fresh.length > 0 && (await sendToClaudeSession(sessionMessageFor(port, fresh)))) {
+        recordHandover(selection, fresh, fixupsByThread);
+      }
     });
   }
 
@@ -1639,9 +1669,10 @@ export async function startServer(options: ServerOptions): Promise<{
     const ping = setInterval(() => res.write(': ping\n\n'), 30_000);
     const wait: CommentWait = {
       check: async () => {
-        const waiting = await threadsAwaitingAgentFor(selection);
-        if (waiting.length > 0) {
+        const { waiting, fixupsByThread } = await threadsAwaitingAgentFor(selection);
+        if (waiting.length > 0 && commentWaits.has(wait)) {
           await wait.finish(`event: threads\ndata: ${JSON.stringify(waiting)}\n\n`);
+          recordHandover(selection, waiting, fixupsByThread);
         }
       },
       finish: (event) => {

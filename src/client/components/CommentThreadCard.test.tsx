@@ -474,6 +474,7 @@ describe('CommentThreadCard', () => {
               state: 'awaiting-approval',
               fixupSha: 'abc1234',
               targetCommit: 'b7c2e10',
+              responding: false,
               onDecide: vi.fn(),
               onUndoApproval: vi.fn(),
               onOpenReviewAt: vi.fn(),
@@ -641,11 +642,34 @@ describe('CommentThreadCard', () => {
     state: 'awaiting-approval' as const,
     fixupSha: 'abc1234',
     targetCommit: 'b7c2e10',
+    responding: false,
     onDecide: vi.fn(),
     onUndoApproval: vi.fn(),
     onOpenReviewAt: vi.fn(),
     onShowView: vi.fn(),
   };
+
+  it('shows that the agent is responding in place of the state chip', () => {
+    const renderCard = (responding: boolean) =>
+      render(
+        <CommentThreadCard
+          thread={mockThread}
+          review={{ ...awaitingReview, state: 'awaiting-fix', fixupSha: null, responding }}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />,
+      );
+
+    const { unmount } = renderCard(true);
+    expect(screen.getByTestId('responding-chip')).toHaveTextContent('응답 중');
+    expect(screen.queryByTestId('review-state-chip')).not.toBeInTheDocument();
+    unmount();
+    renderCard(false);
+    expect(screen.getByTestId('review-state-chip')).toHaveTextContent('수정 중');
+    expect(screen.queryByTestId('responding-chip')).not.toBeInTheDocument();
+  });
 
   it('marks a stale review thread visibly while keeping its state chip and decision buttons', () => {
     render(

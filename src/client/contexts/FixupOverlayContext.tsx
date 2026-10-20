@@ -11,6 +11,7 @@ import type {
 } from '../../types/diff';
 import {
   deriveThreadReviewState,
+  isAgentResponding,
   isAnswerableByEdit,
   isOpenedByEdit,
   isThreadResolved,
@@ -76,6 +77,7 @@ export interface ThreadReviewControls {
   state: ThreadReviewState;
   fixupSha: string | null;
   targetCommit: string | null;
+  responding: boolean;
   onDecide: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
   onUndoApproval: (threadId: string) => void;
   onOpenReviewAt: (commit: string) => void;
@@ -105,6 +107,7 @@ export function threadReviewControls(
     state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, thread),
     fixupSha: pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
     targetCommit: overlay.targetCommit,
+    responding: isAgentResponding(thread, overlay.fixupsByThread, overlay.decisions),
     onDecide: overlay.recordDecision,
     onUndoApproval: overlay.undoApproval,
     onOpenReviewAt: overlay.openReviewAt,

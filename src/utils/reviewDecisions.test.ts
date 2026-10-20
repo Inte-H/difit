@@ -10,6 +10,7 @@ import {
 
 import {
   deriveThreadReviewState,
+  isAgentResponding,
   isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
@@ -498,5 +499,60 @@ describe('selectThreadsAwaitingAgent', () => {
       { threadId: 't1', state: 'withdrawn', label: '되돌림', rejectedFixupSha: 'aaaa' },
     ]);
     expect(ids([edited], new Map(), reverted)).toEqual([]);
+  });
+});
+
+describe('isAgentResponding', () => {
+  const thread = (...messages: Array<[string, string]>) => ({
+    id: 't1',
+    filePath: 'a.ts',
+    position: { side: 'new' as const, line: 1 },
+    messages: messages.map(([author, createdAt], index) => ({
+      id: `m${index}`,
+      body: 'x',
+      author,
+      createdAt,
+      updatedAt: createdAt,
+    })),
+  });
+  const asked = thread(['User', '2026-01-01T00:00:00Z']);
+  const handed = (at: string) => decision('handed', '', at);
+
+  it('holds from the handover until the agent answers', () => {
+    expect(isAgentResponding(asked, new Map(), [])).toBe(false);
+    expect(isAgentResponding(asked, new Map(), [handed('2026-01-01T00:01:00Z')])).toBe(true);
+    const replied = thread(['User', '2026-01-01T00:00:00Z'], ['Agent', '2026-01-01T00:02:00Z']);
+    expect(isAgentResponding(replied, new Map(), [handed('2026-01-01T00:01:00Z')])).toBe(false);
+    expect(
+      isAgentResponding(asked, new Map([['t1', [fixup('aaaa')]]]), [
+        handed('2026-01-01T00:01:00Z'),
+      ]),
+    ).toBe(false);
+  });
+
+  it('ignores a handover from an earlier turn', () => {
+    const askedAgain = thread(
+      ['User', '2026-01-01T00:00:00Z'],
+      ['Agent', '2026-01-01T00:02:00Z'],
+      ['User', '2026-01-01T00:03:00Z'],
+    );
+    expect(isAgentResponding(askedAgain, new Map(), [handed('2026-01-01T00:01:00Z')])).toBe(false);
+    expect(isAgentResponding(askedAgain, new Map(), [handed('2026-01-01T00:04:00Z')])).toBe(true);
+  });
+
+  it('starts a new turn at a rejection', () => {
+    const rejected = decision('rejected', 'aaaa', '2026-01-01T00:05:00Z');
+    expect(isAgentResponding(asked, new Map(), [handed('2026-01-01T00:01:00Z'), rejected])).toBe(
+      false,
+    );
+    expect(isAgentResponding(asked, new Map(), [rejected, handed('2026-01-01T00:06:00Z')])).toBe(
+      true,
+    );
+  });
+
+  it('ignores another thread’s handover', () => {
+    expect(
+      isAgentResponding(asked, new Map(), [decision('handed', '', '2026-01-01T00:01:00Z', 't2')]),
+    ).toBe(false);
   });
 });

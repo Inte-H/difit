@@ -3010,5 +3010,46 @@ describe('Server Integration Tests', () => {
       expect(await readWait(port)).toContain('"threadId":"c1"');
       errors.mockRestore();
     });
+
+    const handovers = async (port: number) => {
+      const { decisions } = (await (
+        await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+      ).json()) as { decisions: Array<{ threadId: string; kind: string; at: string }> };
+      return decisions.filter((decision) => decision.kind === 'handed');
+    };
+
+    it('records the handover once when the wait passes a thread to the agent', async () => {
+      const { port } = await startPinned();
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+
+      await readWait(port);
+      const first = await handovers(port);
+      await readWait(port);
+
+      expect(first).toEqual([expect.objectContaining({ threadId: 'c1', kind: 'handed' })]);
+      expect(await handovers(port)).toEqual(first);
+    });
+
+    it('records the handover when the session message reaches the agent', async () => {
+      await listenOnSocket();
+      const { port } = await startPinned();
+
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+      await settle();
+
+      expect(await handovers(port)).toEqual([expect.objectContaining({ threadId: 'c1' })]);
+    });
+
+    it('records no handover when the session message does not arrive', async () => {
+      process.env.CLAUDE_CODE_MESSAGING_SOCKET = join(tmpdir(), 'difit-no-such-session.sock');
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { port } = await startPinned();
+
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+      await settle();
+
+      expect(await handovers(port)).toEqual([]);
+      errors.mockRestore();
+    });
   });
 });

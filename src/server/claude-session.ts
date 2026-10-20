@@ -12,24 +12,27 @@ export function sessionMessageFor(port: number, threads: ThreadAwaitingAgent[]):
   ].join('\n');
 }
 
+// Resolves to whether the message reached the session's socket.
 export function sendToClaudeSession(
   content: string,
   env: NodeJS.ProcessEnv = process.env,
-): Promise<void> {
+): Promise<boolean> {
   const socketPath = env.CLAUDE_CODE_MESSAGING_SOCKET;
-  if (!socketPath) return Promise.resolve();
+  if (!socketPath) return Promise.resolve(false);
   return new Promise((resolve) => {
+    let failed = false;
     const connection = createConnection(socketPath, () => {
       const token = env.CLAUDE_CODE_MESSAGING_TOKEN;
       if (token) connection.write(`${JSON.stringify({ type: 'auth', token })}\n`);
       connection.end(`${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`);
     });
-    connection.on('close', () => resolve());
+    connection.on('close', () => resolve(!failed));
     connection.on('error', (error) => {
+      failed = true;
       console.error(
         `Could not send the review update to the Claude Code session: ${error.message}`,
       );
-      resolve();
+      resolve(false);
     });
   });
 }
