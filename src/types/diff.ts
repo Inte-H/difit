@@ -320,7 +320,10 @@ export const AGENT_AUTHOR = 'Agent';
 export interface ThreadAwaitingAgent {
   threadId: string;
   // Absent on reviews without fixup states, where any reviewer word left unanswered counts.
-  state?: Extract<ThreadReviewState, 'awaiting-fix' | 'rejected' | 'withdrawn' | 'deleted'>;
+  state?: Extract<
+    ThreadReviewState,
+    'awaiting-fix' | 'awaiting-approval' | 'rejected' | 'withdrawn' | 'deleted'
+  >;
   label?: string;
   // A fixup still in the range that has to be dropped: rejected, or answering a deleted thread.
   rejectedFixupSha?: string;
@@ -336,6 +339,8 @@ export interface ThreadFixup {
   // Same for two commits that make the same changes next to the same unchanged lines in the same
   // files, wherever the line numbers fall.
   patchId: string;
+  // The author date, which rebases keep; ISO 8601 format.
+  authoredAt: string;
   subject: string;
   threadIds: string[];
   files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks'>>;

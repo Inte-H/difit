@@ -11,6 +11,7 @@ describe('recordWithPatchId', () => {
       sha: 'a'.repeat(40),
       shortSha: 'aaaaaaa',
       patchId: 'change-1',
+      authoredAt: '2026-01-01T00:00:00Z',
       subject: 'fixup! x',
       threadIds: ['t1'],
       files: [],

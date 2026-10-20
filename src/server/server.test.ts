@@ -893,6 +893,7 @@ describe('Server Integration Tests', () => {
         sha,
         shortSha: sha.slice(0, 7),
         patchId: `patch-${sha}`,
+        authoredAt: '2026-01-01T00:00:00Z',
         subject: 'fixup! x',
         threadIds: [threadId],
         files: [],
@@ -2128,6 +2129,7 @@ describe('Server Integration Tests', () => {
       sha,
       shortSha: sha.slice(0, 7),
       patchId: `patch-${sha}`,
+      authoredAt: '2026-01-01T00:00:00Z',
       subject: 'fixup! Test commit',
       threadIds: [threadId],
       files: [],
@@ -3030,6 +3032,7 @@ describe('Server Integration Tests', () => {
           sha: FIXUP,
           shortSha: 'bbbbbbb',
           patchId: 'p1',
+          authoredAt: '2026-01-01T00:00:00Z',
           subject: 'fixup! x',
           threadIds: ['c1'],
           files: [],
@@ -3038,6 +3041,7 @@ describe('Server Integration Tests', () => {
           sha: 'e'.repeat(40),
           shortSha: 'eeeeeee',
           patchId: 'p2',
+          authoredAt: '2026-01-01T00:00:00Z',
           subject: 'fixup! x',
           threadIds: ['e1'],
           files: [],
@@ -3075,6 +3079,45 @@ describe('Server Integration Tests', () => {
       expect(content).toContain(`"rejectedFixupSha":"${FIXUP}"`);
     });
 
+    it('sends a reply the reviewer leaves on a fixup waiting for approval', async () => {
+      await listenOnSocket();
+      const { port } = await startPinned();
+      parserInstances.at(-1)!.listThreadFixups.mockResolvedValue([
+        {
+          sha: FIXUP,
+          shortSha: 'bbbbbbb',
+          patchId: 'p1',
+          authoredAt: '2026-01-02T00:00:00Z',
+          subject: 'fixup! x',
+          threadIds: ['c1'],
+          files: [],
+        },
+      ]);
+      const asked = reviewerThread('c1');
+      await postFromPage(port, { threads: [asked] });
+      await settle();
+      expect(received).toEqual([]);
+
+      const reply = {
+        id: 'r1',
+        body: 'is this enough?',
+        author: 'User',
+        createdAt: '2026-01-03T00:00:00Z',
+        updatedAt: '2026-01-03T00:00:00Z',
+      };
+      await postFromPage(port, { threads: [{ ...asked, messages: [...asked.messages, reply] }] });
+      await settle();
+
+      expect(received).toHaveLength(1);
+      const content = JSON.parse(received[0]!.trim().split('\n').at(-1)!).message.content as string;
+      expect(content.split('\n')[0]).toContain('c1 [승인 대기]');
+      expect(JSON.parse(content.split('\n')[1]!)).toMatchObject({
+        threadId: 'c1',
+        state: 'awaiting-approval',
+        message: 'is this enough?',
+      });
+    });
+
     it('asks the agent to drop the fixup of a deleted thread until it leaves the range', async () => {
       const { port } = await startPinned();
       const parser = parserInstances.at(-1)!;
@@ -3082,6 +3125,7 @@ describe('Server Integration Tests', () => {
         sha: FIXUP,
         shortSha: 'bbbbbbb',
         patchId: 'p1',
+        authoredAt: '2026-01-01T00:00:00Z',
         subject: 'fixup! x',
         threadIds: ['c1'],
         files: [],

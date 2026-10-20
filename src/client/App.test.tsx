@@ -2745,6 +2745,7 @@ describe('App Component - Commits of the review', () => {
         sha: 'f'.repeat(40),
         shortSha: 'fffffff',
         patchId: 'patch-1',
+        authoredAt: '2026-01-01T00:00:00Z',
         subject: 'fixup! first step',
         threadIds: ['c3'],
         files: [{ path: 'test.ts', status: 'modified', chunks: file.chunks }],

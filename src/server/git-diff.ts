@@ -48,11 +48,12 @@ function patchIdOf(sha: string, files: ThreadFixup['files']): string {
   return changedLines > 0 ? hash.digest('hex') : sha;
 }
 
-const FIXUP_LOG_FORMAT = `--format=%x00%H%x00%P%x00%s%x00%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)%x00`;
+const FIXUP_LOG_FORMAT = `--format=%x00%H%x00%P%x00%aI%x00%s%x00%(trailers:key=${REVIEW_THREAD_TRAILER},valueonly,separator=%x2C)%x00`;
 // Every line of a patch starts with a diff marker or keyword, so a NUL at the start of a line can
 // only open one of our headers, even when a file diffed as text holds NUL bytes. Lines are split on
 // \n alone: the `m` flag would also start a line after \r, U+2028 or U+2029 inside file content.
-const FIXUP_LOG_HEADER = /(?<=^|\n)\0([0-9a-f]+)\0([0-9a-f ]*)\0([^\0]*)\0([^\0]*)\0(?=\n|$)/g;
+const FIXUP_LOG_HEADER =
+  /(?<=^|\n)\0([0-9a-f]+)\0([0-9a-f ]*)\0([^\0]*)\0([^\0]*)\0([^\0]*)\0(?=\n|$)/g;
 
 type ClassifiableFile = Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks' | 'isGenerated'>;
 
@@ -61,6 +62,7 @@ interface FixupLogEntry {
   parents: string[];
   firstParent: string | undefined;
   isMerge: boolean;
+  authoredAt: string;
   subject: string;
   threadIds: string[];
   diff: string;
@@ -69,12 +71,13 @@ interface FixupLogEntry {
 function parseFixupLog(raw: string): FixupLogEntry[] {
   const headers = [...raw.matchAll(FIXUP_LOG_HEADER)];
   return headers.map((header, index) => {
-    const [, sha, parents, subject, trailerValues] = header;
+    const [, sha, parents, authoredAt, subject, trailerValues] = header;
     return {
       sha,
       parents: parents.split(' ').filter((parent) => parent.length > 0),
       firstParent: parents.split(' ')[0] || undefined,
       isMerge: parents.includes(' '),
+      authoredAt,
       subject,
       threadIds: trailerValues
         .split(',')
@@ -867,7 +870,7 @@ export class GitDiffParser {
     return entry ? this.toThreadFixup(entry) : null;
   }
 
-  private toThreadFixup({ sha, subject, threadIds, diff }: FixupLogEntry): ThreadFixup {
+  private toThreadFixup({ sha, authoredAt, subject, threadIds, diff }: FixupLogEntry): ThreadFixup {
     const files = this.parseUnifiedDiff(diff).map(({ path, oldPath, status, chunks }) => ({
       path,
       oldPath,
@@ -878,6 +881,7 @@ export class GitDiffParser {
       sha,
       shortSha: shortHash(sha),
       patchId: patchIdOf(sha, files),
+      authoredAt,
       subject,
       threadIds,
       files,
