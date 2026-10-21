@@ -34,6 +34,7 @@ import {
 } from '../../utils/changeKind';
 import { isThreadResolved } from '../../utils/reviewDecisions';
 import { isSafariBrowser } from '../utils/browser';
+import { keyByPosition } from '../utils/keyByPosition';
 
 import { Checkbox } from './Checkbox';
 import { CommentCount } from './CommentCount';
@@ -422,9 +423,7 @@ export const FileList = memo(function FileList({
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!takesKeys || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.target instanceof HTMLInputElement && event.key !== 'Escape') return;
-    // By key position, as the diff hotkeys match, so j and k still move the list with Korean input on.
-    const key = { KeyJ: 'j', KeyK: 'k' }[event.code] ?? event.key;
-    switch (key) {
+    switch (keyByPosition(event)) {
       case 'j':
       case 'ArrowDown':
         focusRow(shownRows[Math.min(activeIndex + 1, shownRows.length - 1)]);

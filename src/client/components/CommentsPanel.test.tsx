@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createRef, useEffect, useState, type ComponentProps } from 'react';
 import { HotkeysProvider, useHotkeysContext } from 'react-hotkeys-hook';
@@ -188,6 +188,24 @@ describe('CommentsPanel', () => {
     expect(documentKeys).not.toContain('ArrowDown');
   });
 
+  it('moves with the j and k keys while Korean input is on', () => {
+    renderFocused();
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /a\.ts:3-8/ }), {
+      key: 'ㅓ',
+      code: 'KeyJ',
+    });
+    expect(screen.getByRole('button', { name: /On a twenty/ })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('button', { name: /On a twenty/ }), {
+      key: 'ㅏ',
+      code: 'KeyK',
+    });
+    expect(screen.getByRole('button', { name: /a\.ts:3-8/ })).toHaveFocus();
+
+    expect(documentKeys).not.toContain('ㅓ');
+    expect(documentKeys).not.toContain('ㅏ');
+  });
+
   it('lets a key with Shift held through to the page', async () => {
     const user = userEvent.setup();
     renderFocused();
@@ -244,6 +262,19 @@ describe('CommentsPanel', () => {
     expect(rowLabels()).toEqual(['a.ts:20', 'b.ts:5']);
     expect(screen.getByRole('button', { name: /On a twenty/ })).toHaveFocus();
     vi.unstubAllGlobals();
+  });
+
+  it('resolves the focused comment with the d key while Korean input is on', () => {
+    const onResolveThread = vi.fn();
+    renderFocused({ onResolveThread });
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /a\.ts:3-8/ }), {
+      key: 'ㅇ',
+      code: 'KeyD',
+    });
+
+    expect(onResolveThread).toHaveBeenCalledWith('a3');
+    expect(documentKeys).not.toContain('ㅇ');
   });
 
   it('leaves an already resolved comment alone on d', async () => {
