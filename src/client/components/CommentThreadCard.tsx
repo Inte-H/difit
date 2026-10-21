@@ -219,6 +219,8 @@ const OUTDATED_REASON_TITLE: Record<AnchorStaleReason, string> = {
   ambiguous: '같은 내용의 줄이 여러 곳이라 자리를 정할 수 없어 수정을 겹쳐 그리지 않습니다',
 };
 
+const RESPONDING_DOT_DELAYS_MS = [0, 150, 300];
+
 interface CommentThreadCardProps {
   thread: CommentThread;
   review?: ThreadReviewControls;
@@ -343,7 +345,16 @@ export function CommentThreadCard({
               data-testid="responding-chip"
               className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-github-accent px-2 text-[10px] font-medium text-github-accent"
             >
-              <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-current" />
+              <span aria-hidden className="inline-flex items-center gap-0.5">
+                {RESPONDING_DOT_DELAYS_MS.map((delay) => (
+                  <span
+                    key={delay}
+                    data-testid="responding-dot"
+                    className="h-1 w-1 animate-responding-dot rounded-full bg-current motion-reduce:animate-none"
+                    style={{ animationDelay: `${delay}ms` }}
+                  />
+                ))}
+              </span>
               응답 중
             </span>
           )}
