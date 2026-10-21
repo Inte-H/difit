@@ -2094,12 +2094,35 @@ describe('App Component - Commits of the review', () => {
     window.history.replaceState(null, '');
   });
 
-  it('lists the commits of the review above the files', async () => {
+  it('lists the commits of the review below the files', async () => {
     renderApp();
 
-    expect(await screen.findByRole('region', { name: '리뷰 범위의 커밋' })).toBeInTheDocument();
+    const commits = await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
     expect(commitButton('전체')).toHaveAttribute('aria-current', 'true');
     expect(commitButton(/1111111/)).toBeInTheDocument();
+    const fileTree = document.getElementById('file-tree-panel')!;
+    const fileRow = within(fileTree).getByTitle('test.ts');
+    expect(fileRow.compareDocumentPosition(commits)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('remembers the height the commit list was dragged to', async () => {
+    window.localStorage.setItem('difit.commitListHeight', '300');
+    renderApp();
+
+    const commits = await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    expect(commits.style.maxHeight).toContain('300px');
+
+    Object.defineProperty(document.getElementById('file-tree-panel')!, 'clientHeight', {
+      value: 800,
+    });
+    vi.spyOn(commits, 'getBoundingClientRect').mockReturnValue({ height: 300 } as DOMRect);
+    const edge = within(commits).getByRole('separator', { name: '커밋 목록 높이 조절' });
+    fireEvent.mouseDown(edge, { clientY: 500 });
+    fireEvent.mouseMove(document, { clientY: 400 });
+    fireEvent.mouseUp(document);
+
+    expect(commits.style.maxHeight).toContain('400px');
+    expect(window.localStorage.getItem('difit.commitListHeight')).toBe('400');
   });
 
   it('counts the open comments of each commit again as comments are added or resolved', async () => {

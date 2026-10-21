@@ -1,5 +1,12 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Fragment, useEffect, useRef, useState, type TouchEvent } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type TouchEvent,
+} from 'react';
 
 import type { ReviewCommit, ReviewScope, ReviewView, ReviewViewAction } from '../../types/diff';
 import { layoutCommitGraph } from '../../utils/commitGraph';
@@ -15,6 +22,8 @@ interface CommitListProps {
   rangeStart?: string | undefined;
   inDrawer?: boolean;
   openCounts?: ReadonlyMap<string, number> | undefined;
+  height?: number | null | undefined;
+  onResize?: ((height: number) => void) | undefined;
 }
 
 interface Drag {
@@ -31,6 +40,10 @@ interface Press {
 
 const LONG_PRESS_MS = 500;
 const TAP_SLOP_PX = 10;
+const DEFAULT_MAX_HEIGHT = '40%';
+const MIN_HEIGHT_PX = 80;
+// Room kept for the file list and the sidebar footer below it.
+const FILES_ROOM_PX = 160;
 
 const ITEM_CLASS =
   'w-full flex items-center gap-2 px-4 text-left text-sm hover:bg-github-bg-tertiary transition-colors';
@@ -87,12 +100,15 @@ export function CommitList({
   rangeStart,
   inDrawer = false,
   openCounts,
+  height,
+  onResize,
 }: CommitListProps) {
   const { commits } = review;
   const [isOpen, setIsOpen] = useState(true);
   const [drag, setDrag] = useState<Drag | null>(null);
   const isDragging = drag !== null;
   const listRef = useRef<HTMLUListElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
   const pressRef = useRef<Press | null>(null);
 
   useEffect(() => {
@@ -163,6 +179,22 @@ export function CommitList({
     const toSha = touch ? commitUnder(touch.clientX, touch.clientY) : null;
     if (toSha && toSha !== press.sha) onSelect({ kind: 'drop', fromSha: press.sha, toSha });
   };
+  const startResize = (event: ReactMouseEvent) => {
+    const section = sectionRef.current;
+    if (!onResize || !section) return;
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = section.getBoundingClientRect().height;
+    const room = (section.parentElement?.clientHeight ?? 0) - FILES_ROOM_PX;
+    const onMove = (move: MouseEvent) =>
+      onResize(Math.max(MIN_HEIGHT_PX, Math.min(room, startHeight + startY - move.clientY)));
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
   const cancelPress = () => {
     const timer = pressRef.current?.timer;
     if (timer != null) clearTimeout(timer);
@@ -210,13 +242,36 @@ export function CommitList({
     </>
   );
 
+  const isResizable = !inDrawer && isListShown && onResize !== undefined;
+
   return (
     <section
-      className={
-        inDrawer ? 'flex-1 min-h-0 flex flex-col' : 'shrink-0 border-b border-github-border'
+      ref={sectionRef}
+      className={`min-h-0 flex flex-col ${
+        inDrawer ? 'flex-1' : `shrink-0 ${isResizable ? '' : 'border-t border-github-border'}`
+      }`}
+      style={
+        inDrawer
+          ? undefined
+          : {
+              maxHeight:
+                height != null
+                  ? `min(${height}px, calc(100% - ${FILES_ROOM_PX}px))`
+                  : DEFAULT_MAX_HEIGHT,
+            }
       }
       aria-label="리뷰 범위의 커밋"
     >
+      {isResizable && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="커밋 목록 높이 조절"
+          onMouseDown={startResize}
+          className="shrink-0 h-1 bg-github-border hover:bg-github-text-muted cursor-row-resize"
+          title="Drag to resize commit list"
+        />
+      )}
       {rangeStart !== undefined ? (
         <div className="shrink-0 flex items-center gap-2 px-4 py-2 text-sm bg-github-bg-tertiary">
           <span role="status" className="min-w-0 flex-1 truncate text-github-text-primary">
@@ -253,7 +308,7 @@ export function CommitList({
         <ul
           ref={listRef}
           onContextMenu={(event) => event.preventDefault()}
-          className={`${inDrawer ? 'flex-1' : 'max-h-60'} overflow-y-auto py-1 m-0 list-none p-0 select-none [-webkit-touch-callout:none]`}
+          className={`flex-1 min-h-0 overflow-y-auto py-1 m-0 list-none p-0 select-none [-webkit-touch-callout:none]`}
         >
           <li>
             <button
