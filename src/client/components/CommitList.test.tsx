@@ -217,7 +217,7 @@ describe('CommitList', () => {
     const region = () => screen.getByRole('region', { name: '리뷰 범위의 커밋' });
     const edge = () => screen.getByRole('separator', { name: '커밋 목록 높이 조절' });
 
-    function renderResizable(height?: number) {
+    function renderResizable(height?: number, { listContentHeight = 1000 } = {}) {
       const onResize = vi.fn();
       const { container } = render(
         <CommitList
@@ -230,6 +230,8 @@ describe('CommitList', () => {
       );
       Object.defineProperty(container, 'clientHeight', { value: 600 });
       vi.spyOn(region(), 'getBoundingClientRect').mockReturnValue({ height: 200 } as DOMRect);
+      Object.defineProperty(list(), 'clientHeight', { value: 150 });
+      Object.defineProperty(list(), 'scrollHeight', { value: listContentHeight });
       return onResize;
     }
 
@@ -247,6 +249,15 @@ describe('CommitList', () => {
       fireEvent.mouseMove(document, { clientY: 450 });
 
       expect(onResize).toHaveBeenCalledTimes(3);
+    });
+
+    it('grows no taller than its commits need', () => {
+      const onResize = renderResizable(undefined, { listContentHeight: 250 });
+
+      fireEvent.mouseDown(edge(), { clientY: 500 });
+      fireEvent.mouseMove(document, { clientY: 0 });
+
+      expect(onResize).toHaveBeenLastCalledWith(300);
     });
 
     it('takes at most part of the sidebar until a height is chosen, then at most that', () => {

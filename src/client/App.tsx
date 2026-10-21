@@ -1047,15 +1047,22 @@ function App() {
   }, [sidebarWidth]);
 
   const handleCommitListResize = useCallback((height: number) => {
-    const rounded = Math.round(height);
-    setCommitListHeight(rounded);
-    try {
-      window.localStorage.setItem(COMMIT_LIST_HEIGHT_STORAGE_KEY, String(rounded));
-    } catch {
-      // Ignore localStorage errors (e.g. disabled storage).
-    }
-    saveClientSettings({ commitListHeight: rounded });
+    setCommitListHeight(Math.round(height));
   }, []);
+
+  const skipInitialCommitListHeightSaveRef = useRef(true);
+  useEffect(() => {
+    if (commitListHeight !== null) {
+      try {
+        window.localStorage.setItem(COMMIT_LIST_HEIGHT_STORAGE_KEY, String(commitListHeight));
+      } catch {}
+    }
+    if (skipInitialCommitListHeightSaveRef.current) {
+      skipInitialCommitListHeightSaveRef.current = false;
+      return;
+    }
+    saveClientSettings({ commitListHeight });
+  }, [commitListHeight]);
 
   const skipInitialSidebarOpenSaveRef = useRef(true);
   useEffect(() => {
