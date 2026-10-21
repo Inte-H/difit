@@ -40,11 +40,12 @@ difit comment wait --port <port>
 ```
 
 - `fixupTarget`은 그 지적에 답할 fixup을 걸 커밋이다. 없으면 리뷰 대상 커밋에 건다.
-- 알리는 경우는 다섯이다. 리뷰어가 마지막으로 말한 `[수정 중]`, fixup을 만든 뒤에 리뷰어가 답글을 단 `[승인 대기]`, 새 fixup도 그 뒤의 답도 없는 `[다시 수정 중]`, 되돌린 fixup이 아직 남은 `[되돌림]`, 리뷰어가 지운 `[지움]`. `rejectedFixupSha`는 버려야 할 fixup이다. 고정할 커밋이 없는 리뷰에서는 리뷰어가 마지막으로 말한 지적을 모두 알린다.
+- 알리는 경우는 여섯이다. 리뷰어가 마지막으로 말한 `[수정 중]`, fixup을 만든 뒤에 리뷰어가 답글을 단 `[승인 대기]`, 승인한 뒤에 리뷰어가 답글을 달았거나 fixup을 만든 뒤에 단 답글에 에이전트가 아직 답하지 않은 `[승인됨]`(뒤의 경우는 승인한 fixup이 아직 범위에 있을 때만), 새 fixup도 그 뒤의 답도 없는 `[다시 수정 중]`, 되돌린 fixup이 아직 남은 `[되돌림]`, 리뷰어가 지운 `[지움]`. `rejectedFixupSha`는 버려야 할 fixup이다. 고정할 커밋이 없는 리뷰에서는 리뷰어가 마지막으로 말한 지적을 모두 알린다.
+- `[승인 대기]`와 승인 전에 단 답글의 `[승인됨]`은 답글 시각을 fixup의 author date와 견준다. 리뷰어의 브라우저와 fixup을 만든 컴퓨터의 시계가 어긋나면 fixup 직후에 단 답글이 오지 않거나, fixup으로 이미 답한 지적이 다시 올 수 있다. 다시 온 지적에는 말로 답하면 더 오지 않는다.
 - 띄우자마자 지금 차례인 지적을 모두 찍으므로, 두 번 띄우는 사이에 생긴 지적도 놓치지 않는다. 답한 뒤 다시 띄운다. 답하지 않은 지적은 다시 띄우자마자 또 나온다.
 - 리뷰가 끝나면 아무것도 찍지 않고 0으로 끝난다. 연결이 끊기면 10초 동안 다시 붙고, 그래도 안 되면 오류를 찍고 1로 끝난다.
 
-Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지 소켓(`CLAUDE_CODE_MESSAGING_SOCKET`)을 물려받아, 리뷰어가 화면에서 저장해 새로 에이전트 차례가 된 지적을 그 세션에 메시지로 바로 넣는다. 첫 줄은 `difit review: your turn on <threadId> [<상태>]; read with difit comment get --port <port> --format json`이고, 이어지는 줄은 wait와 같은 JSON이다. 에이전트가 단 코멘트, 리뷰어가 직접 고친 fixup, 승인과 승인 취소는 보내지 않는다. 소켓에 닿지 못하면 stderr에 한 줄 남기고 리뷰를 이어 간다. 이 메시지 형식은 Claude Code 문서에 없어 형식이 바뀌면 조용히 사라질 수 있으므로 wait도 함께 띄워 둔다. 직접 띄운 difit에는 소켓이 없으므로 wait만 쓴다. 이유는 [docs/adr/0005](adr/0005-tell-the-agent-when-it-is-its-turn.md)에 있다.
+Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지 소켓(`CLAUDE_CODE_MESSAGING_SOCKET`)을 물려받아, 리뷰어가 화면에서 저장해 새로 에이전트 차례가 된 지적을 그 세션에 메시지로 바로 넣는다. 첫 줄은 `difit review: your turn on <threadId> [<상태>]; read with difit comment get --port <port> --format json`이고, 이어지는 줄은 wait와 같은 JSON이다. 에이전트가 단 코멘트, 리뷰어가 직접 고친 fixup, 승인과 승인 취소는 보내지 않는다. 다만 에이전트가 아직 답하지 않은 지적은 승인이나 승인 취소로 상태가 바뀌면 새 상태로 다시 보낸다. 소켓에 닿지 못하면 stderr에 한 줄 남기고 리뷰를 이어 간다. 이 메시지 형식은 Claude Code 문서에 없어 형식이 바뀌면 조용히 사라질 수 있으므로 wait도 함께 띄워 둔다. 직접 띄운 difit에는 소켓이 없으므로 wait만 쓴다. 이유는 [docs/adr/0005](adr/0005-tell-the-agent-when-it-is-its-turn.md)에 있다.
 
 ## 지적에 답하기
 

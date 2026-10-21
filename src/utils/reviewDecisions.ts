@@ -263,6 +263,27 @@ function reviewerRepliedToFixup(
     .every((fixup) => repliedAt > (Date.parse(fixup.authoredAt) || 0));
 }
 
+function reviewerRepliedAfterApproval(thread: ThreadTurn, decisions: ReviewDecision[]): boolean {
+  const last = thread.messages.at(-1);
+  if (last?.author !== REVIEWER_AUTHOR) return false;
+  const own = decisions.filter((decision) => decision.threadId === thread.id);
+  const approval = latestOf(own, ['approved']);
+  return approval !== undefined && (Date.parse(last.createdAt) || 0) > decidedAt(approval);
+}
+
+// The approved fixup is still in the range and the reviewer's reply came after it, whether before
+// or after the approval.
+function reviewerRepliedToApprovedFixup(
+  thread: ThreadTurn,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): boolean {
+  const isRejected = rejectionCheckFor(thread.id, decisions);
+  return (
+    fixups.some((fixup) => !isRejected(fixup)) && reviewerRepliedToFixup(thread, fixups, decisions)
+  );
+}
+
 // Null when the next move on the thread is not the agent's. Without fixups (a review with no pinned
 // commit) it is the agent's whenever the reviewer spoke last.
 function agentTurnOn(
@@ -284,10 +305,13 @@ function agentTurnOn(
   if (state === 'awaiting-fix') {
     return reviewerSpokeLast ? { state, label: reviewStateLabel(state) } : null;
   }
-  if (state === 'awaiting-approval') {
-    return reviewerRepliedToFixup(thread, fixups, decisions)
-      ? { state, label: reviewStateLabel(state) }
-      : null;
+  if (state === 'awaiting-approval' || state === 'approved') {
+    const replied =
+      state === 'approved'
+        ? reviewerRepliedAfterApproval(thread, decisions) ||
+          reviewerRepliedToApprovedFixup(thread, fixups, decisions)
+        : reviewerRepliedToFixup(thread, fixups, decisions);
+    return replied ? { state, label: reviewStateLabel(state) } : null;
   }
   if (state !== 'rejected' && state !== 'withdrawn') return null;
   const rejectedFixupSha = rejectionAwaitingAgent(thread, fixups, decisions, state);
