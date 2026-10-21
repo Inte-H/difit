@@ -1,10 +1,13 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { createRef, type ComponentProps } from 'react';
+import { HotkeysProvider } from 'react-hotkeys-hook';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
 import type { CommentThread, DiffFile, ReviewDecision } from '../../types/diff';
 
-import { FileList } from './FileList';
+import { FileList, type FileListHandle } from './FileList';
 
 const createFile = (
   path: string,
@@ -409,5 +412,187 @@ describe('FileList', () => {
 
       expect(list.scrollTop).toBe(0);
     });
+  });
+});
+
+describe('FileList keys', () => {
+  const files = [createFile('src/a.ts'), createFile('src/b.ts'), createFile('README.md')];
+  const documentKeys: string[] = [];
+  const recordKey = (event: KeyboardEvent) => documentKeys.push(event.key);
+
+  beforeEach(() => {
+    documentKeys.length = 0;
+    document.addEventListener('keydown', recordKey);
+  });
+
+  afterEach(() => {
+    document.removeEventListener('keydown', recordKey);
+  });
+
+  const renderList = (props: Partial<ComponentProps<typeof FileList>> = {}) => {
+    const ref = createRef<FileListHandle>();
+    const onScrollToFile = vi.fn();
+    render(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <FileList
+          ref={ref}
+          files={files}
+          onScrollToFile={onScrollToFile}
+          comments={[]}
+          decisions={[]}
+          reviewedFiles={new Set()}
+          onToggleReviewed={vi.fn()}
+          onToggleFolderReviewed={vi.fn()}
+          selectedFileIndex={null}
+          {...props}
+        />
+      </HotkeysProvider>,
+    );
+    return { ref, onScrollToFile };
+  };
+
+  const renderFocused = (props: Partial<ComponentProps<typeof FileList>> = {}) => {
+    const rendered = renderList(props);
+    act(() => rendered.ref.current!.focus());
+    return rendered;
+  };
+
+  it('moves between folders and files with j and k, and keeps those keys from the diff', async () => {
+    const user = userEvent.setup();
+    renderFocused();
+
+    expect(getTreeRow('src')).toHaveFocus();
+    await user.keyboard('k');
+    expect(getTreeRow('src')).toHaveFocus();
+    await user.keyboard('j');
+    expect(getTreeRow('src/a.ts')).toHaveFocus();
+    await user.keyboard('jj');
+    expect(getTreeRow('README.md')).toHaveFocus();
+    await user.keyboard('j');
+    expect(getTreeRow('README.md')).toHaveFocus();
+    await user.keyboard('{ArrowUp}');
+    expect(getTreeRow('src/b.ts')).toHaveFocus();
+
+    expect(documentKeys).not.toContain('j');
+    expect(documentKeys).not.toContain('k');
+    expect(documentKeys).not.toContain('ArrowUp');
+  });
+
+  it('moves with the j and k keys while Korean input is on', () => {
+    renderFocused();
+
+    fireEvent.keyDown(getTreeRow('src'), { key: 'ㅓ', code: 'KeyJ' });
+    expect(getTreeRow('src/a.ts')).toHaveFocus();
+    fireEvent.keyDown(getTreeRow('src/a.ts'), { key: 'ㅏ', code: 'KeyK' });
+    expect(getTreeRow('src')).toHaveFocus();
+
+    expect(documentKeys).not.toContain('ㅓ');
+    expect(documentKeys).not.toContain('ㅏ');
+  });
+
+  it('starts from the file the diff is on', () => {
+    const { ref } = renderFocused({ selectedFileIndex: 1 });
+
+    expect(getTreeRow('src/b.ts')).toHaveFocus();
+    expect(ref.current!.hasFocus()).toBe(true);
+  });
+
+  it('goes to the file on Enter and keeps the keys in the list', async () => {
+    const user = userEvent.setup();
+    const onFileSelected = vi.fn();
+    const { onScrollToFile } = renderFocused({ onFileSelected });
+
+    await user.keyboard('j{Enter}');
+
+    expect(onScrollToFile).toHaveBeenCalledWith('src/a.ts');
+    expect(onFileSelected).toHaveBeenCalledTimes(1);
+    expect(getTreeRow('src/a.ts')).toHaveFocus();
+  });
+
+  it('folds and unfolds a folder on Enter', async () => {
+    const user = userEvent.setup();
+    const { onScrollToFile } = renderFocused();
+
+    await user.keyboard('{Enter}');
+    expect(screen.queryByTitle('src/a.ts')).not.toBeInTheDocument();
+    expect(getTreeRow('src')).toHaveFocus();
+    await user.keyboard('j');
+    expect(getTreeRow('README.md')).toHaveFocus();
+
+    await user.keyboard('k{Enter}');
+    expect(screen.getByTitle('src/a.ts')).toBeInTheDocument();
+    expect(onScrollToFile).not.toHaveBeenCalled();
+  });
+
+  it('hands the keys back to the diff on Escape', async () => {
+    const user = userEvent.setup();
+    const onEscape = vi.fn();
+    const { ref } = renderFocused({ onEscape });
+
+    await user.keyboard('{Escape}');
+
+    expect(onEscape).toHaveBeenCalledTimes(1);
+    expect(ref.current!.hasFocus()).toBe(false);
+  });
+
+  it('leaves j and k typed in the filter to the filter', async () => {
+    const user = userEvent.setup();
+    renderFocused();
+    const filter = screen.getByPlaceholderText('Filter files...');
+
+    await user.click(filter);
+    await user.keyboard('jk');
+
+    expect(filter).toHaveValue('jk');
+    expect(filter).toHaveFocus();
+  });
+
+  it('leaves j and k to the diff after a file row is clicked', async () => {
+    const user = userEvent.setup();
+    const { ref, onScrollToFile } = renderList();
+
+    await user.click(getTreeRow('src/b.ts'));
+    await user.keyboard('j');
+
+    expect(onScrollToFile).toHaveBeenCalledWith('src/b.ts');
+    expect(ref.current!.hasFocus()).toBe(false);
+    expect(documentKeys).toContain('j');
+  });
+
+  it('leaves j and k to the diff after a folder row or the collapse-all button is clicked', async () => {
+    const user = userEvent.setup();
+    const { ref } = renderList();
+
+    await user.click(getTreeRow('src'));
+    expect(ref.current!.hasFocus()).toBe(false);
+    await user.click(screen.getByTitle(/(Collapse|Expand) all/));
+    expect(ref.current!.hasFocus()).toBe(false);
+    await user.keyboard('j');
+
+    expect(documentKeys).toContain('j');
+  });
+
+  it('keeps the keys in the list when a row is clicked while the list holds them', async () => {
+    const user = userEvent.setup();
+    renderFocused();
+
+    await user.click(getTreeRow('README.md'));
+    expect(getTreeRow('README.md')).toHaveFocus();
+    await user.click(screen.getByTitle(/(Collapse|Expand) all/));
+    expect(getTreeRow('README.md')).toHaveFocus();
+    await user.keyboard('k');
+
+    expect(getTreeRow('src')).toHaveFocus();
+    expect(documentKeys).not.toContain('k');
+  });
+
+  it('lets a key with Shift held through to the page', async () => {
+    const user = userEvent.setup();
+    renderFocused();
+
+    await user.keyboard('{Shift>}B{/Shift}');
+
+    expect(documentKeys).toContain('B');
+    expect(getTreeRow('src')).toHaveFocus();
   });
 });

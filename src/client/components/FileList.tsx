@@ -14,12 +14,16 @@ import {
 import {
   memo,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
+  type KeyboardEvent,
   type MouseEvent,
+  type Ref,
 } from 'react';
+import { useHotkeysContext } from 'react-hotkeys-hook';
 
 import { type DiffFile, type CommentThread, type ReviewDecision } from '../../types/diff';
 import {
@@ -34,7 +38,13 @@ import { isSafariBrowser } from '../utils/browser';
 import { Checkbox } from './Checkbox';
 import { CommentCount } from './CommentCount';
 
+export interface FileListHandle {
+  focus: () => void;
+  hasFocus: () => boolean;
+}
+
 interface FileListProps {
+  ref?: Ref<FileListHandle>;
   files: DiffFile[];
   onScrollToFile: (path: string) => void;
   onFileSelected?: () => void;
@@ -46,6 +56,7 @@ interface FileListProps {
   selectedFileIndex: number | null;
   scrollVisibleFileIndex?: number | null;
   pickedCommentFilePath?: string | null;
+  onEscape?: () => void;
 }
 
 interface TreeNode {
@@ -62,6 +73,16 @@ const TREE_ROW_GAP_PX = 8;
 const TREE_INDENT_STEP_PX = TREE_ICON_SIZE_PX + TREE_ROW_GAP_PX;
 const SCROLL_VISIBLE_BAR_CLASS = 'shadow-[inset_3px_0_0_0_var(--color-github-text-secondary)]';
 const PICKED_COMMENT_RING_CLASS = 'ring-1 ring-inset ring-blue-500';
+const ROW_FOCUS_CLASS = 'focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500';
+
+interface ShownRow {
+  key: string;
+  path: string;
+  isDirectory: boolean;
+}
+
+const dirRowKey = (path: string) => `dir:${path}`;
+const fileRowKey = (path: string) => `file:${path}`;
 
 function getTreeRowPaddingLeft(depth: number): string {
   return `${depth * TREE_INDENT_STEP_PX + TREE_ROW_PADDING_LEFT_PX}px`;
@@ -99,6 +120,46 @@ function getReviewedDirectoryPaths(node: TreeNode, reviewedFiles: Set<string>): 
 
   visit(node);
   return reviewedDirectoryPaths;
+}
+
+function getShownRows(node: TreeNode, expandedDirs: Set<string>): ShownRow[] {
+  const rows: ShownRow[] = [];
+  const visit = (current: TreeNode) => {
+    if (current.isDirectory && current.children) {
+      if (current.name) {
+        rows.push({ key: dirRowKey(current.path), path: current.path, isDirectory: true });
+        if (!expandedDirs.has(current.path)) return;
+      }
+      current.children.forEach(visit);
+    } else if (current.file) {
+      rows.push({
+        key: fileRowKey(current.file.path),
+        path: current.file.path,
+        isDirectory: false,
+      });
+    }
+  };
+  visit(node);
+  return rows;
+}
+
+// scrollIntoView would also scroll the sidebar's overflow-hidden wrapper sideways.
+function scrollRowIntoList(container: HTMLElement, row: HTMLElement, hasStickyHeaders: boolean) {
+  const containerRect = container.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const rowTop = rowRect.top - containerRect.top;
+  const rowBottom = rowRect.bottom - containerRect.top;
+  const depth = Number.parseInt(row.dataset.depth || '0', 10);
+  const dirHeaderHeight = hasStickyHeaders
+    ? (container.querySelector('[data-dir-header="true"]')?.getBoundingClientRect().height ?? 0)
+    : 0;
+  const stickyHeadersBottom = depth * dirHeaderHeight;
+
+  if (rowTop < stickyHeadersBottom) {
+    container.scrollTop += rowTop - stickyHeadersBottom;
+  } else if (rowBottom > container.clientHeight) {
+    container.scrollTop += rowBottom - container.clientHeight;
+  }
 }
 
 function buildFileTree(files: DiffFile[]): TreeNode {
@@ -174,6 +235,7 @@ function buildFileTree(files: DiffFile[]): TreeNode {
 }
 
 export const FileList = memo(function FileList({
+  ref,
   files,
   onScrollToFile,
   onFileSelected,
@@ -185,13 +247,16 @@ export const FileList = memo(function FileList({
   selectedFileIndex,
   scrollVisibleFileIndex = null,
   pickedCommentFilePath = null,
+  onEscape,
 }: FileListProps) {
   const fileTree = useMemo(() => buildFileTree(files), [files]);
   const shouldUseStickyDirectoryHeaders = useMemo(
     () => !isSafariBrowser(typeof navigator === 'undefined' ? '' : navigator.userAgent),
     [],
   );
+  const rootRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
   const dirContainerRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const fileRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const stickyContainerStyle = {
@@ -278,23 +343,7 @@ export const FileList = memo(function FileList({
     const row =
       scrollVisiblePath === undefined ? undefined : fileRowRefs.current.get(scrollVisiblePath);
     if (!container || !row) return;
-
-    const containerRect = container.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-    const rowTop = rowRect.top - containerRect.top;
-    const rowBottom = rowRect.bottom - containerRect.top;
-    const depth = Number.parseInt(row.dataset.depth || '0', 10);
-    const dirHeaderHeight = shouldUseStickyDirectoryHeaders
-      ? (container.querySelector('[data-dir-header="true"]')?.getBoundingClientRect().height ?? 0)
-      : 0;
-    const stickyHeadersBottom = depth * dirHeaderHeight;
-
-    // scrollIntoView would also scroll the sidebar's overflow-hidden wrapper sideways.
-    if (rowTop < stickyHeadersBottom) {
-      container.scrollTop += rowTop - stickyHeadersBottom;
-    } else if (rowBottom > container.clientHeight) {
-      container.scrollTop += rowBottom - container.clientHeight;
-    }
+    scrollRowIntoList(container, row, shouldUseStickyDirectoryHeaders);
   }, [scrollVisiblePath, shouldUseStickyDirectoryHeaders]);
 
   const getFileIcon = (status: DiffFile['status']) => {
@@ -325,6 +374,100 @@ export const FileList = memo(function FileList({
       }
       return newSet;
     });
+  };
+
+  const { activeScopes } = useHotkeysContext();
+  const takesKeys = activeScopes.includes('navigation') || activeScopes.includes('*');
+  const [activeRowKey, setActiveRowKey] = useState<string | null>(null);
+  const lastActiveIndexRef = useRef(0);
+  const shownRows = useMemo(
+    () => getShownRows(filteredFileTree, expandedDirs),
+    [filteredFileTree, expandedDirs],
+  );
+
+  let activeIndex = shownRows.findIndex((row) => row.key === activeRowKey);
+  if (activeIndex === -1 && shownRows.length > 0) {
+    activeIndex = Math.min(lastActiveIndexRef.current, shownRows.length - 1);
+  }
+  const activeRow = shownRows[activeIndex];
+  useEffect(() => {
+    if (activeIndex !== -1) lastActiveIndexRef.current = activeIndex;
+  });
+
+  const focusRow = (shownRow: ShownRow | undefined) => {
+    const container = scrollContainerRef.current;
+    const row = shownRow && rowRefs.current.get(shownRow.key);
+    if (!shownRow || !row) {
+      container?.focus({ preventScroll: true });
+      return;
+    }
+    setActiveRowKey(shownRow.key);
+    row.focus({ preventScroll: true });
+    if (container) scrollRowIntoList(container, row, shouldUseStickyDirectoryHeaders);
+  };
+
+  const shownRowOfFile = (fileIndex: number | null) => {
+    const path = fileIndex === null ? undefined : files[fileIndex]?.path;
+    return path === undefined ? undefined : shownRows.find((row) => row.key === fileRowKey(path));
+  };
+
+  useImperativeHandle(ref, () => ({
+    focus: () =>
+      focusRow(
+        shownRowOfFile(selectedFileIndex) ?? shownRowOfFile(scrollVisibleFileIndex) ?? activeRow,
+      ),
+    hasFocus: () => rootRef.current?.contains(document.activeElement) ?? false,
+  }));
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!takesKeys || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target instanceof HTMLInputElement && event.key !== 'Escape') return;
+    // By key position, as the diff hotkeys match, so j and k still move the list with Korean input on.
+    const key = { KeyJ: 'j', KeyK: 'k' }[event.code] ?? event.key;
+    switch (key) {
+      case 'j':
+      case 'ArrowDown':
+        focusRow(shownRows[Math.min(activeIndex + 1, shownRows.length - 1)]);
+        break;
+      case 'k':
+      case 'ArrowUp':
+        focusRow(shownRows[Math.max(activeIndex - 1, 0)]);
+        break;
+      case 'Enter':
+        if (!activeRow || event.target !== rowRefs.current.get(activeRow.key)) return;
+        if (activeRow.isDirectory) {
+          toggleDirectory(activeRow.path);
+        } else {
+          onScrollToFile(activeRow.path);
+          onFileSelected?.();
+        }
+        break;
+      case 'Escape':
+        (document.activeElement as HTMLElement | null)?.blur();
+        onEscape?.();
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+  };
+
+  const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+    if (event.target instanceof HTMLInputElement) return;
+    const rowsHaveKeys = scrollContainerRef.current?.contains(document.activeElement) ?? false;
+    if (rowsHaveKeys && scrollContainerRef.current?.contains(event.target as Node)) return;
+    event.preventDefault();
+    if (!rowsHaveKeys) (document.activeElement as HTMLElement | null)?.blur();
+  };
+
+  const rowFocusProps = (key: string) => ({
+    tabIndex: key === activeRow?.key ? 0 : -1,
+    onFocus: () => setActiveRowKey(key),
+  });
+  const setRowRef = (key: string, element: HTMLDivElement | null) => {
+    if (element) rowRefs.current.set(key, element);
+    else rowRefs.current.delete(key);
   };
 
   const allPaths = useMemo(() => getAllDirectoryPaths(fileTree), [fileTree]);
@@ -402,7 +545,9 @@ export const FileList = memo(function FileList({
         >
           {node.name && (
             <div
-              className={`${shouldUseStickyDirectoryHeaders ? 'sticky ' : ''}group flex h-9 items-center gap-2 bg-github-bg-secondary px-4 hover:bg-github-bg-tertiary cursor-pointer ${
+              ref={(el) => setRowRef(dirRowKey(node.path), el)}
+              {...rowFocusProps(dirRowKey(node.path))}
+              className={`${shouldUseStickyDirectoryHeaders ? 'sticky ' : ''}group flex h-9 items-center gap-2 bg-github-bg-secondary px-4 hover:bg-github-bg-tertiary cursor-pointer ${ROW_FOCUS_CLASS} ${
                 isReviewed ? 'opacity-70' : ''
               }`}
               data-dir-header="true"
@@ -470,8 +615,10 @@ export const FileList = memo(function FileList({
             } else {
               fileRowRefs.current.delete(file.path);
             }
+            setRowRef(fileRowKey(file.path), el);
           }}
-          className={`flex items-center gap-2 px-4 py-2 hover:bg-github-bg-tertiary cursor-pointer transition-colors ${
+          {...rowFocusProps(fileRowKey(file.path))}
+          className={`flex items-center gap-2 px-4 py-2 hover:bg-github-bg-tertiary cursor-pointer transition-colors ${ROW_FOCUS_CLASS} ${
             isReviewed ? 'opacity-70' : ''
           } ${isSelected ? 'bg-github-bg-tertiary' : ''} ${isScrollVisible ? SCROLL_VISIBLE_BAR_CLASS : ''} ${
             isPickedCommentFile ? PICKED_COMMENT_RING_CLASS : ''
@@ -522,7 +669,12 @@ export const FileList = memo(function FileList({
   };
 
   return (
-    <div className="h-full flex flex-col">
+    <div
+      ref={rootRef}
+      className="relative h-full flex flex-col after:pointer-events-none after:absolute after:inset-0 after:z-10 focus-within:after:ring-2 focus-within:after:ring-inset focus-within:after:ring-blue-500"
+      onKeyDown={handleKeyDown}
+      onMouseDown={handleMouseDown}
+    >
       <div className="px-4 py-3 border-b border-github-border bg-github-bg-tertiary">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-github-text-primary m-0">
@@ -566,9 +718,10 @@ export const FileList = memo(function FileList({
       </div>
 
       <div
-        className="flex-1 overflow-y-auto relative z-0"
+        className="flex-1 overflow-y-auto relative z-0 focus:outline-none"
         style={stickyContainerStyle}
         ref={scrollContainerRef}
+        tabIndex={-1}
       >
         {filteredFileTree.children?.map((child) => renderTreeNode(child))}
       </div>
