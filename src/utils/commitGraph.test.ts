@@ -57,17 +57,39 @@ describe('layoutCommitGraph', () => {
   });
 
   it('gives every merge its own branch, numbered in the order of the merges', () => {
-    expect(drawAll([commit('m1', ['x']), commit('m2', ['y', 'z'])])).toEqual([
-      'x lBlf0',
-      'm1 lClj0 v1',
+    expect(drawAll([commit('a'), commit('m1', ['x']), commit('b'), commit('m2', ['y'])])).toEqual([
+      'a lCl- v0',
+      'x lBlt0',
+      'm1 lClj0',
+      'b lCl- v1',
       'y lBlt1',
+      'm2 lC-j1',
+    ]);
+  });
+
+  it('runs the branch of a merge at the top straight down from above the list', () => {
+    expect(drawAll([commit('m', ['x']), commit('b')])).toEqual(['x lBlt0', 'm lClj0', 'b lC--']);
+  });
+
+  it('curves the next branch off in its own first row when it starts right below a merge', () => {
+    expect(drawAll([commit('m1', ['x']), commit('m2', ['y', 'z'])])).toEqual([
+      'x lBlt0',
+      'm1 lClj0',
+      'y lBlf1',
       'z lBlt1',
+      'm2 lC-j1',
+    ]);
+    expect(drawAll([commit('m1', ['x']), commit('m2', ['y'], 3)])).toEqual([
+      'x lBlt0',
+      'm1 lClj0',
+      '+3 l-lf1',
+      'y lBlt1',
       'm2 lC-j1',
     ]);
   });
 
   it('opens a branch whose oldest commits are only counted with the count and no dot', () => {
-    expect(drawAll([commit('m', ['x'], 3)])).toEqual(['+3 l-lf0', 'x lBlt0', 'm lC-j0']);
+    expect(drawAll([commit('m', ['x'], 3)])).toEqual(['+3 l-lt0', 'x lBlt0', 'm lC-j0']);
   });
 
   it('draws nothing for no commits', () => {
