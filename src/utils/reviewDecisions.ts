@@ -188,6 +188,32 @@ export function selectOpenThreads<T extends { id: string } & ThreadMessages>(
   });
 }
 
+// open: the agent's move. answered: the reviewer's move. resolved: nobody's.
+export type CommentPanelStatus = 'open' | 'answered' | 'resolved';
+
+const COMMENT_PANEL_STATUS: Record<ThreadReviewState, CommentPanelStatus | null> = {
+  'awaiting-fix': 'open',
+  rejected: 'open',
+  answered: 'answered',
+  'awaiting-approval': 'answered',
+  approved: 'resolved',
+  folded: 'resolved',
+  withdrawn: 'resolved',
+  deleted: null,
+};
+
+// Null for a deleted thread, which the comments panel never lists.
+export function commentPanelStatus(
+  thread: { id: string } & ThreadMessages,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): CommentPanelStatus | null {
+  const status =
+    COMMENT_PANEL_STATUS[deriveThreadReviewState(thread.id, fixups, decisions, thread)];
+  if (status !== null && isThreadResolved(thread.id, decisions)) return 'resolved';
+  return status;
+}
+
 type ThreadForAgent = Pick<
   DiffCommentThread,
   'id' | 'filePath' | 'position' | 'messages' | 'fixupTarget'
