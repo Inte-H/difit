@@ -122,7 +122,10 @@ const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 600;
 const SIDEBAR_DEFAULT_WIDTH = 280;
 const COMMENTS_PANEL_OPEN_STORAGE_KEY = 'difit.commentsPanelOpen';
-const COMMENTS_PANEL_WIDTH = 320;
+const COMMENTS_PANEL_WIDTH_STORAGE_KEY = 'difit.commentsPanelWidth';
+const COMMENTS_PANEL_MIN_WIDTH = 240;
+const COMMENTS_PANEL_MAX_WIDTH = 600;
+const COMMENTS_PANEL_DEFAULT_WIDTH = 320;
 
 const parseDiffViewMode = (value: unknown): DiffViewMode | null => {
   switch (value) {
@@ -207,6 +210,15 @@ const storeCommitListHeight = (height: number) => {
   } catch {}
 };
 
+const clampCommentsPanelWidth = (width: number) =>
+  Math.min(COMMENTS_PANEL_MAX_WIDTH, Math.max(COMMENTS_PANEL_MIN_WIDTH, width));
+
+const getStoredCommentsPanelWidth = () =>
+  getStoredWidth(COMMENTS_PANEL_WIDTH_STORAGE_KEY, clampCommentsPanelWidth);
+
+const getInitialCommentsPanelWidth = () =>
+  getStoredCommentsPanelWidth() ?? COMMENTS_PANEL_DEFAULT_WIDTH;
+
 const getStoredCommentsPanelOpen = () => getStoredBoolean(COMMENTS_PANEL_OPEN_STORAGE_KEY);
 
 const getInitialCommentsPanelOpen = () => getStoredCommentsPanelOpen() ?? false;
@@ -232,6 +244,7 @@ function App() {
   const [showSparkles, setShowSparkles] = useState(false);
   const [hasTriggeredSparkles, setHasTriggeredSparkles] = useState(false);
   const [isCommentsPanelOpen, setIsCommentsPanelOpen] = useState(getInitialCommentsPanelOpen);
+  const [commentsPanelWidth, setCommentsPanelWidth] = useState(getInitialCommentsPanelWidth);
   const [commentsPanelFilter, setCommentsPanelFilter] = useState<CommentsPanelFilter>('remaining');
   const [commentsPanelFocusRequest, setCommentsPanelFocusRequest] = useState(0);
   const commentsPanelRef = useRef<CommentsPanelHandle>(null);
@@ -1075,6 +1088,18 @@ function App() {
         }
       }
 
+      if (
+        typeof client.commentsPanelWidth === 'number' &&
+        Number.isFinite(client.commentsPanelWidth)
+      ) {
+        setCommentsPanelWidth(clampCommentsPanelWidth(client.commentsPanelWidth));
+      } else {
+        const localCommentsPanelWidth = getStoredCommentsPanelWidth();
+        if (localCommentsPanelWidth !== null) {
+          seed.commentsPanelWidth = localCommentsPanelWidth;
+        }
+      }
+
       if (typeof client.commentsPanelOpen === 'boolean') {
         setIsCommentsPanelOpen(client.commentsPanelOpen);
       } else {
@@ -1129,6 +1154,18 @@ function App() {
     }
     saveClientSettings({ sidebarOpen: isFileTreeOpen });
   }, [isFileTreeOpen]);
+
+  const skipInitialCommentsPanelWidthSaveRef = useRef(true);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(COMMENTS_PANEL_WIDTH_STORAGE_KEY, String(commentsPanelWidth));
+    } catch {}
+    if (skipInitialCommentsPanelWidthSaveRef.current) {
+      skipInitialCommentsPanelWidthSaveRef.current = false;
+      return;
+    }
+    saveClientSettings({ commentsPanelWidth });
+  }, [commentsPanelWidth]);
 
   const skipInitialCommentsPanelOpenSaveRef = useRef(true);
   useEffect(() => {
@@ -2155,15 +2192,30 @@ function App() {
 
           {!isMobile && (
             <div
+              className={`bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+              style={{ width: isCommentsPanelOpen ? '4px' : '0px' }}
+              onMouseDown={startResize(
+                commentsPanelWidth,
+                setCommentsPanelWidth,
+                clampCommentsPanelWidth,
+                -1,
+              )}
+              title="Drag to resize comments panel"
+            />
+          )}
+
+          {!isMobile && (
+            <div
+              data-comments-panel-box
               className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
-              style={{ width: isCommentsPanelOpen ? `${COMMENTS_PANEL_WIDTH}px` : '0px' }}
+              style={{ width: isCommentsPanelOpen ? `${commentsPanelWidth}px` : '0px' }}
             >
               {isCommentsPanelOpen && (
                 <aside
                   id="comments-panel"
                   aria-label="코멘트 패널"
                   className="h-full border-l border-github-border bg-github-bg-secondary"
-                  style={{ width: `${COMMENTS_PANEL_WIDTH}px` }}
+                  style={{ width: `${commentsPanelWidth}px` }}
                 >
                   <CommentsPanel
                     ref={commentsPanelRef}

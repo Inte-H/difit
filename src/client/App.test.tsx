@@ -226,6 +226,7 @@ const linedFile = (path: string, count: number): DiffResponse['files'][number] =
 });
 
 const commentsPanel = () => document.getElementById('comments-panel');
+const commentsPanelBox = () => document.querySelector<HTMLElement>('[data-comments-panel-box]')!;
 const commentsPanelHasFocus = () => commentsPanel()?.contains(document.activeElement) ?? false;
 const diffMain = async () => within(await screen.findByRole('main'));
 
@@ -1721,15 +1722,16 @@ describe('App Component - Comments panel persistence', () => {
     );
   });
 
-  it('takes the open state saved on the server over the one in this browser', async () => {
+  it('takes the open state and width saved on the server over the ones in this browser', async () => {
     resetClientSettingsForTests();
     window.localStorage.setItem('difit.commentsPanelOpen', 'false');
+    window.localStorage.setItem('difit.commentsPanelWidth', '300');
     vi.mocked(global.fetch).mockImplementation((input) => {
       const url = String(input);
       if (url === '/api/user-settings') {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ client: { commentsPanelOpen: true } }),
+          json: async () => ({ client: { commentsPanelOpen: true, commentsPanelWidth: 450 } }),
         } as Response);
       }
       if (url === '/api/revisions') {
@@ -1742,6 +1744,42 @@ describe('App Component - Comments panel persistence', () => {
 
     await waitFor(async () => expect(await toggle()).toHaveAttribute('aria-expanded', 'true'));
     expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('true');
+    expect(commentsPanelBox().style.width).toBe('450px');
+    expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('450');
+  });
+
+  it('opens at the width it was left at, within its limits', async () => {
+    window.localStorage.setItem('difit.commentsPanelOpen', 'true');
+    window.localStorage.setItem('difit.commentsPanelWidth', '400');
+    const { unmount } = renderApp();
+    await toggle();
+    expect(commentsPanelBox().style.width).toBe('400px');
+    unmount();
+
+    window.localStorage.setItem('difit.commentsPanelWidth', '900');
+    const second = renderApp();
+    await toggle();
+    expect(commentsPanelBox().style.width).toBe('600px');
+    second.unmount();
+
+    window.localStorage.setItem('difit.commentsPanelWidth', '100');
+    renderApp();
+    await toggle();
+    expect(commentsPanelBox().style.width).toBe('240px');
+  });
+
+  it('widens by the distance dragged to the left and remembers the width', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(commentsPanelBox().style.width).toBe('320px');
+
+    const handle = screen.getByTitle('Drag to resize comments panel');
+    fireEvent.mouseDown(handle, { clientX: 1000 });
+    fireEvent.mouseMove(document, { clientX: 900 });
+    fireEvent.mouseUp(document);
+
+    expect(commentsPanelBox().style.width).toBe('420px');
+    expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('420');
   });
 });
 
