@@ -8,6 +8,7 @@ import {
   FixupOverlayProvider,
   type FixupOverlayState,
 } from '../contexts/FixupOverlayContext';
+import { PickedThreadProvider } from '../contexts/PickedThreadContext';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -628,6 +629,64 @@ describe('CommentThreadCard', () => {
     await user.click(screen.getByText('Root comment'));
 
     expect(screen.getByText('Reply comment')).toBeInTheDocument();
+  });
+
+  describe('picked from the comments panel', () => {
+    const card = (thread: CommentThread, pickedId: string | null) => (
+      <PickedThreadProvider value={pickedId}>
+        <CommentThreadCard
+          thread={thread}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />
+      </PickedThreadProvider>
+    );
+    const resolvedOverlay: FixupOverlayState = {
+      ...EMPTY_FIXUP_OVERLAY,
+      decisions: [
+        { threadId: mockThread.id, kind: 'resolved', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+      ],
+    };
+
+    it('marks only the picked card', () => {
+      const { rerender } = render(card(mockThread, mockThread.id));
+      expect(document.getElementById(`comment-thread-${mockThread.id}`)).toHaveAttribute(
+        'data-picked',
+        'true',
+      );
+
+      rerender(card(mockThread, 'another'));
+      expect(document.getElementById(`comment-thread-${mockThread.id}`)).not.toHaveAttribute(
+        'data-picked',
+      );
+    });
+
+    it('opens a folded resolved card when it is picked', () => {
+      const { rerender } = render(
+        <FixupOverlayProvider value={resolvedOverlay}>
+          {card(mockThread, null)}
+        </FixupOverlayProvider>,
+      );
+      expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+
+      rerender(
+        <FixupOverlayProvider value={resolvedOverlay}>
+          {card(mockThread, mockThread.id)}
+        </FixupOverlayProvider>,
+      );
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+    });
+
+    it('draws a resolved card open when it first appears picked', () => {
+      render(
+        <FixupOverlayProvider value={resolvedOverlay}>
+          {card(mockThread, mockThread.id)}
+        </FixupOverlayProvider>,
+      );
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+    });
   });
 
   it('names the author of each message when badges are on', () => {

@@ -45,6 +45,26 @@ function getLabel(title: string): HTMLElement {
 }
 
 describe('FileList', () => {
+  it('marks the file of the picked comment apart from the cursor', () => {
+    render(
+      <FileList
+        files={[createFile('a.ts'), createFile('b.ts')]}
+        onScrollToFile={vi.fn()}
+        comments={[]}
+        decisions={[]}
+        reviewedFiles={new Set()}
+        onToggleReviewed={vi.fn()}
+        onToggleFolderReviewed={vi.fn()}
+        selectedFileIndex={0}
+        pickedCommentFilePath="b.ts"
+      />,
+    );
+
+    expect(getTreeRow('b.ts')).toHaveAttribute('data-picked-comment', 'true');
+    expect(getTreeRow('b.ts')).not.toHaveAttribute('aria-current');
+    expect(getTreeRow('a.ts')).not.toHaveAttribute('data-picked-comment');
+  });
+
   it('renders total additions and deletions beside the file count', () => {
     render(
       <FileList

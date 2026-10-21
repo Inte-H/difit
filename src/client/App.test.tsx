@@ -1674,6 +1674,53 @@ describe('App Component - Comments panel', () => {
     expect(row('Second note')).toHaveTextContent('해결');
   });
 
+  it('marks the picked comment on its card and its file', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+
+    await userEvent.click(row('Second note'));
+
+    expect(document.getElementById('comment-thread-p2')).toHaveAttribute('data-picked', 'true');
+    expect(document.getElementById('comment-thread-p1')).not.toHaveAttribute('data-picked');
+    const fileTree = document.getElementById('file-tree-panel')!;
+    expect(within(fileTree).getByTitle('test.ts').closest('[data-file-row]')).toHaveAttribute(
+      'data-picked-comment',
+      'true',
+    );
+  });
+
+  it('unfolds a file folded as viewed to show the picked comment', async () => {
+    mockViewedFiles = new Set(['test.ts']);
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(document.getElementById('comment-thread-p2')).toBeNull();
+
+    await userEvent.click(row('Second note'));
+
+    await waitFor(() =>
+      expect(document.getElementById('comment-thread-p2')).toHaveAttribute('data-picked', 'true'),
+    );
+    await waitFor(() => expect(cursorRow()).toHaveTextContent('line 20'));
+  });
+
+  it('draws a picked resolved comment while resolved comments are hidden', async () => {
+    mockDecisions = [
+      { threadId: 'p2', kind: 'resolved', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+    ];
+    renderApp();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '해결된 지적 보기' }));
+    expect(document.getElementById('comment-thread-p2')).toBeNull();
+    fireEvent.click(await toggle());
+    fireEvent.click(screen.getByRole('button', { name: '전체 2' }));
+
+    await userEvent.click(row('Second note'));
+
+    const card = document.getElementById('comment-thread-p2')!;
+    expect(card).toHaveAttribute('data-picked', 'true');
+    expect(within(card).getByText('Second note')).toBeInTheDocument();
+    expect(document.getElementById('comment-thread-p1')).not.toBeNull();
+  });
+
   it('leaves the diff view mode as it was', async () => {
     window.localStorage.setItem('difit.diffViewMode', 'split');
     renderApp();
@@ -3102,6 +3149,33 @@ describe('App Component - Commits of the review', () => {
     } finally {
       vi.mocked(useDiffComments).mockImplementation(defaultComments);
     }
+  });
+
+  it('unfolds a viewed file on the commit it opens to show a comment picked from the list', async () => {
+    mockViewedFiles = new Set(['test.ts']);
+    mockComments = [pinnedThread('const a = 1;')];
+    const { rerender } = renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    mockHasLoadedInitialViewedFiles = false;
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    mockHasLoadedInitialViewedFiles = true;
+    rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>,
+    );
+
+    await waitFor(() =>
+      expect(document.getElementById('comment-thread-c3')).toHaveAttribute('data-picked', 'true'),
+    );
+    mockViewedFiles = new Set<string>();
   });
 
   it('opens the commit a comment was made on to show it from the list', async () => {

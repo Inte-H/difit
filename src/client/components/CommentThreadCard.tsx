@@ -12,6 +12,7 @@ import { formatCommentContent } from '../../utils/commentFormatting';
 import { isSameCommit } from '../../utils/diffSelection';
 import { isThreadResolved, reviewStateLabel } from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
+import { usePickedThreadId } from '../contexts/PickedThreadContext';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -251,11 +252,17 @@ export function CommentThreadCard({
   const isFolded = decisions.some(
     (decision) => decision.threadId === thread.id && decision.kind === 'folded',
   );
-  const [isCollapsed, setIsCollapsed] = useState(isResolved);
+  const isPicked = usePickedThreadId() === thread.id;
+  const [isCollapsed, setIsCollapsed] = useState(isResolved && !isPicked);
   const [wasResolved, setWasResolved] = useState(isResolved);
   if (wasResolved !== isResolved && !(isResolved && isReplying)) {
     setWasResolved(isResolved);
     setIsCollapsed(isResolved);
+  }
+  const [wasPicked, setWasPicked] = useState(isPicked);
+  if (wasPicked !== isPicked) {
+    setWasPicked(isPicked);
+    if (isPicked) setIsCollapsed(false);
   }
   const answeredByEdit = thread.messages.some((message) => message.author === REVIEWER_EDIT_AUTHOR);
   const lineLabel = Array.isArray(thread.line)
@@ -292,7 +299,10 @@ export function CommentThreadCard({
   return (
     <div
       id={`comment-thread-${thread.id}`}
+      data-picked={isPicked ? 'true' : undefined}
       className={`rounded-md border border-l-4 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
+        isPicked ? 'ring-2 ring-blue-500' : ''
+      } ${
         review
           ? thread.isOutdated
             ? 'border-github-border border-l-github-danger'

@@ -11,6 +11,7 @@ interface FileChipsProps {
   reviewedFiles: Set<string>;
   selectedFileIndex: number | null;
   scrollVisibleFileIndex?: number | null;
+  pickedCommentFilePath?: string | null;
   onScrollToFile: (path: string) => void;
 }
 
@@ -23,6 +24,7 @@ export const FileChips = memo(function FileChips({
   reviewedFiles,
   selectedFileIndex,
   scrollVisibleFileIndex = null,
+  pickedCommentFilePath = null,
   onScrollToFile,
 }: FileChipsProps) {
   const stripRef = useRef<HTMLElement>(null);
@@ -68,6 +70,7 @@ export const FileChips = memo(function FileChips({
         const isViewed = reviewedFiles.has(file.path);
         const isCurrent = selectedFileIndex === index;
         const isScrollVisible = scrollVisibleFileIndex === index;
+        const isPickedCommentFile = pickedCommentFilePath === file.path;
         return (
           <button
             key={file.path}
@@ -83,6 +86,7 @@ export const FileChips = memo(function FileChips({
             data-viewed={isViewed ? 'true' : undefined}
             aria-current={isCurrent ? 'true' : undefined}
             data-scroll-visible={isScrollVisible ? 'true' : undefined}
+            data-picked-comment={isPickedCommentFile ? 'true' : undefined}
             onClick={() => onScrollToFile(file.path)}
             className={`shrink-0 inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-mono whitespace-nowrap transition-colors ${
               isCurrent
@@ -90,7 +94,7 @@ export const FileChips = memo(function FileChips({
                 : 'border-github-border bg-github-bg-primary'
             } ${isViewed ? 'text-github-text-muted line-through' : 'text-github-text-primary'} ${
               isScrollVisible ? 'shadow-[inset_3px_0_0_0_var(--color-github-text-secondary)]' : ''
-            }`}
+            } ${isPickedCommentFile ? 'ring-1 ring-blue-500' : ''}`}
           >
             {baseName(file.path)}
             {commentCount > 0 && (

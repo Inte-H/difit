@@ -34,6 +34,28 @@ const decide = (threadId: string, kind: 'resolved' | 'unresolved', at: string): 
 describe('FileChips', () => {
   const files = [createFile('src/lib/strings.js'), createFile('calc.js')];
 
+  it('marks the file of the picked comment apart from the cursor', () => {
+    render(
+      <FileChips
+        files={files}
+        comments={[]}
+        decisions={[]}
+        reviewedFiles={new Set()}
+        selectedFileIndex={0}
+        pickedCommentFilePath="calc.js"
+        onScrollToFile={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'calc.js' })).toHaveAttribute(
+      'data-picked-comment',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: 'strings.js' })).not.toHaveAttribute(
+      'data-picked-comment',
+    );
+  });
+
   it('shows one chip per file named by its base name and jumps to the file when tapped', () => {
     const onScrollToFile = vi.fn();
     render(

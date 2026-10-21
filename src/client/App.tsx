@@ -80,6 +80,7 @@ import {
   recordWithPatchId,
   type FixupOverlayState,
 } from './contexts/FixupOverlayContext';
+import { PickedThreadProvider } from './contexts/PickedThreadContext';
 import { WordHighlightProvider } from './contexts/WordHighlightContext';
 import { useAppearanceSettings } from './hooks/useAppearanceSettings';
 import { useDiffComments } from './hooks/useDiffComments';
@@ -781,9 +782,24 @@ function App() {
     () => drawnThreads.filter((thread) => !resolvedThreadIds.has(thread.id)),
     [drawnThreads, resolvedThreadIds],
   );
+  const pickedThread = useMemo(
+    () => normalizedThreads.find((thread) => thread.id === pickedThreadId) ?? null,
+    [normalizedThreads, pickedThreadId],
+  );
+  const keptPickedThreadId =
+    !showResolvedThreads && pickedThread && resolvedThreadIds.has(pickedThread.id)
+      ? pickedThread.id
+      : null;
   const threadsByFile = useMemo(() => {
     const map = new Map<string, CommentThread[]>();
-    (showResolvedThreads ? drawnThreads : unresolvedThreads).forEach((thread) => {
+    const shown = showResolvedThreads
+      ? drawnThreads
+      : keptPickedThreadId
+        ? drawnThreads.filter(
+            (thread) => !resolvedThreadIds.has(thread.id) || thread.id === keptPickedThreadId,
+          )
+        : unresolvedThreads;
+    shown.forEach((thread) => {
       const entry = map.get(thread.file);
       if (entry) {
         entry.push(thread);
@@ -792,7 +808,7 @@ function App() {
       }
     });
     return map;
-  }, [drawnThreads, unresolvedThreads, showResolvedThreads]);
+  }, [drawnThreads, unresolvedThreads, showResolvedThreads, keptPickedThreadId, resolvedThreadIds]);
 
   // State to trigger comment creation from keyboard
   const [commentTrigger, setCommentTrigger] = useState<{
@@ -1576,20 +1592,42 @@ function App() {
       return;
     }
 
-    const position = findCommentPosition(thread, diffData.files);
-    if (position) {
-      setCursorPosition(position);
-    }
+    jumpToThread(thread, collapsedFiles.has(thread.file));
   };
+  const jumpToThread = (thread: CommentThread, afterRender: boolean) => {
+    if (!diffData) return;
+    const files = diffData.files;
+    setCollapsedFiles((prev) => {
+      if (!prev.has(thread.file)) return prev;
+      const next = new Set(prev);
+      next.delete(thread.file);
+      return next;
+    });
+    const moveCursor = () => {
+      const position = findCommentPosition(thread, files);
+      if (position) setCursorPosition(position);
+    };
+    if (afterRender) requestAnimationFrame(moveCursor);
+    else moveCursor();
+  };
+  const jumpToThreadRef = useRef(jumpToThread);
+  jumpToThreadRef.current = jumpToThread;
   useEffect(() => {
     const threadId = pendingCommentNavigationRef.current;
     if (!threadId || !diffData || !hasLoadedComments || hiddenThreadIds.has(threadId)) return;
+    // A new view folds its viewed files once they load; jumping before that would be folded again.
+    if (!collapsedInitializedRef.current && !hasLoadedInitialViewedFiles) return;
     pendingCommentNavigationRef.current = null;
     const thread = normalizedThreads.find(({ id }) => id === threadId);
     if (!thread) return;
-    const position = findCommentPosition(thread, diffData.files);
-    if (position) setCursorPosition(position);
-  }, [diffData, hasLoadedComments, normalizedThreads, hiddenThreadIds, setCursorPosition]);
+    jumpToThreadRef.current(thread, true);
+  }, [
+    diffData,
+    hasLoadedComments,
+    hasLoadedInitialViewedFiles,
+    normalizedThreads,
+    hiddenThreadIds,
+  ]);
 
   const handleOpenInEditor = useCallback(
     async (filePath: string, lineNumber: number) => {
@@ -1959,6 +1997,7 @@ function App() {
             reviewedFiles={viewedFiles}
             selectedFileIndex={cursor?.fileIndex ?? null}
             scrollVisibleFileIndex={scrollVisibleFileIndex}
+            pickedCommentFilePath={pickedThread?.file ?? null}
             onScrollToFile={scrollFileIntoDiffContainer}
           />
         )}
@@ -2050,6 +2089,7 @@ function App() {
                   onToggleFolderReviewed={toggleFolderReviewed}
                   selectedFileIndex={cursor?.fileIndex ?? null}
                   scrollVisibleFileIndex={scrollVisibleFileIndex}
+                  pickedCommentFilePath={pickedThread?.file ?? null}
                 />
               </div>
               {showsCommitList && (
@@ -2099,96 +2139,98 @@ function App() {
             />
           )}
 
-          <main
-            ref={diffScrollContainerRef}
-            className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
-          >
-            {diffData.files.map((file, fileIndex) => {
-              const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
-              const mergedChunks =
-                getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path) ??
-                EMPTY_MERGED_CHUNKS;
-              const isRendered = renderedFilePaths.has(file.path);
-              return (
-                <div
-                  key={file.path}
-                  id={getFileElementId(file.path)}
-                  data-file-path={file.path}
-                  data-rendered={isRendered ? 'true' : 'false'}
-                  ref={(node) => registerLazyFileContainer(file.path, node)}
-                  className="mb-6"
-                  onMouseEnter={() => {
-                    hoveredFileIndexRef.current = fileIndex;
-                  }}
-                  onMouseLeave={() => {
-                    if (hoveredFileIndexRef.current === fileIndex) {
-                      hoveredFileIndexRef.current = null;
-                    }
-                  }}
-                >
-                  {isRendered ? (
-                    <DiffViewer
-                      file={file}
-                      threads={fileThreads}
-                      showAuthorBadges={showAuthorBadges}
-                      diffMode={diffMode}
-                      reviewedFiles={viewedFiles}
-                      isChangedSinceViewed={changedSinceViewedFiles.has(file.path)}
-                      onToggleReviewed={handleViewedButtonToggle}
-                      collapsedFiles={collapsedFiles}
-                      onToggleCollapsed={toggleFileCollapsed}
-                      onToggleAllCollapsed={toggleAllFilesCollapsed}
-                      onAddComment={takesComments ? handleAddComment : undefined}
-                      onResolveThread={resolveThread}
-                      onReplyToThread={handleReplyToThread}
-                      onRemoveMessage={removeMessage}
-                      onUpdateMessage={updateMessage}
-                      onOpenInEditor={canOpenInEditor ? handleOpenInEditor : undefined}
-                      syntaxTheme={settings.syntaxTheme}
-                      baseCommitish={diffData.baseCommitish}
-                      targetCommitish={diffData.targetCommitish}
-                      cursor={cursor?.fileIndex === fileIndex ? cursor : null}
-                      isFocused={cursor?.fileIndex === fileIndex}
-                      fileIndex={fileIndex}
-                      onLineClick={handleLineClick}
-                      commentTrigger={
-                        commentTrigger?.fileIndex === fileIndex ? commentTrigger : null
+          <PickedThreadProvider value={pickedThread?.id ?? null}>
+            <main
+              ref={diffScrollContainerRef}
+              className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
+            >
+              {diffData.files.map((file, fileIndex) => {
+                const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
+                const mergedChunks =
+                  getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path) ??
+                  EMPTY_MERGED_CHUNKS;
+                const isRendered = renderedFilePaths.has(file.path);
+                return (
+                  <div
+                    key={file.path}
+                    id={getFileElementId(file.path)}
+                    data-file-path={file.path}
+                    data-rendered={isRendered ? 'true' : 'false'}
+                    ref={(node) => registerLazyFileContainer(file.path, node)}
+                    className="mb-6"
+                    onMouseEnter={() => {
+                      hoveredFileIndexRef.current = fileIndex;
+                    }}
+                    onMouseLeave={() => {
+                      if (hoveredFileIndexRef.current === fileIndex) {
+                        hoveredFileIndexRef.current = null;
                       }
-                      onCommentTriggerHandled={handleCommentTriggerHandled}
-                      mergedChunks={mergedChunks}
-                      expandLines={expandLines}
-                      expandAllBetweenChunks={expandAllBetweenChunks}
-                      prefetchFileContent={prefetchFileContent}
-                      isExpandLoading={isExpandLoading}
-                      diffVersion={diffDataVersion}
-                      fixupOverlay={fixupOverlay}
-                      foldCommentChanges={foldCommentChanges}
-                    />
-                  ) : (
-                    <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="text-xs uppercase tracking-wide text-github-text-muted">
-                            Deferred Rendering
+                    }}
+                  >
+                    {isRendered ? (
+                      <DiffViewer
+                        file={file}
+                        threads={fileThreads}
+                        showAuthorBadges={showAuthorBadges}
+                        diffMode={diffMode}
+                        reviewedFiles={viewedFiles}
+                        isChangedSinceViewed={changedSinceViewedFiles.has(file.path)}
+                        onToggleReviewed={handleViewedButtonToggle}
+                        collapsedFiles={collapsedFiles}
+                        onToggleCollapsed={toggleFileCollapsed}
+                        onToggleAllCollapsed={toggleAllFilesCollapsed}
+                        onAddComment={takesComments ? handleAddComment : undefined}
+                        onResolveThread={resolveThread}
+                        onReplyToThread={handleReplyToThread}
+                        onRemoveMessage={removeMessage}
+                        onUpdateMessage={updateMessage}
+                        onOpenInEditor={canOpenInEditor ? handleOpenInEditor : undefined}
+                        syntaxTheme={settings.syntaxTheme}
+                        baseCommitish={diffData.baseCommitish}
+                        targetCommitish={diffData.targetCommitish}
+                        cursor={cursor?.fileIndex === fileIndex ? cursor : null}
+                        isFocused={cursor?.fileIndex === fileIndex}
+                        fileIndex={fileIndex}
+                        onLineClick={handleLineClick}
+                        commentTrigger={
+                          commentTrigger?.fileIndex === fileIndex ? commentTrigger : null
+                        }
+                        onCommentTriggerHandled={handleCommentTriggerHandled}
+                        mergedChunks={mergedChunks}
+                        expandLines={expandLines}
+                        expandAllBetweenChunks={expandAllBetweenChunks}
+                        prefetchFileContent={prefetchFileContent}
+                        isExpandLoading={isExpandLoading}
+                        diffVersion={diffDataVersion}
+                        fixupOverlay={fixupOverlay}
+                        foldCommentChanges={foldCommentChanges}
+                      />
+                    ) : (
+                      <div className="bg-github-bg-secondary border border-github-border rounded-md px-4 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs uppercase tracking-wide text-github-text-muted">
+                              Deferred Rendering
+                            </div>
+                            <div className="text-sm font-mono text-github-text-primary truncate">
+                              {file.path}
+                            </div>
                           </div>
-                          <div className="text-sm font-mono text-github-text-primary truncate">
-                            {file.path}
-                          </div>
+                          <button
+                            type="button"
+                            onClick={() => ensureFileRendered(file.path)}
+                            className="px-3 py-1.5 text-xs rounded border border-github-border text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary"
+                          >
+                            Load now
+                          </button>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => ensureFileRendered(file.path)}
-                          className="px-3 py-1.5 text-xs rounded border border-github-border text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary"
-                        >
-                          Load now
-                        </button>
                       </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </main>
+                    )}
+                  </div>
+                );
+              })}
+            </main>
+          </PickedThreadProvider>
 
           {!isMobile && (
             <div
@@ -2224,7 +2266,7 @@ function App() {
                     resolvedThreadIds={resolvedThreadIds}
                     filter={commentsPanelFilter}
                     onFilterChange={setCommentsPanelFilter}
-                    pickedThreadId={pickedThreadId}
+                    pickedThreadId={pickedThread?.id ?? null}
                     onPick={pickComment}
                     onResolveThread={resolveThread}
                     onClose={() => setIsCommentsPanelOpen(false)}
