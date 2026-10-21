@@ -8,6 +8,7 @@ import {
   PanelRightClose,
   Keyboard,
   GitCommitHorizontal,
+  MessageSquare,
 } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
@@ -245,6 +246,7 @@ function App() {
   const [showSparkles, setShowSparkles] = useState(false);
   const [hasTriggeredSparkles, setHasTriggeredSparkles] = useState(false);
   const [isCommentsPanelOpen, setIsCommentsPanelOpen] = useState(getInitialCommentsPanelOpen);
+  const [isCommentsDrawerOpen, setIsCommentsDrawerOpen] = useState(false);
   const [commentsPanelWidth, setCommentsPanelWidth] = useState(getInitialCommentsPanelWidth);
   const [commentsPanelFilter, setCommentsPanelFilter] = useState<CommentsPanelFilter>('remaining');
   const [commentsPanelFocusRequest, setCommentsPanelFocusRequest] = useState(0);
@@ -320,6 +322,8 @@ function App() {
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
   const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
+  const isCommentsPanelShown = isMobile ? isCommentsDrawerOpen : isCommentsPanelOpen;
+  const setCommentsPanelShown = isMobile ? setIsCommentsDrawerOpen : setIsCommentsPanelOpen;
   const hasCommitList = review !== undefined && review.commits.length > 1;
   const showsCommitList = !isMobile && hasCommitList;
 
@@ -840,9 +844,9 @@ function App() {
   );
 
   const openCommentsPanelWithKeys = useCallback(() => {
-    setIsCommentsPanelOpen(true);
+    setCommentsPanelShown(true);
     setCommentsPanelFocusRequest((count) => count + 1);
-  }, []);
+  }, [setCommentsPanelShown]);
   useEffect(() => {
     if (commentsPanelFocusRequest > 0) commentsPanelRef.current?.focus();
   }, [commentsPanelFocusRequest]);
@@ -879,13 +883,13 @@ function App() {
         }
       },
       onToggleCommentsPanel: () => {
-        if (!isCommentsPanelOpen) {
+        if (!isCommentsPanelShown) {
           openCommentsPanelWithKeys();
         } else if (!commentsPanelRef.current?.hasFocus()) {
           setCommentsPanelFocusRequest((count) => count + 1);
         } else {
           (document.activeElement as HTMLElement | null)?.blur();
-          setIsCommentsPanelOpen(false);
+          setCommentsPanelShown(false);
         }
       },
       onRefresh: () => {
@@ -1692,6 +1696,26 @@ function App() {
     });
   };
 
+  const commentsPanelBody = (
+    <CommentsPanel
+      ref={commentsPanelRef}
+      threads={normalizedThreads}
+      statusById={commentPanelStatusById}
+      resolvedThreadIds={resolvedThreadIds}
+      filter={commentsPanelFilter}
+      onFilterChange={setCommentsPanelFilter}
+      pickedThreadId={pickedThread?.id ?? null}
+      onPick={(thread) => {
+        pickComment(thread);
+        if (isMobile) setIsCommentsDrawerOpen(false);
+      }}
+      onResolveThread={resolveThread}
+      {...(isMobile && { onEscape: () => setIsCommentsDrawerOpen(false) })}
+      onClose={() => setCommentsPanelShown(false)}
+      inDrawer={isMobile}
+    />
+  );
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen bg-github-bg-primary">
@@ -1771,6 +1795,20 @@ function App() {
                   <span className="min-w-0 max-w-40 truncate text-xs">
                     <ShownCommits commits={review.commits} shown={shownView} />
                   </span>
+                </button>
+              )}
+              {isMobile && (
+                <button
+                  type="button"
+                  onClick={() => setIsCommentsDrawerOpen(!isCommentsDrawerOpen)}
+                  className="flex items-center gap-1 p-2 text-xs text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary rounded transition-colors"
+                  title="코멘트 패널"
+                  aria-expanded={isCommentsDrawerOpen}
+                  aria-controls="comments-panel"
+                  aria-label="Toggle comments panel"
+                >
+                  <MessageSquare size={18} />
+                  {threads.length}
                 </button>
               )}
               <button
@@ -2051,6 +2089,28 @@ function App() {
           </>
         )}
 
+        {isMobile && (
+          <>
+            {isCommentsDrawerOpen && (
+              <button
+                type="button"
+                aria-label="코멘트 서랍 닫기"
+                className="fixed inset-0 bg-black/40 z-30"
+                onClick={() => setIsCommentsDrawerOpen(false)}
+              />
+            )}
+            <aside
+              id="comments-panel"
+              aria-label="코멘트 패널"
+              inert={!isCommentsDrawerOpen}
+              className="fixed inset-y-0 right-0 z-40 w-[min(85vw,360px)] bg-github-bg-secondary border-l border-github-border transition-transform duration-300 ease-out"
+              style={{ transform: isCommentsDrawerOpen ? 'translateX(0)' : 'translateX(100%)' }}
+            >
+              {commentsPanelBody}
+            </aside>
+          </>
+        )}
+
         <div className="flex flex-1 overflow-hidden relative">
           <div
             className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
@@ -2259,18 +2319,7 @@ function App() {
                   className="h-full border-l border-github-border bg-github-bg-secondary"
                   style={{ width: `${commentsPanelWidth}px` }}
                 >
-                  <CommentsPanel
-                    ref={commentsPanelRef}
-                    threads={normalizedThreads}
-                    statusById={commentPanelStatusById}
-                    resolvedThreadIds={resolvedThreadIds}
-                    filter={commentsPanelFilter}
-                    onFilterChange={setCommentsPanelFilter}
-                    pickedThreadId={pickedThread?.id ?? null}
-                    onPick={pickComment}
-                    onResolveThread={resolveThread}
-                    onClose={() => setIsCommentsPanelOpen(false)}
-                  />
+                  {commentsPanelBody}
                 </aside>
               )}
             </div>

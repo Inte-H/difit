@@ -1830,6 +1830,81 @@ describe('App Component - Comments panel persistence', () => {
   });
 });
 
+describe('App Component - Comments drawer on a phone', () => {
+  const toggle = () => screen.findByRole('button', { name: 'Toggle comments panel' });
+  const row = (text: string) =>
+    within(commentsPanel()!).getByRole('button', { name: new RegExp(text) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDecisions = [];
+    mockComments = [
+      createMockThread({ id: 'p1', filePath: 'test.ts', line: 10, body: 'First note' }),
+      createMockThread({ id: 'p2', filePath: 'test.ts', line: 20, body: 'Second note' }),
+    ];
+    mockConfirm.mockReturnValue(false);
+    vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+    mockFetch({ ...mockDiffResponse, files: [linedFile('test.ts', 30)] });
+  });
+
+  afterEach(() => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+  });
+
+  it('slides in from the header button and leaves the PC preference alone', async () => {
+    window.localStorage.setItem('difit.commentsPanelOpen', 'false');
+    renderApp();
+
+    const button = await toggle();
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(commentsPanel()).toHaveAttribute('inert');
+
+    fireEvent.click(button);
+
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(commentsPanel()).not.toHaveAttribute('inert');
+    expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('false');
+  });
+
+  it('closes when a comment is picked and goes to its line', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+
+    await userEvent.click(row('Second note'));
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(commentsPanel()).toHaveAttribute('inert');
+    await waitFor(() =>
+      expect(document.querySelector('tr.keyboard-cursor')).toHaveTextContent('line 20'),
+    );
+    expect(document.getElementById('comment-thread-p2')).toHaveAttribute('data-picked', 'true');
+  });
+
+  it('opens from 「View All Comments」 in the bottom bar', async () => {
+    renderApp();
+
+    fireEvent.click(await screen.findByTitle('More options'));
+    fireEvent.click(await screen.findByText('View All Comments'));
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(row('First note')).toHaveFocus());
+  });
+
+  it('closes on Escape and on the backdrop', async () => {
+    renderApp();
+    await toggle();
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Escape}');
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(await toggle());
+    fireEvent.click(screen.getByRole('button', { name: '코멘트 서랍 닫기' }));
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
 describe('App Component - Mobile layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
