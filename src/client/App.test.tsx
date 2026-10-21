@@ -2133,6 +2133,31 @@ describe('App Component - Commits of the review', () => {
     });
   });
 
+  it('saves the first height the commit list is dragged to from its default', async () => {
+    renderApp();
+
+    const commits = await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    expect(commits.style.maxHeight).toBe('40%');
+    Object.defineProperty(document.getElementById('file-tree-panel')!, 'clientHeight', {
+      value: 800,
+    });
+    vi.spyOn(commits, 'getBoundingClientRect').mockReturnValue({ height: 300 } as DOMRect);
+    Object.defineProperty(within(commits).getByRole('list'), 'scrollHeight', { value: 1000 });
+    const edge = within(commits).getByRole('separator', { name: '커밋 목록 높이 조절' });
+    fireEvent.mouseDown(edge, { clientY: 500 });
+    fireEvent.mouseMove(document, { clientY: 450 });
+    fireEvent.mouseUp(document);
+
+    expect(window.localStorage.getItem('difit.commitListHeight')).toBe('350');
+    await waitFor(() => {
+      const saved = vi
+        .mocked(global.fetch)
+        .mock.calls.filter(([url, init]) => url === '/api/user-settings' && init?.method === 'PUT')
+        .map(([, init]) => JSON.parse(String(init?.body)));
+      expect(saved).toContainEqual({ client: { commitListHeight: 350 } });
+    });
+  });
+
   it('counts the open comments of each commit again as comments are added or resolved', async () => {
     const onFirstStep = (id: string): DiffCommentThread => ({
       ...createMockThread({ id, filePath: 'test.ts', line: 1, body: `On the first step ${id}` }),
