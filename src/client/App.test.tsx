@@ -1890,6 +1890,17 @@ describe('App Component - Comments drawer on a phone', () => {
     await waitFor(() => expect(row('First note')).toHaveFocus());
   });
 
+  it('closes on Escape after opening from the header button', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(commentsPanelHasFocus()).toBe(false);
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+
   it('closes on Escape and on the backdrop', async () => {
     renderApp();
     await toggle();

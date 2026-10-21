@@ -11,6 +11,7 @@ import {
   MessageSquare,
 } from 'lucide-react';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useHotkeys } from 'react-hotkeys-hook';
 
 import {
   type DiffCommentThread,
@@ -324,6 +325,10 @@ function App() {
   const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
   const isCommentsPanelShown = isMobile ? isCommentsDrawerOpen : isCommentsPanelOpen;
   const setCommentsPanelShown = isMobile ? setIsCommentsDrawerOpen : setIsCommentsPanelOpen;
+  useHotkeys('escape', () => setIsCommentsDrawerOpen(false), {
+    scopes: 'navigation',
+    enabled: isMobile && isCommentsDrawerOpen,
+  });
   const hasCommitList = review !== undefined && review.commits.length > 1;
   const showsCommitList = !isMobile && hasCommitList;
 
