@@ -12,6 +12,7 @@ import { useHotkeysContext } from 'react-hotkeys-hook';
 
 import type { CommentThread } from '../../types/diff';
 import type { CommentPanelStatus } from '../../utils/reviewDecisions';
+import { keyByPosition } from '../utils/keyByPosition';
 
 export type CommentsPanelFilter = 'remaining' | 'all';
 
@@ -136,7 +137,7 @@ export function CommentsPanel({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (!takesKeys || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
-    switch (event.key) {
+    switch (keyByPosition(event)) {
       case 'j':
       case 'ArrowDown':
         focusRow(shown[Math.min(activeIndex + 1, shown.length - 1)]);
