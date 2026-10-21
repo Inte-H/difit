@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
@@ -211,6 +211,80 @@ describe('CommitList', () => {
     expect(screen.getByRole('button', { expanded: false })).toHaveTextContent(
       '1111111 pin the old behavior',
     );
+  });
+
+  describe('height', () => {
+    const region = () => screen.getByRole('region', { name: '리뷰 범위의 커밋' });
+    const edge = () => screen.getByRole('separator', { name: '커밋 목록 높이 조절' });
+
+    function renderResizable(height?: number, { listContentHeight = 1000 } = {}) {
+      const onResize = vi.fn();
+      const { container } = render(
+        <CommitList
+          review={REVIEW}
+          shown={{ kind: 'all' }}
+          onSelect={vi.fn()}
+          height={height}
+          onResize={onResize}
+        />,
+      );
+      Object.defineProperty(container, 'clientHeight', { value: 600 });
+      vi.spyOn(region(), 'getBoundingClientRect').mockReturnValue({ height: 200 } as DOMRect);
+      Object.defineProperty(list(), 'clientHeight', { value: 150 });
+      Object.defineProperty(list(), 'scrollHeight', { value: listContentHeight });
+      return onResize;
+    }
+
+    it('grows as its top edge is dragged up and always leaves the files room', () => {
+      const onResize = renderResizable();
+
+      fireEvent.mouseDown(edge(), { clientY: 500 });
+      fireEvent.mouseMove(document, { clientY: 450 });
+      expect(onResize).toHaveBeenLastCalledWith(250);
+      fireEvent.mouseMove(document, { clientY: 0 });
+      expect(onResize).toHaveBeenLastCalledWith(440);
+      fireEvent.mouseMove(document, { clientY: 900 });
+      expect(onResize).toHaveBeenLastCalledWith(80);
+      fireEvent.mouseUp(document);
+      fireEvent.mouseMove(document, { clientY: 450 });
+
+      expect(onResize).toHaveBeenCalledTimes(3);
+    });
+
+    it('grows no taller than its commits need', () => {
+      const onResize = renderResizable(undefined, { listContentHeight: 250 });
+
+      fireEvent.mouseDown(edge(), { clientY: 500 });
+      fireEvent.mouseMove(document, { clientY: 0 });
+
+      expect(onResize).toHaveBeenLastCalledWith(300);
+    });
+
+    it('keeps the chosen height when every commit already shows and the edge is dragged up', () => {
+      const onResize = renderResizable(undefined, { listContentHeight: 150 });
+
+      fireEvent.mouseDown(edge(), { clientY: 500 });
+      fireEvent.mouseMove(document, { clientY: 0 });
+
+      expect(onResize).not.toHaveBeenCalled();
+    });
+
+    it('takes at most part of the sidebar until a height is chosen, then at most that', () => {
+      renderResizable();
+      expect(region().style.maxHeight).toBe('40%');
+
+      cleanup();
+      renderResizable(300);
+      expect(region().style.maxHeight).toContain('300px');
+    });
+
+    it('offers no edge to drag once folded', () => {
+      renderResizable();
+
+      fireEvent.click(header());
+
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+    });
   });
 
   describe('commit graph', () => {

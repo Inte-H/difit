@@ -109,6 +109,7 @@ const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
 const DIFF_VIEW_MODE_STORAGE_KEY = 'difit.diffViewMode';
 const SIDEBAR_WIDTH_STORAGE_KEY = 'difit.sidebarWidth';
 const SIDEBAR_OPEN_STORAGE_KEY = 'difit.sidebarOpen';
+const COMMIT_LIST_HEIGHT_STORAGE_KEY = 'difit.commitListHeight';
 const SIDEBAR_MIN_WIDTH = 200;
 const SIDEBAR_MAX_WIDTH = 600;
 const SIDEBAR_DEFAULT_WIDTH = 280;
@@ -175,6 +176,23 @@ const getStoredSidebarOpen = (): boolean | null => {
 
 const getInitialFileTreeOpen = () => getStoredSidebarOpen() ?? true;
 
+const parseCommitListHeight = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+
+const getStoredCommitListHeight = (): number | null => {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  const stored = window.localStorage.getItem(COMMIT_LIST_HEIGHT_STORAGE_KEY);
+  return stored ? parseCommitListHeight(Number.parseInt(stored, 10)) : null;
+};
+
+const storeCommitListHeight = (height: number) => {
+  try {
+    window.localStorage.setItem(COMMIT_LIST_HEIGHT_STORAGE_KEY, String(height));
+  } catch {}
+};
+
 function App() {
   const [diffData, setDiffData] = useState<DiffResponse | null>(null);
   const [diffDataVersion, setDiffDataVersion] = useState(0);
@@ -186,6 +204,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [copyAllNotice, setCopyAllNotice] = useState<CopyAllNotice | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(getInitialSidebarWidth);
+  const [commitListHeight, setCommitListHeight] = useState(getStoredCommitListHeight);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
   // The phone drawer covers the diff, so it starts closed and does not touch the saved PC preference.
@@ -998,6 +1017,17 @@ function App() {
         }
       }
 
+      const remoteCommitListHeight = parseCommitListHeight(client.commitListHeight);
+      if (remoteCommitListHeight !== null) {
+        setCommitListHeight(remoteCommitListHeight);
+        storeCommitListHeight(remoteCommitListHeight);
+      } else {
+        const localCommitListHeight = getStoredCommitListHeight();
+        if (localCommitListHeight !== null) {
+          seed.commitListHeight = localCommitListHeight;
+        }
+      }
+
       if (Object.keys(seed).length > 0) {
         saveClientSettings(seed);
       }
@@ -1022,6 +1052,13 @@ function App() {
     }
     saveClientSettings({ sidebarWidth });
   }, [sidebarWidth]);
+
+  const handleCommitListResize = useCallback((height: number) => {
+    const rounded = Math.round(height);
+    setCommitListHeight(rounded);
+    storeCommitListHeight(rounded);
+    saveClientSettings({ commitListHeight: rounded });
+  }, []);
 
   const skipInitialSidebarOpenSaveRef = useRef(true);
   useEffect(() => {
@@ -1871,15 +1908,6 @@ function App() {
                   : undefined,
               }}
             >
-              {showsCommitList && (
-                <CommitList
-                  review={review}
-                  shown={shownView}
-                  onSelect={selectView}
-                  rangeStart={rangeStart}
-                  openCounts={openCountsByCommit}
-                />
-              )}
               <div className="flex-1 overflow-y-auto">
                 <FileList
                   files={diffData.files}
@@ -1894,6 +1922,17 @@ function App() {
                   scrollVisibleFileIndex={scrollVisibleFileIndex}
                 />
               </div>
+              {showsCommitList && (
+                <CommitList
+                  review={review}
+                  shown={shownView}
+                  onSelect={selectView}
+                  rangeStart={rangeStart}
+                  openCounts={openCountsByCommit}
+                  height={commitListHeight}
+                  onResize={handleCommitListResize}
+                />
+              )}
               {!isMobile && (
                 <div className="p-4 border-t border-github-border flex justify-between items-center">
                   <button
