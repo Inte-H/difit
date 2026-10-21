@@ -3,7 +3,8 @@ import type { MergedCommit, ReviewCommit } from '../types/diff.js';
 // Lane 0 is the first-parent line of the review; lane 1 is the branch a merge brings in, drawn in
 // the colour of its branch: the branches are numbered in the order of their merges. The branch runs
 // straight beside its commits and curves only in the rows of the commit above it (`forkBelow`) and of
-// its merge (`join`).
+// its merge (`join`). Below a merge the branch curves off in its own first row (`fork`) instead; when
+// the review's first commit is a merge, its branch comes straight down from outside the list.
 export interface CommitGraphCell {
   above: boolean;
   below: boolean;
@@ -45,7 +46,7 @@ export function layoutCommitGraph(commits: readonly ReviewCommit[]): CommitGraph
           above: true,
           below: true,
           dot: entry.kind === 'commit' ? { lane: 1 } : null,
-          branch: { shape: position === 0 && index === 0 ? 'fork' : 'through', color },
+          branch: { shape: position === 0 && branchOf.has(index - 1) ? 'fork' : 'through', color },
           forkBelow: null,
         },
       }),
@@ -58,7 +59,7 @@ export function layoutCommitGraph(commits: readonly ReviewCommit[]): CommitGraph
         below: index < commits.length - 1,
         dot: { lane: 0 },
         branch: merged.length > 0 ? { shape: 'join', color } : null,
-        forkBelow: branchOf.get(index + 1) ?? null,
+        forkBelow: branchOf.has(index) ? null : (branchOf.get(index + 1) ?? null),
       },
       merged,
     };
