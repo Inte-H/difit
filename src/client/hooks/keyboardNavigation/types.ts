@@ -41,7 +41,7 @@ export interface UseKeyboardNavigationProps {
   onCreateComment?: () => void;
   onCopyAllComments?: () => void;
   onDeleteAllComments?: () => void;
-  onShowCommentsList?: () => void;
+  onToggleCommentsPanel?: () => void;
   onRefresh?: () => void;
   onPreviousCommit?: () => void;
   onNextCommit?: () => void;

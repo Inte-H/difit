@@ -12,6 +12,7 @@ import { formatCommentContent } from '../../utils/commentFormatting';
 import { isSameCommit } from '../../utils/diffSelection';
 import { isThreadResolved, reviewStateLabel } from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
+import { usePickedThreadId } from '../contexts/PickedThreadContext';
 import { useClickOutside } from '../hooks/useClickOutside';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -64,7 +65,7 @@ function ThreadMessageItem({
     confirmButtonRef.current?.focus();
 
     // Capture phase so Escape only cancels the confirmation and never reaches
-    // surrounding Escape handlers (e.g. the CommentsListModal close hotkey).
+    // surrounding Escape handlers (e.g. the comments panel handing the keys back).
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -229,7 +230,6 @@ interface CommentThreadCardProps {
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
-  onClick?: (e: React.MouseEvent) => void;
   // Absent when this comment cannot be answered by editing the code here.
   onEditDirectly?: () => void;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
@@ -243,7 +243,6 @@ export function CommentThreadCard({
   onReplyToThread,
   onRemoveMessage,
   onUpdateMessage,
-  onClick,
   onEditDirectly,
   syntaxTheme,
 }: CommentThreadCardProps) {
@@ -253,11 +252,17 @@ export function CommentThreadCard({
   const isFolded = decisions.some(
     (decision) => decision.threadId === thread.id && decision.kind === 'folded',
   );
-  const [isCollapsed, setIsCollapsed] = useState(isResolved);
+  const isPicked = usePickedThreadId() === thread.id;
+  const [isCollapsed, setIsCollapsed] = useState(isResolved && !isPicked);
   const [wasResolved, setWasResolved] = useState(isResolved);
   if (wasResolved !== isResolved && !(isResolved && isReplying)) {
     setWasResolved(isResolved);
     setIsCollapsed(isResolved);
+  }
+  const [wasPicked, setWasPicked] = useState(isPicked);
+  if (wasPicked !== isPicked) {
+    setWasPicked(isPicked);
+    if (isPicked) setIsCollapsed(false);
   }
   const answeredByEdit = thread.messages.some((message) => message.author === REVIEWER_EDIT_AUTHOR);
   const lineLabel = Array.isArray(thread.line)
@@ -294,14 +299,16 @@ export function CommentThreadCard({
   return (
     <div
       id={`comment-thread-${thread.id}`}
+      data-picked={isPicked ? 'true' : undefined}
       className={`rounded-md border border-l-4 bg-github-bg-tertiary p-3 shadow-sm transition-all ${
+        isPicked ? 'ring-2 ring-blue-500' : ''
+      } ${
         review
           ? thread.isOutdated
             ? 'border-github-border border-l-github-danger'
             : 'border-github-border border-l-github-text-muted'
           : 'border-yellow-600/50 border-l-yellow-400 fixup-review:border-github-border fixup-review:border-l-github-text-muted'
-      } ${onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
-      onClick={onClick}
+      }`}
     >
       <div className={`flex items-center justify-between gap-3 ${isCollapsed ? '' : 'mb-3'}`}>
         <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-github-text-secondary">

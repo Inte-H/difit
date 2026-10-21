@@ -45,6 +45,7 @@ interface FileListProps {
   onToggleFolderReviewed: (path: string, reviewed: boolean) => void;
   selectedFileIndex: number | null;
   scrollVisibleFileIndex?: number | null;
+  pickedCommentFilePath?: string | null;
 }
 
 interface TreeNode {
@@ -60,6 +61,7 @@ const TREE_ICON_SIZE_PX = 16;
 const TREE_ROW_GAP_PX = 8;
 const TREE_INDENT_STEP_PX = TREE_ICON_SIZE_PX + TREE_ROW_GAP_PX;
 const SCROLL_VISIBLE_BAR_CLASS = 'shadow-[inset_3px_0_0_0_var(--color-github-text-secondary)]';
+const PICKED_COMMENT_RING_CLASS = 'ring-1 ring-inset ring-blue-500';
 
 function getTreeRowPaddingLeft(depth: number): string {
   return `${depth * TREE_INDENT_STEP_PX + TREE_ROW_PADDING_LEFT_PX}px`;
@@ -182,6 +184,7 @@ export const FileList = memo(function FileList({
   onToggleFolderReviewed,
   selectedFileIndex,
   scrollVisibleFileIndex = null,
+  pickedCommentFilePath = null,
 }: FileListProps) {
   const fileTree = useMemo(() => buildFileTree(files), [files]);
   const shouldUseStickyDirectoryHeaders = useMemo(
@@ -455,6 +458,7 @@ export const FileList = memo(function FileList({
       const fileIndex = fileIndexMap.get(file.path) ?? -1;
       const isSelected = selectedFileIndex !== null && selectedFileIndex === fileIndex;
       const isScrollVisible = scrollVisibleFileIndex === fileIndex;
+      const isPickedCommentFile = pickedCommentFilePath === file.path;
       const changeKind = combineChangeKinds(file.chunks.map((chunk) => chunk.changeKind));
 
       return (
@@ -469,9 +473,12 @@ export const FileList = memo(function FileList({
           }}
           className={`flex items-center gap-2 px-4 py-2 hover:bg-github-bg-tertiary cursor-pointer transition-colors ${
             isReviewed ? 'opacity-70' : ''
-          } ${isSelected ? 'bg-github-bg-tertiary' : ''} ${isScrollVisible ? SCROLL_VISIBLE_BAR_CLASS : ''}`}
+          } ${isSelected ? 'bg-github-bg-tertiary' : ''} ${isScrollVisible ? SCROLL_VISIBLE_BAR_CLASS : ''} ${
+            isPickedCommentFile ? PICKED_COMMENT_RING_CLASS : ''
+          }`}
           aria-current={isSelected ? 'true' : undefined}
           data-scroll-visible={isScrollVisible ? 'true' : undefined}
+          data-picked-comment={isPickedCommentFile ? 'true' : undefined}
           data-file-row="true"
           data-tree-row="true"
           data-depth={depth}

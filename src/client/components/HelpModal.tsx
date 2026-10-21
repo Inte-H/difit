@@ -230,7 +230,7 @@ export function HelpModal({ isOpen, onClose }: HelpModalProps) {
                     L
                   </kbd>
                 </div>
-                <span className="text-github-text-secondary">View all comments list</span>
+                <span className="text-github-text-secondary">Toggle comments panel</span>
               </div>
               <div className="flex justify-between text-sm">
                 <div className="flex items-center gap-1">

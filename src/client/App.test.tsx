@@ -14,6 +14,7 @@ import App from './App';
 import { useDiffComments } from './hooks/useDiffComments';
 import { useViewedFiles } from './hooks/useViewedFiles';
 import { useViewport } from './hooks/useViewport';
+import { resetClientSettingsForTests } from './services/userSettings';
 import { getFileElementId } from './utils/domUtils';
 
 // Mock the useViewport hook
@@ -201,6 +202,33 @@ const mockDiffResponse: DiffResponse = {
   ignoreWhitespace: false,
   isEmpty: false,
 };
+
+const linedFile = (path: string, count: number): DiffResponse['files'][number] => ({
+  path,
+  status: 'modified',
+  additions: 0,
+  deletions: 0,
+  chunks: [
+    {
+      header: `@@ -1,${count} +1,${count} @@`,
+      oldStart: 1,
+      oldLines: count,
+      newStart: 1,
+      newLines: count,
+      lines: Array.from({ length: count }, (_, index) => ({
+        type: 'normal' as const,
+        content: `line ${index + 1}`,
+        oldLineNumber: index + 1,
+        newLineNumber: index + 1,
+      })),
+    },
+  ],
+});
+
+const commentsPanel = () => document.getElementById('comments-panel');
+const commentsPanelBox = () => document.querySelector<HTMLElement>('[data-comments-panel-box]')!;
+const commentsPanelHasFocus = () => commentsPanel()?.contains(document.activeElement) ?? false;
+const diffMain = async () => within(await screen.findByRole('main'));
 
 const pinnedDiffResponse: DiffResponse = {
   ...mockDiffResponse,
@@ -869,7 +897,7 @@ describe('App Component - Comment sync', () => {
     addEventListenerSpy.mockRestore();
   });
 
-  it('shows author badges in the comments modal when the diff has multiple authors', async () => {
+  it('shows author badges on the comment cards when the diff has multiple authors', async () => {
     mockComments = [
       createMockThread({ id: 'test-1', filePath: 'test.ts', line: 10, body: 'User comment' }),
       createMockThread({
@@ -882,25 +910,18 @@ describe('App Component - Comment sync', () => {
     ];
     mockFetch({
       ...mockDiffResponse,
-      files: [
-        ...mockDiffResponse.files,
-        {
-          path: 'other.ts',
-          status: 'modified',
-          additions: 1,
-          deletions: 1,
-          chunks: [],
-        },
-      ],
+      files: [linedFile('test.ts', 25), linedFile('other.ts', 25)],
     });
 
     renderApp();
 
-    fireEvent.click(await screen.findByTitle('More options'));
-    fireEvent.click(await screen.findByText('View All Comments'));
-
-    expect(await screen.findByText('User')).toBeInTheDocument();
-    expect(screen.getByText('Reviewer')).toBeInTheDocument();
+    await screen.findByText('Reviewer comment');
+    expect(
+      within(document.getElementById('comment-thread-test-1')!).getByText('User'),
+    ).toBeInTheDocument();
+    expect(
+      within(document.getElementById('comment-thread-test-2')!).getByText('Reviewer'),
+    ).toBeInTheDocument();
   });
 
   it('shows author badges when the reviewer and an agent without a named author both comment', async () => {
@@ -919,15 +940,17 @@ describe('App Component - Comment sync', () => {
       createMockThread({ id: 'test-1', filePath: 'test.ts', line: 10, body: 'User comment' }),
       ...agentThreads,
     ];
-    mockFetch(mockDiffResponse);
+    mockFetch({ ...mockDiffResponse, files: [linedFile('test.ts', 25)] });
 
     renderApp();
 
-    fireEvent.click(await screen.findByTitle('More options'));
-    fireEvent.click(await screen.findByText('View All Comments'));
-
-    expect(await screen.findByText('User')).toBeInTheDocument();
-    expect(screen.getByText('Agent')).toBeInTheDocument();
+    const agentCard = (await screen.findByText('Agent comment')).closest<HTMLElement>(
+      '[id^="comment-thread-"]',
+    )!;
+    expect(within(agentCard).getByText('Agent')).toBeInTheDocument();
+    expect(
+      within(document.getElementById('comment-thread-test-1')!).getByText('User'),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1505,6 +1528,391 @@ describe('App Component - Sidebar persistence', () => {
     await waitFor(() => {
       expect(window.localStorage.getItem('difit.sidebarOpen')).toBe('true');
     });
+  });
+
+  it('widens the file list by the distance dragged, within its limits', async () => {
+    renderApp();
+
+    const handle = await screen.findByTitle('Drag to resize file list');
+    const box = document.getElementById('file-tree-panel')!.parentElement!;
+    expect(box.style.width).toBe('280px');
+
+    fireEvent.mouseDown(handle, { clientX: 300 });
+    fireEvent.mouseMove(document, { clientX: 350 });
+    fireEvent.mouseUp(document);
+    expect(box.style.width).toBe('330px');
+    expect(window.localStorage.getItem('difit.sidebarWidth')).toBe('330');
+
+    fireEvent.mouseDown(handle, { clientX: 300 });
+    fireEvent.mouseMove(document, { clientX: 900 });
+    fireEvent.mouseUp(document);
+    expect(box.style.width).toBe('600px');
+  });
+});
+
+describe('App Component - Comments panel', () => {
+  const toggle = () => screen.findByRole('button', { name: 'Toggle comments panel' });
+  const row = (text: string) =>
+    within(commentsPanel()!).getByRole('button', { name: new RegExp(text) });
+  const pressShiftL = () => userEvent.keyboard('{Shift>}L{/Shift}');
+  const cursorRow = () => document.querySelector('.keyboard-cursor')?.closest('tr') ?? null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDecisions = [];
+    mockComments = [
+      createMockThread({ id: 'p1', filePath: 'test.ts', line: 10, body: 'First note' }),
+      createMockThread({ id: 'p2', filePath: 'test.ts', line: 20, body: 'Second note' }),
+    ];
+    mockConfirm.mockReturnValue(false);
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+    mockFetch({ ...mockDiffResponse, files: [linedFile('test.ts', 30)] });
+  });
+
+  it('starts closed, with its header button shown even when there are no comments', async () => {
+    mockComments = [];
+    renderApp();
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(commentsPanel()).toBeNull();
+  });
+
+  it('opens on Shift+L with j/k moving the list, and Shift+L there closes it', async () => {
+    renderApp();
+    await toggle();
+
+    await pressShiftL();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(row('First note')).toHaveFocus());
+
+    await userEvent.keyboard('j');
+    expect(row('Second note')).toHaveFocus();
+    expect(cursorRow()).toBeNull();
+
+    await pressShiftL();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(commentsPanel()).toBeNull();
+    await userEvent.keyboard('j');
+    expect(cursorRow()).not.toBeNull();
+  });
+
+  it('opened from the header button, leaves j/k on the diff until Shift+L moves them in', async () => {
+    renderApp();
+
+    fireEvent.click(await toggle());
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(commentsPanelHasFocus()).toBe(false);
+    await userEvent.keyboard('j');
+    expect(cursorRow()).not.toBeNull();
+
+    await pressShiftL();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(row('First note')).toHaveFocus());
+  });
+
+  it('hands j/k back to the diff on Escape and stays open', async () => {
+    renderApp();
+    await toggle();
+    await pressShiftL();
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(commentsPanelHasFocus()).toBe(false);
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('true');
+    await userEvent.keyboard('j');
+    expect(cursorRow()).not.toBeNull();
+  });
+
+  it('hands j/k back to the diff when the diff is clicked', async () => {
+    renderApp();
+    await toggle();
+    await pressShiftL();
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+
+    fireEvent.click(document.querySelector('[data-diff-line-row="true"]')!);
+
+    expect(commentsPanelHasFocus()).toBe(false);
+    expect(commentsPanel()).not.toBeNull();
+  });
+
+  it('goes to the line of a picked comment and stays open', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+
+    await userEvent.click(row('Second note'));
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(cursorRow()).toHaveTextContent('line 20'));
+    expect(row('Second note')).toHaveAttribute('aria-current', 'true');
+  });
+
+  it('opens with the keys in the list from 「View All Comments」', async () => {
+    renderApp();
+
+    fireEvent.click(await screen.findByTitle('More options'));
+    fireEvent.click(await screen.findByText('View All Comments'));
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(row('First note')).toHaveFocus());
+  });
+
+  it('keeps the chosen list when closed and opened again', async () => {
+    mockDecisions = [
+      { threadId: 'p2', kind: 'resolved', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+    ];
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(within(commentsPanel()!).queryByText('Second note')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '전체 2' }));
+    fireEvent.click(await toggle());
+    fireEvent.click(await toggle());
+
+    expect(screen.getByRole('button', { name: '전체 2' })).toHaveAttribute('aria-pressed', 'true');
+    expect(row('Second note')).toHaveTextContent('해결');
+  });
+
+  it('marks the picked comment on its card and its file', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+
+    await userEvent.click(row('Second note'));
+
+    expect(document.getElementById('comment-thread-p2')).toHaveAttribute('data-picked', 'true');
+    expect(document.getElementById('comment-thread-p1')).not.toHaveAttribute('data-picked');
+    const fileTree = document.getElementById('file-tree-panel')!;
+    expect(within(fileTree).getByTitle('test.ts').closest('[data-file-row]')).toHaveAttribute(
+      'data-picked-comment',
+      'true',
+    );
+  });
+
+  it('unfolds a file folded as viewed to show the picked comment', async () => {
+    mockViewedFiles = new Set(['test.ts']);
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(document.getElementById('comment-thread-p2')).toBeNull();
+
+    await userEvent.click(row('Second note'));
+
+    await waitFor(() =>
+      expect(document.getElementById('comment-thread-p2')).toHaveAttribute('data-picked', 'true'),
+    );
+    await waitFor(() => expect(cursorRow()).toHaveTextContent('line 20'));
+  });
+
+  it('draws a picked resolved comment while resolved comments are hidden', async () => {
+    mockDecisions = [
+      { threadId: 'p2', kind: 'resolved', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+    ];
+    renderApp();
+    fireEvent.click(await screen.findByRole('checkbox', { name: '해결된 지적 보기' }));
+    expect(document.getElementById('comment-thread-p2')).toBeNull();
+    fireEvent.click(await toggle());
+    fireEvent.click(screen.getByRole('button', { name: '전체 2' }));
+
+    await userEvent.click(row('Second note'));
+
+    const card = document.getElementById('comment-thread-p2')!;
+    expect(card).toHaveAttribute('data-picked', 'true');
+    expect(within(card).getByText('Second note')).toBeInTheDocument();
+    expect(document.getElementById('comment-thread-p1')).not.toBeNull();
+  });
+
+  it('leaves the diff view mode as it was', async () => {
+    window.localStorage.setItem('difit.diffViewMode', 'split');
+    renderApp();
+
+    fireEvent.click(await toggle());
+
+    expect(screen.getByRole('button', { name: 'Split' })).toHaveClass('bg-github-bg-primary');
+  });
+});
+
+describe('App Component - Comments panel persistence', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockDecisions = [];
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+    mockFetch(mockDiffResponse);
+  });
+
+  afterEach(() => {
+    resetClientSettingsForTests();
+  });
+
+  const toggle = () => screen.findByRole('button', { name: 'Toggle comments panel' });
+
+  it('opens on load when it was left open, without taking the keys', async () => {
+    window.localStorage.setItem('difit.commentsPanelOpen', 'true');
+
+    renderApp();
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(commentsPanel()).not.toBeNull();
+    expect(commentsPanelHasFocus()).toBe(false);
+  });
+
+  it('remembers each open and close', async () => {
+    renderApp();
+
+    fireEvent.click(await toggle());
+    await waitFor(() =>
+      expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('true'),
+    );
+    fireEvent.click(await toggle());
+    await waitFor(() =>
+      expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('false'),
+    );
+  });
+
+  it('takes the open state and width saved on the server over the ones in this browser', async () => {
+    resetClientSettingsForTests();
+    window.localStorage.setItem('difit.commentsPanelOpen', 'false');
+    window.localStorage.setItem('difit.commentsPanelWidth', '300');
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/user-settings') {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ client: { commentsPanelOpen: true, commentsPanelWidth: 450 } }),
+        } as Response);
+      }
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: false, json: async () => null } as Response);
+      }
+      return Promise.resolve({ ok: true, json: async () => mockDiffResponse } as Response);
+    });
+
+    renderApp();
+
+    await waitFor(async () => expect(await toggle()).toHaveAttribute('aria-expanded', 'true'));
+    expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('true');
+    expect(commentsPanelBox().style.width).toBe('450px');
+    expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('450');
+  });
+
+  it('opens at the width it was left at, within its limits', async () => {
+    window.localStorage.setItem('difit.commentsPanelOpen', 'true');
+    window.localStorage.setItem('difit.commentsPanelWidth', '400');
+    const { unmount } = renderApp();
+    await toggle();
+    expect(commentsPanelBox().style.width).toBe('400px');
+    unmount();
+
+    window.localStorage.setItem('difit.commentsPanelWidth', '900');
+    const second = renderApp();
+    await toggle();
+    expect(commentsPanelBox().style.width).toBe('600px');
+    second.unmount();
+
+    window.localStorage.setItem('difit.commentsPanelWidth', '100');
+    renderApp();
+    await toggle();
+    expect(commentsPanelBox().style.width).toBe('240px');
+  });
+
+  it('widens by the distance dragged to the left and remembers the width', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(commentsPanelBox().style.width).toBe('320px');
+
+    const handle = screen.getByTitle('Drag to resize comments panel');
+    fireEvent.mouseDown(handle, { clientX: 1000 });
+    fireEvent.mouseMove(document, { clientX: 900 });
+    fireEvent.mouseUp(document);
+
+    expect(commentsPanelBox().style.width).toBe('420px');
+    expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('420');
+  });
+});
+
+describe('App Component - Comments drawer on a phone', () => {
+  const toggle = () => screen.findByRole('button', { name: 'Toggle comments panel' });
+  const row = (text: string) =>
+    within(commentsPanel()!).getByRole('button', { name: new RegExp(text) });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockDecisions = [];
+    mockComments = [
+      createMockThread({ id: 'p1', filePath: 'test.ts', line: 10, body: 'First note' }),
+      createMockThread({ id: 'p2', filePath: 'test.ts', line: 20, body: 'Second note' }),
+    ];
+    mockConfirm.mockReturnValue(false);
+    vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+    mockFetch({ ...mockDiffResponse, files: [linedFile('test.ts', 30)] });
+  });
+
+  afterEach(() => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+  });
+
+  it('slides in from the header button and leaves the PC preference alone', async () => {
+    window.localStorage.setItem('difit.commentsPanelOpen', 'false');
+    renderApp();
+
+    const button = await toggle();
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    expect(commentsPanel()).toHaveAttribute('inert');
+
+    fireEvent.click(button);
+
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(commentsPanel()).not.toHaveAttribute('inert');
+    expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('false');
+  });
+
+  it('closes when a comment is picked and goes to its line', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+
+    await userEvent.click(row('Second note'));
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(commentsPanel()).toHaveAttribute('inert');
+    await waitFor(() =>
+      expect(document.querySelector('tr.keyboard-cursor')).toHaveTextContent('line 20'),
+    );
+    expect(document.getElementById('comment-thread-p2')).toHaveAttribute('data-picked', 'true');
+  });
+
+  it('opens from 「View All Comments」 in the bottom bar', async () => {
+    renderApp();
+
+    fireEvent.click(await screen.findByTitle('More options'));
+    fireEvent.click(await screen.findByText('View All Comments'));
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(row('First note')).toHaveFocus());
+  });
+
+  it('closes on Escape after opening from the header button', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(commentsPanelHasFocus()).toBe(false);
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes on Escape and on the backdrop', async () => {
+    renderApp();
+    await toggle();
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Escape}');
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(await toggle());
+    fireEvent.click(screen.getByRole('button', { name: '코멘트 서랍 닫기' }));
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
   });
 });
 
@@ -2602,7 +3010,7 @@ describe('App Component - Commits of the review', () => {
         await waitFor(() =>
           expect(diffQueries().at(-1)).toEqual([COMMITS[1]!.parentSha, COMMITS[1]!.sha]),
         );
-        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        await waitFor(() => expect(drawerButton()).toHaveAttribute('aria-expanded', 'false'));
         await waitFor(() => expect(drawerButton()).toHaveTextContent('abc1234'));
       });
 
@@ -2633,7 +3041,7 @@ describe('App Component - Commits of the review', () => {
         await waitFor(() =>
           expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[1]!.sha]),
         );
-        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        await waitFor(() => expect(drawerButton()).toHaveAttribute('aria-expanded', 'false'));
         await waitFor(() =>
           expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'),
         );
@@ -2695,7 +3103,7 @@ describe('App Component - Commits of the review', () => {
     await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
-    await screen.findByRole('button', { name: 'Close comments list' });
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
@@ -2703,7 +3111,78 @@ describe('App Component - Commits of the review', () => {
       REVIEW.requested.baseCommitish,
       REVIEW.requested.targetCommitish,
     ]);
-    expect(await screen.findByText('Look here')).toBeInTheDocument();
+    expect(await (await diffMain()).findByText('Look here')).toBeInTheDocument();
+  });
+
+  it('keeps the keys in the list after going to another view to show a comment', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(await (await diffMain()).findByText('Look here')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(commentsPanel()!).getByRole('button', { name: /Look here/ })).toHaveFocus(),
+    );
+  });
+
+  it('keeps the keys in the list after moving to the next commit from it', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Shift>}>{/Shift}');
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+  });
+
+  it('leaves the keys on the diff after moving to the next commit from it', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Escape}');
+    expect(commentsPanelHasFocus()).toBe(false);
+
+    await userEvent.keyboard('{Shift>}>{/Shift}');
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(commentsPanel()).toBeInTheDocument();
+    expect(commentsPanelHasFocus()).toBe(false);
+  });
+
+  it('leaves the keys on the diff when Back cancels going to another view to show a comment', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    const answer = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      const target = new URLSearchParams(url.split('?')[1]).get('target');
+      return url.startsWith('/api/diff') && target === REVIEW.requested.targetCommitish
+        ? new Promise<Response>(() => {})
+        : answer(input, init);
+    });
+
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: '리뷰 범위의 커밋' })).not.toBeInTheDocument(),
+    );
+    act(() => window.history.back());
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(commentsPanel()).toBeInTheDocument();
+    expect(commentsPanelHasFocus()).toBe(false);
   });
 
   it('goes back to the whole review for a comment on a file the shown commit leaves alone', async () => {
@@ -2716,7 +3195,7 @@ describe('App Component - Commits of the review', () => {
     await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
-    await screen.findByRole('button', { name: 'Close comments list' });
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
@@ -2739,7 +3218,7 @@ describe('App Component - Commits of the review', () => {
     await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
-    await screen.findByRole('button', { name: 'Close comments list' });
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
@@ -2753,7 +3232,7 @@ describe('App Component - Commits of the review', () => {
     const queriesBefore = diffQueries().length;
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
-    await screen.findByRole('button', { name: 'Close comments list' });
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
     expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
@@ -2829,6 +3308,33 @@ describe('App Component - Commits of the review', () => {
     }
   });
 
+  it('unfolds a viewed file on the commit it opens to show a comment picked from the list', async () => {
+    mockViewedFiles = new Set(['test.ts']);
+    mockComments = [pinnedThread('const a = 1;')];
+    const { rerender } = renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/abc1234/));
+    await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    mockHasLoadedInitialViewedFiles = false;
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    mockHasLoadedInitialViewedFiles = true;
+    rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>,
+    );
+
+    await waitFor(() =>
+      expect(document.getElementById('comment-thread-c3')).toHaveAttribute('data-picked', 'true'),
+    );
+    mockViewedFiles = new Set<string>();
+  });
+
   it('opens the commit a comment was made on to show it from the list', async () => {
     mockComments = [pinnedThread('const a = 1;')];
     renderApp();
@@ -2838,7 +3344,7 @@ describe('App Component - Commits of the review', () => {
     expect(screen.queryByText('Pinned here')).not.toBeInTheDocument();
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
-    await screen.findByRole('button', { name: 'Close comments list' });
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));

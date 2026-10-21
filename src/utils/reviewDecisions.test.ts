@@ -9,6 +9,7 @@ import {
 } from '../types/diff';
 
 import {
+  commentPanelStatus,
   deriveThreadReviewState,
   isAgentResponding,
   isThreadDeleted,
@@ -325,6 +326,66 @@ describe('selectOpenThreads', () => {
     const settled = threads.filter((t) => t.id !== 'open' && t.id !== 'rejected');
     expect(selectOpenThreads(settled, fixupsByThread, decisions)).toEqual([]);
     expect(selectOpenThreads([], fixupsByThread, decisions)).toEqual([]);
+  });
+});
+
+describe('commentPanelStatus', () => {
+  const asked = { messages: [{ author: REVIEWER_AUTHOR }] };
+  const answeredInWords = { messages: [{ author: REVIEWER_AUTHOR }, { author: AGENT_AUTHOR }] };
+  const status = (
+    id: string,
+    fixups: ThreadFixup[],
+    decisions: ReviewDecision[],
+    thread: { messages: { author?: string }[] } = asked,
+  ) => commentPanelStatus({ id, ...thread }, fixups, decisions);
+
+  it('shows it as open when the move is the agent: no answer yet, or the fixup was rejected', () => {
+    expect(status('t1', [], [])).toBe('open');
+    expect(status('t1', [], [decision('rejected', 'aaaa')])).toBe('open');
+  });
+
+  it('shows it as answered when the move is the reviewer: a reply in words, or a fixup to approve', () => {
+    expect(status('t1', [], [], answeredInWords)).toBe('answered');
+    expect(status('t1', [fixup('aaaa')], [])).toBe('answered');
+  });
+
+  it('shows a settled thread as resolved: resolved, approved, folded or withdrawn', () => {
+    expect(status('t1', [], [decision('resolved', '')])).toBe('resolved');
+    expect(status('t1', [fixup('aaaa')], [decision('approved', 'aaaa')])).toBe('resolved');
+    expect(status('t1', [], [decision('folded', 'aaaa')])).toBe('resolved');
+    expect(status('t1', [], [decision('rejected', 'aaaa')], openedByEdit)).toBe('resolved');
+  });
+
+  it('shows a resolved thread as resolved whatever its fixup state, until it is reopened', () => {
+    const resolution = decision('resolved', '', '2026-01-01T00:00:00Z');
+    expect(status('t1', [fixup('aaaa')], [resolution])).toBe('resolved');
+    const reopening = decision('unresolved', '', '2026-01-01T00:01:00Z');
+    expect(status('t1', [fixup('aaaa')], [resolution, reopening])).toBe('answered');
+  });
+
+  it('gives a deleted thread no status, so the panel leaves it out', () => {
+    expect(status('t1', [], [decision('deleted', '')])).toBeNull();
+  });
+
+  it('counts as open exactly the threads the open count holds', () => {
+    const threads = [
+      { id: 'a', ...asked },
+      { id: 'b', ...answeredInWords },
+      { id: 'c', ...asked },
+      { id: 'd', ...asked },
+      { id: 'e', ...asked },
+    ];
+    const fixupsByThread = new Map([['c', [fixup('cccc', ['c'])]]]);
+    const decisions = [
+      decision('rejected', 'dddd', undefined, 'd'),
+      decision('resolved', '', undefined, 'e'),
+    ];
+    const open = threads.filter(
+      (thread) =>
+        commentPanelStatus(thread, fixupsByThread.get(thread.id) ?? [], decisions) === 'open',
+    );
+    expect(open).toEqual(selectOpenThreads(threads, fixupsByThread, decisions));
+    expect(open.map(({ id }) => id)).toEqual(['a', 'd']);
   });
 });
 

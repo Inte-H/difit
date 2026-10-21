@@ -8,6 +8,7 @@ import {
   FixupOverlayProvider,
   type FixupOverlayState,
 } from '../contexts/FixupOverlayContext';
+import { PickedThreadProvider } from '../contexts/PickedThreadContext';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import { copyTextToClipboard } from '../utils/clipboard';
 
@@ -630,10 +631,81 @@ describe('CommentThreadCard', () => {
     expect(screen.getByText('Reply comment')).toBeInTheDocument();
   });
 
-  it('does not trigger the card click when toggling collapse', async () => {
-    const user = userEvent.setup();
-    const onClick = vi.fn();
+  describe('picked from the comments panel', () => {
+    const card = (thread: CommentThread, pickedId: string | null) => (
+      <PickedThreadProvider value={pickedId}>
+        <CommentThreadCard
+          thread={thread}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />
+      </PickedThreadProvider>
+    );
+    const resolvedOverlay: FixupOverlayState = {
+      ...EMPTY_FIXUP_OVERLAY,
+      decisions: [
+        { threadId: mockThread.id, kind: 'resolved', fixupSha: '', at: '2026-01-01T00:00:00Z' },
+      ],
+    };
 
+    it('marks only the picked card', () => {
+      const { rerender } = render(card(mockThread, mockThread.id));
+      expect(document.getElementById(`comment-thread-${mockThread.id}`)).toHaveAttribute(
+        'data-picked',
+        'true',
+      );
+
+      rerender(card(mockThread, 'another'));
+      expect(document.getElementById(`comment-thread-${mockThread.id}`)).not.toHaveAttribute(
+        'data-picked',
+      );
+    });
+
+    it('opens a folded resolved card when it is picked', () => {
+      const { rerender } = render(
+        <FixupOverlayProvider value={resolvedOverlay}>
+          {card(mockThread, null)}
+        </FixupOverlayProvider>,
+      );
+      expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+
+      rerender(
+        <FixupOverlayProvider value={resolvedOverlay}>
+          {card(mockThread, mockThread.id)}
+        </FixupOverlayProvider>,
+      );
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+    });
+
+    it('draws a resolved card open when it first appears picked', () => {
+      render(
+        <FixupOverlayProvider value={resolvedOverlay}>
+          {card(mockThread, mockThread.id)}
+        </FixupOverlayProvider>,
+      );
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+    });
+  });
+
+  it('names the author of each message when badges are on', () => {
+    render(
+      <CommentThreadCard
+        thread={mockThread}
+        showAuthorBadges
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('User')).toBeInTheDocument();
+    expect(screen.getByText('Reviewer')).toBeInTheDocument();
+  });
+
+  it('names no author when badges are off', () => {
     render(
       <CommentThreadCard
         thread={mockThread}
@@ -641,13 +713,11 @@ describe('CommentThreadCard', () => {
         onReplyToThread={vi.fn().mockResolvedValue(undefined)}
         onRemoveMessage={vi.fn()}
         onUpdateMessage={vi.fn()}
-        onClick={onClick}
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: 'Collapse thread' }));
-
-    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.queryByText('User')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reviewer')).not.toBeInTheDocument();
   });
 
   it('shows the "Outdated" badge when the thread is marked outdated', () => {
