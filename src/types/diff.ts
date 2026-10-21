@@ -322,7 +322,7 @@ export interface ThreadAwaitingAgent {
   // Absent on reviews without fixup states, where any reviewer word left unanswered counts.
   state?: Extract<
     ThreadReviewState,
-    'awaiting-fix' | 'awaiting-approval' | 'rejected' | 'withdrawn' | 'deleted'
+    'awaiting-fix' | 'awaiting-approval' | 'approved' | 'rejected' | 'withdrawn' | 'deleted'
   >;
   label?: string;
   // A fixup still in the range that has to be dropped: rejected, or answering a deleted thread.

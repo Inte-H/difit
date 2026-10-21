@@ -3118,6 +3118,51 @@ describe('Server Integration Tests', () => {
       });
     });
 
+    it('sends a reply the reviewer leaves on an approved fixup', async () => {
+      await listenOnSocket();
+      const { port } = await startPinned();
+      parserInstances.at(-1)!.listThreadFixups.mockResolvedValue([
+        {
+          sha: FIXUP,
+          shortSha: 'bbbbbbb',
+          patchId: 'p1',
+          authoredAt: '2026-01-02T00:00:00Z',
+          subject: 'fixup! x',
+          threadIds: ['c1'],
+          files: [],
+        },
+      ]);
+      const asked = reviewerThread('c1');
+      const decisions = [
+        { threadId: 'c1', kind: 'approved', fixupSha: FIXUP, at: '2026-01-02T12:00:00Z' },
+      ];
+      await postFromPage(port, { threads: [asked], decisions });
+      await settle();
+      expect(received).toEqual([]);
+
+      const reply = {
+        id: 'r1',
+        body: 'why was it optional?',
+        author: 'User',
+        createdAt: '2026-01-03T00:00:00Z',
+        updatedAt: '2026-01-03T00:00:00Z',
+      };
+      await postFromPage(port, {
+        threads: [{ ...asked, messages: [...asked.messages, reply] }],
+        decisions,
+      });
+      await settle();
+
+      expect(received).toHaveLength(1);
+      const content = JSON.parse(received[0]!.trim().split('\n').at(-1)!).message.content as string;
+      expect(content.split('\n')[0]).toContain('c1 [승인됨]');
+      expect(JSON.parse(content.split('\n')[1]!)).toMatchObject({
+        threadId: 'c1',
+        state: 'approved',
+        message: 'why was it optional?',
+      });
+    });
+
     it('asks the agent to drop the fixup of a deleted thread until it leaves the range', async () => {
       const { port } = await startPinned();
       const parser = parserInstances.at(-1)!;
