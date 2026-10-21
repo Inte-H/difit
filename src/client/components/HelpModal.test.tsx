@@ -26,4 +26,19 @@ describe('HelpModal', () => {
         .map((key) => key.textContent),
     ).toEqual(['<', '>']);
   });
+
+  it('lists Shift+B for the file list', () => {
+    render(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <HelpModal isOpen onClose={vi.fn()} />
+      </HotkeysProvider>,
+    );
+
+    const row = screen.getByText('Toggle file list').parentElement!;
+    expect(
+      within(row)
+        .getAllByText(/^(Shift|B)$/)
+        .map((key) => key.textContent),
+    ).toEqual(['Shift', 'B']);
+  });
 });

@@ -65,7 +65,7 @@ import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
 import { CommitList, ShownCommits } from './components/CommitList';
-import { FileList } from './components/FileList';
+import { FileList, type FileListHandle } from './components/FileList';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
 import { Logo } from './components/Logo';
@@ -242,6 +242,8 @@ function App() {
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(getInitialFileTreeOpen);
   // The phone drawer covers the diff, so it starts closed and does not touch the saved PC preference.
   const [isFileDrawerOpen, setIsFileDrawerOpen] = useState(false);
+  const [fileListFocusRequest, setFileListFocusRequest] = useState(0);
+  const fileListRef = useRef<FileListHandle>(null);
   const [isCommitDrawerOpen, setIsCommitDrawerOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showSparkles, setShowSparkles] = useState(false);
@@ -323,6 +325,11 @@ function App() {
   const { settings, updateSettings } = useAppearanceSettings();
   const { isMobile, isDesktop } = useViewport();
   const isFileTreeShown = isMobile ? isFileDrawerOpen : isFileTreeOpen;
+  const setFileTreeShown = isMobile ? setIsFileDrawerOpen : setIsFileTreeOpen;
+  useHotkeys('escape', () => setIsFileDrawerOpen(false), {
+    scopes: 'navigation',
+    enabled: isMobile && isFileDrawerOpen,
+  });
   const isCommentsPanelShown = isMobile ? isCommentsDrawerOpen : isCommentsPanelOpen;
   const setCommentsPanelShown = isMobile ? setIsCommentsDrawerOpen : setIsCommentsPanelOpen;
   useHotkeys('escape', () => setIsCommentsDrawerOpen(false), {
@@ -861,6 +868,15 @@ function App() {
     refocusCommentsPanelAfterLoadRef.current = false;
     commentsPanelRef.current?.focus();
   }, [loading]);
+  useEffect(() => {
+    if (fileListFocusRequest > 0) fileListRef.current?.focus();
+  }, [fileListFocusRequest]);
+  const refocusFileListAfterLoadRef = useRef(false);
+  useEffect(() => {
+    if (loading || !refocusFileListAfterLoadRef.current) return;
+    refocusFileListAfterLoadRef.current = false;
+    fileListRef.current?.focus();
+  }, [loading]);
 
   // Track which file the mouse is over so `v` works without a cursor
   const hoveredFileIndexRef = useRef<number | null>(null);
@@ -901,6 +917,17 @@ function App() {
         } else {
           (document.activeElement as HTMLElement | null)?.blur();
           setCommentsPanelShown(false);
+        }
+      },
+      onToggleFileList: () => {
+        if (!isFileTreeShown) {
+          setFileTreeShown(true);
+          setFileListFocusRequest((count) => count + 1);
+        } else if (!fileListRef.current?.hasFocus()) {
+          setFileListFocusRequest((count) => count + 1);
+        } else {
+          (document.activeElement as HTMLElement | null)?.blur();
+          setFileTreeShown(false);
         }
       },
       onRefresh: () => {
@@ -1242,6 +1269,7 @@ function App() {
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
       refocusCommentsPanelAfterLoadRef.current = commentsPanelRef.current?.hasFocus() ?? false;
+      refocusFileListAfterLoadRef.current = fileListRef.current?.hasFocus() ?? false;
       setLoading(true);
       setError(null);
       await fetchDiffData(nextSelection);
@@ -1684,7 +1712,10 @@ function App() {
 
     // Check if clicking on a comment button
     const target = e.target as HTMLElement;
-    if (commentsPanelRef.current?.hasFocus() && !target.closest('#comments-panel')) {
+    if (
+      (commentsPanelRef.current?.hasFocus() && !target.closest('#comments-panel')) ||
+      (fileListRef.current?.hasFocus() && !target.closest('#file-tree-panel'))
+    ) {
       (document.activeElement as HTMLElement | null)?.blur();
     }
     const isCommentButton = target.closest('[data-comment-button="true"]');
@@ -2132,6 +2163,7 @@ function App() {
           >
             <aside
               id="file-tree-panel"
+              inert={!isFileTreeShown}
               className={`bg-github-bg-secondary overflow-y-auto flex flex-col ${
                 isMobile
                   ? 'fixed inset-y-0 right-0 z-40 w-[min(85vw,360px)] border-l border-github-border transition-transform duration-300 ease-out'
@@ -2151,6 +2183,7 @@ function App() {
             >
               <div className="flex-1 overflow-y-auto">
                 <FileList
+                  ref={fileListRef}
                   files={diffData.files}
                   onScrollToFile={scrollFileIntoDiffContainer}
                   onFileSelected={isMobile ? handleMobileFileSelected : undefined}
@@ -2162,6 +2195,7 @@ function App() {
                   selectedFileIndex={cursor?.fileIndex ?? null}
                   scrollVisibleFileIndex={scrollVisibleFileIndex}
                   pickedCommentFilePath={pickedThread?.file ?? null}
+                  {...(isMobile && { onEscape: () => setIsFileDrawerOpen(false) })}
                 />
               </div>
               {showsCommitList && (
