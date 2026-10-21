@@ -3131,6 +3131,60 @@ describe('App Component - Commits of the review', () => {
     );
   });
 
+  it('keeps the keys in the list after moving to the next commit from it', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Shift>}>{/Shift}');
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+  });
+
+  it('leaves the keys on the diff after moving to the next commit from it', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Escape}');
+    expect(commentsPanelHasFocus()).toBe(false);
+
+    await userEvent.keyboard('{Shift>}>{/Shift}');
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(commentsPanel()).toBeInTheDocument();
+    expect(commentsPanelHasFocus()).toBe(false);
+  });
+
+  it('leaves the keys on the diff when Back cancels going to another view to show a comment', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    const answer = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      const target = new URLSearchParams(url.split('?')[1]).get('target');
+      return url.startsWith('/api/diff') && target === REVIEW.requested.targetCommitish
+        ? new Promise<Response>(() => {})
+        : answer(input, init);
+    });
+
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: '리뷰 범위의 커밋' })).not.toBeInTheDocument(),
+    );
+    act(() => window.history.back());
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    expect(commentsPanel()).toBeInTheDocument();
+    expect(commentsPanelHasFocus()).toBe(false);
+  });
+
   it('goes back to the whole review for a comment on a file the shown commit leaves alone', async () => {
     mockComments = [
       createMockThread({ id: 'c9', filePath: 'other.ts', line: 1, body: 'Elsewhere' }),

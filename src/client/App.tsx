@@ -1241,6 +1241,7 @@ function App() {
       pendingCommentNavigationRef.current = null;
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
+      refocusCommentsPanelAfterLoadRef.current = commentsPanelRef.current?.hasFocus() ?? false;
       setLoading(true);
       setError(null);
       await fetchDiffData(nextSelection);
@@ -1602,11 +1603,7 @@ function App() {
       !thread.isOutdated &&
       diffData.files.some(({ path }) => path === thread.file);
     if (!placedHere && showsPartOfReview && review) {
-      const nextSelection = thread.madeView ?? review.requested;
-      refocusCommentsPanelAfterLoadRef.current =
-        !diffSelectionsEqual(nextSelection, selectedRevision) &&
-        (commentsPanelRef.current?.hasFocus() ?? false);
-      showDiff(nextSelection);
+      showDiff(thread.madeView ?? review.requested);
       pendingCommentNavigationRef.current = thread.id;
       return;
     }
