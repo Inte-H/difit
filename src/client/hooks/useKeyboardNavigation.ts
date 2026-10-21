@@ -33,6 +33,7 @@ export function useKeyboardNavigation({
   onCopyAllComments,
   onDeleteAllComments,
   onToggleCommentsPanel,
+  onToggleFileList,
   onRefresh,
   onPreviousCommit,
   onNextCommit,
@@ -607,6 +608,17 @@ export function useKeyboardNavigation({
     },
     hotkeyOptions,
     [onToggleCommentsPanel],
+  );
+
+  useHotkeys(
+    'shift+b',
+    () => {
+      if (onToggleFileList) {
+        onToggleFileList();
+      }
+    },
+    hotkeyOptions,
+    [onToggleFileList],
   );
 
   return {

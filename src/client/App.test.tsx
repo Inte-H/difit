@@ -228,6 +228,9 @@ const linedFile = (path: string, count: number): DiffResponse['files'][number] =
 const commentsPanel = () => document.getElementById('comments-panel');
 const commentsPanelBox = () => document.querySelector<HTMLElement>('[data-comments-panel-box]')!;
 const commentsPanelHasFocus = () => commentsPanel()?.contains(document.activeElement) ?? false;
+const fileListHasFocus = () =>
+  document.getElementById('file-tree-panel')?.contains(document.activeElement) ?? false;
+const pressShiftB = () => userEvent.keyboard('{Shift>}B{/Shift}');
 const diffMain = async () => within(await screen.findByRole('main'));
 
 const pinnedDiffResponse: DiffResponse = {
@@ -1916,6 +1919,154 @@ describe('App Component - Comments drawer on a phone', () => {
   });
 });
 
+describe('App Component - File list keys', () => {
+  const toggle = () => screen.findByRole('button', { name: /toggle file tree panel/i });
+  const fileRow = (path: string) =>
+    within(document.getElementById('file-tree-panel')!)
+      .getByTitle(path)
+      .closest<HTMLElement>('[data-file-row]')!;
+  const cursorRow = () => document.querySelector('.keyboard-cursor')?.closest('tr') ?? null;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockConfirm.mockReturnValue(false);
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+    mockFetch({ ...mockDiffResponse, files: [linedFile('a.ts', 10), linedFile('b.ts', 10)] });
+  });
+
+  it('opens on Shift+B with j/k moving the list, and Shift+B there closes it', async () => {
+    window.localStorage.setItem('difit.sidebarOpen', 'false');
+    renderApp();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+
+    await pressShiftB();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+
+    await userEvent.keyboard('k');
+    expect(fileRow('a.ts')).toHaveFocus();
+    await userEvent.keyboard('j');
+    expect(fileRow('b.ts')).toHaveFocus();
+    expect(cursorRow()).toBeNull();
+
+    await pressShiftB();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(fileListHasFocus()).toBe(false);
+    await userEvent.keyboard('j');
+    expect(cursorRow()).not.toBeNull();
+  });
+
+  it('opened from the header button, leaves j/k on the diff until Shift+B moves them in', async () => {
+    window.localStorage.setItem('difit.sidebarOpen', 'false');
+    renderApp();
+
+    fireEvent.click(await toggle());
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(fileListHasFocus()).toBe(false);
+    await userEvent.keyboard('j');
+    expect(cursorRow()).not.toBeNull();
+
+    await pressShiftB();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+  });
+
+  it('goes to a file on Enter and keeps the keys in the list', async () => {
+    renderApp();
+    await toggle();
+    await pressShiftB();
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+
+    await userEvent.keyboard('j{Enter}');
+
+    expect(fileRow('b.ts')).toHaveFocus();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('hands j/k back to the diff on Escape and stays open', async () => {
+    renderApp();
+    await toggle();
+    await pressShiftB();
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(fileListHasFocus()).toBe(false);
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(window.localStorage.getItem('difit.sidebarOpen')).toBe('true');
+    await userEvent.keyboard('j');
+    expect(cursorRow()).not.toBeNull();
+  });
+
+  it('hands j/k back to the diff when the diff is clicked', async () => {
+    renderApp();
+    await toggle();
+    await pressShiftB();
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+
+    fireEvent.click(document.querySelector('[data-diff-line-row="true"]')!);
+
+    expect(fileListHasFocus()).toBe(false);
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  it('moves the keys between the file list and the comments panel', async () => {
+    renderApp();
+    await toggle();
+    await pressShiftB();
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await pressShiftB();
+
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('App Component - File drawer keys on a phone', () => {
+  const toggle = () => screen.findByRole('button', { name: /toggle file tree panel/i });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockConfirm.mockReturnValue(false);
+    vi.mocked(useViewport).mockReturnValue({ isMobile: true, isDesktop: false });
+    mockFetch({ ...mockDiffResponse, files: [linedFile('a.ts', 10), linedFile('b.ts', 10)] });
+  });
+
+  afterEach(() => {
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+  });
+
+  it('opens the drawer on Shift+B with the keys in it, and closes it on Escape', async () => {
+    renderApp();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById('file-tree-panel')).toHaveAttribute('inert');
+
+    await pressShiftB();
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById('file-tree-panel')).not.toHaveAttribute('inert');
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+
+    await userEvent.keyboard('{Escape}');
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('closes on Escape after opening from the header button', async () => {
+    renderApp();
+    fireEvent.click(await toggle());
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'true');
+    expect(fileListHasFocus()).toBe(false);
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(await toggle()).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
 describe('App Component - Mobile layout', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -3141,6 +3292,18 @@ describe('App Component - Commits of the review', () => {
 
     await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
     await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+  });
+
+  it('keeps the keys in the file list after moving to the next commit from it', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+
+    await pressShiftB();
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
+    await userEvent.keyboard('{Shift>}>{/Shift}');
+
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+    await waitFor(() => expect(fileListHasFocus()).toBe(true));
   });
 
   it('leaves the keys on the diff after moving to the next commit from it', async () => {
