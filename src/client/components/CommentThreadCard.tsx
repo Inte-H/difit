@@ -64,7 +64,7 @@ function ThreadMessageItem({
     confirmButtonRef.current?.focus();
 
     // Capture phase so Escape only cancels the confirmation and never reaches
-    // surrounding Escape handlers (e.g. the CommentsListModal close hotkey).
+    // surrounding Escape handlers (e.g. the comments panel handing the keys back).
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
@@ -229,7 +229,6 @@ interface CommentThreadCardProps {
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
-  onClick?: (e: React.MouseEvent) => void;
   // Absent when this comment cannot be answered by editing the code here.
   onEditDirectly?: () => void;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
@@ -243,7 +242,6 @@ export function CommentThreadCard({
   onReplyToThread,
   onRemoveMessage,
   onUpdateMessage,
-  onClick,
   onEditDirectly,
   syntaxTheme,
 }: CommentThreadCardProps) {
@@ -300,8 +298,7 @@ export function CommentThreadCard({
             ? 'border-github-border border-l-github-danger'
             : 'border-github-border border-l-github-text-muted'
           : 'border-yellow-600/50 border-l-yellow-400 fixup-review:border-github-border fixup-review:border-l-github-text-muted'
-      } ${onClick ? 'cursor-pointer hover:shadow-md' : ''}`}
-      onClick={onClick}
+      }`}
     >
       <div className={`flex items-center justify-between gap-3 ${isCollapsed ? '' : 'mb-3'}`}>
         <div className="flex min-w-0 flex-1 items-center gap-2 text-xs text-github-text-secondary">

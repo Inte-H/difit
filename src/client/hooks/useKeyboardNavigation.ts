@@ -32,7 +32,7 @@ export function useKeyboardNavigation({
   onCreateComment,
   onCopyAllComments,
   onDeleteAllComments,
-  onShowCommentsList,
+  onToggleCommentsPanel,
   onRefresh,
   onPreviousCommit,
   onNextCommit,
@@ -575,7 +575,6 @@ export function useKeyboardNavigation({
     [moveToCenterOfViewport],
   );
 
-  // Copy all comments prompt - available in both navigation and comments-list scopes
   useHotkeys(
     'shift+c',
     () => {
@@ -583,11 +582,10 @@ export function useKeyboardNavigation({
         onCopyAllComments();
       }
     },
-    { ...hotkeyOptions, scopes: ['navigation', 'comments-list'] },
+    hotkeyOptions,
     [onCopyAllComments],
   );
 
-  // Delete all comments - available in both navigation and comments-list scopes
   useHotkeys(
     'shift+d',
     () => {
@@ -595,20 +593,20 @@ export function useKeyboardNavigation({
         onDeleteAllComments();
       }
     },
-    { ...hotkeyOptions, scopes: ['navigation', 'comments-list'] },
+    hotkeyOptions,
     [onDeleteAllComments],
   );
 
-  // Show comments list
+  // Open the comments panel, move the keys into it, or close it
   useHotkeys(
     'shift+l',
     () => {
-      if (onShowCommentsList) {
-        onShowCommentsList();
+      if (onToggleCommentsPanel) {
+        onToggleCommentsPanel();
       }
     },
     hotkeyOptions,
-    [onShowCommentsList],
+    [onToggleCommentsPanel],
   );
 
   return {

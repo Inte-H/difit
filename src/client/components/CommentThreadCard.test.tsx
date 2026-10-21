@@ -630,10 +630,23 @@ describe('CommentThreadCard', () => {
     expect(screen.getByText('Reply comment')).toBeInTheDocument();
   });
 
-  it('does not trigger the card click when toggling collapse', async () => {
-    const user = userEvent.setup();
-    const onClick = vi.fn();
+  it('names the author of each message when badges are on', () => {
+    render(
+      <CommentThreadCard
+        thread={mockThread}
+        showAuthorBadges
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
 
+    expect(screen.getByText('User')).toBeInTheDocument();
+    expect(screen.getByText('Reviewer')).toBeInTheDocument();
+  });
+
+  it('names no author when badges are off', () => {
     render(
       <CommentThreadCard
         thread={mockThread}
@@ -641,13 +654,11 @@ describe('CommentThreadCard', () => {
         onReplyToThread={vi.fn().mockResolvedValue(undefined)}
         onRemoveMessage={vi.fn()}
         onUpdateMessage={vi.fn()}
-        onClick={onClick}
       />,
     );
 
-    await user.click(screen.getByRole('button', { name: 'Collapse thread' }));
-
-    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.queryByText('User')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reviewer')).not.toBeInTheDocument();
   });
 
   it('shows the "Outdated" badge when the thread is marked outdated', () => {
