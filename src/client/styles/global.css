@@ -25,6 +25,19 @@
   --color-comment-bg: #1c2128;
   --color-comment-border: #373e47;
   --color-comment-text: #e6edf3;
+
+  --animate-responding-dot: responding-dot 0.9s ease-in-out infinite;
+
+  @keyframes responding-dot {
+    0%,
+    60%,
+    100% {
+      transform: translateY(0);
+    }
+    30% {
+      transform: translateY(-3px);
+    }
+  }
 }
 
 /* CSS Custom Properties for dynamic theming */

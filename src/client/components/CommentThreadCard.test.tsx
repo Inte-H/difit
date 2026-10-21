@@ -714,6 +714,27 @@ describe('CommentThreadCard', () => {
     expect(screen.queryByTestId('responding-chip')).not.toBeInTheDocument();
   });
 
+  it('bounces three dots one after another in the responding chip and holds them still under reduced motion', () => {
+    render(
+      <CommentThreadCard
+        thread={mockThread}
+        review={{ ...awaitingReview, state: 'awaiting-fix', fixupSha: null, responding: true }}
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
+
+    const dots = screen.getAllByTestId('responding-dot');
+    expect(dots).toHaveLength(3);
+    expect(dots.map((dot) => dot.style.animationDelay)).toEqual(['0ms', '150ms', '300ms']);
+    for (const dot of dots) {
+      expect(dot).toHaveClass('animate-responding-dot', 'motion-reduce:animate-none');
+    }
+    expect(screen.getByTestId('responding-chip')).toHaveTextContent('응답 중');
+  });
+
   it('marks a stale review thread visibly while keeping its state chip and decision buttons', () => {
     render(
       <CommentThreadCard
