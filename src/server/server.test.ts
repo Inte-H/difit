@@ -3163,6 +3163,47 @@ describe('Server Integration Tests', () => {
       });
     });
 
+    it('sends an unanswered reply again as approved when the reviewer approves', async () => {
+      await listenOnSocket();
+      const { port } = await startPinned();
+      parserInstances.at(-1)!.listThreadFixups.mockResolvedValue([
+        {
+          sha: FIXUP,
+          shortSha: 'bbbbbbb',
+          patchId: 'p1',
+          authoredAt: '2026-01-02T00:00:00Z',
+          subject: 'fixup! x',
+          threadIds: ['c1'],
+          files: [],
+        },
+      ]);
+      const asked = reviewerThread('c1');
+      const reply = {
+        id: 'r1',
+        body: 'why this order?',
+        author: 'User',
+        createdAt: '2026-01-03T00:00:00Z',
+        updatedAt: '2026-01-03T00:00:00Z',
+      };
+      const askedBack = { ...asked, messages: [...asked.messages, reply] };
+      await postFromPage(port, { threads: [askedBack] });
+      await postFromPage(port, {
+        threads: [askedBack],
+        decisions: [
+          { threadId: 'c1', kind: 'approved', fixupSha: FIXUP, at: '2026-01-03T12:00:00Z' },
+        ],
+      });
+      await settle();
+
+      const firstLines = received.map((sent) => {
+        const content = JSON.parse(sent.trim().split('\n').at(-1)!).message.content as string;
+        return content.split('\n')[0];
+      });
+      expect(firstLines).toHaveLength(2);
+      expect(firstLines[0]).toContain('c1 [승인 대기]');
+      expect(firstLines[1]).toContain('c1 [승인됨]');
+    });
+
     it('asks the agent to drop the fixup of a deleted thread until it leaves the range', async () => {
       const { port } = await startPinned();
       const parser = parserInstances.at(-1)!;
