@@ -143,11 +143,11 @@ const getInitialDiffViewMode = () => getStoredDiffViewMode() ?? DEFAULT_DIFF_VIE
 const clampSidebarWidth = (width: number) =>
   Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
 
-const getStoredSidebarWidth = (): number | null => {
+const getStoredWidth = (key: string, clamp: (width: number) => number): number | null => {
   if (typeof window === 'undefined') {
     return null;
   }
-  const stored = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+  const stored = window.localStorage.getItem(key);
   if (!stored) {
     return null;
   }
@@ -155,16 +155,18 @@ const getStoredSidebarWidth = (): number | null => {
   if (!Number.isFinite(parsed)) {
     return null;
   }
-  return clampSidebarWidth(parsed);
+  return clamp(parsed);
 };
+
+const getStoredSidebarWidth = () => getStoredWidth(SIDEBAR_WIDTH_STORAGE_KEY, clampSidebarWidth);
 
 const getInitialSidebarWidth = () => getStoredSidebarWidth() ?? SIDEBAR_DEFAULT_WIDTH;
 
-const getStoredSidebarOpen = (): boolean | null => {
+const getStoredBoolean = (key: string): boolean | null => {
   if (typeof window === 'undefined') {
     return null;
   }
-  const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+  const stored = window.localStorage.getItem(key);
   if (stored === 'true') {
     return true;
   }
@@ -173,6 +175,8 @@ const getStoredSidebarOpen = (): boolean | null => {
   }
   return null;
 };
+
+const getStoredSidebarOpen = () => getStoredBoolean(SIDEBAR_OPEN_STORAGE_KEY);
 
 const getInitialFileTreeOpen = () => getStoredSidebarOpen() ?? true;
 
@@ -867,29 +871,31 @@ function App() {
     setCommentTrigger(null);
   }, [setCommentTrigger]);
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-    const startX = e.clientX;
-    const startWidth = sidebarWidth;
+  const startResize =
+    (
+      startWidth: number,
+      setWidth: (width: number) => void,
+      clamp: (width: number) => number,
+      direction: 1 | -1,
+    ) =>
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      setIsDragging(true);
+      const startX = e.clientX;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = Math.max(
-        SIDEBAR_MIN_WIDTH,
-        Math.min(SIDEBAR_MAX_WIDTH, startWidth + (e.clientX - startX)),
-      );
-      setSidebarWidth(newWidth);
+      const handleMouseMove = (e: MouseEvent) => {
+        setWidth(clamp(startWidth + direction * (e.clientX - startX)));
+      };
+
+      const handleMouseUp = () => {
+        setIsDragging(false);
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('mouseup', handleMouseUp);
+      };
+
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
     };
-
-    const handleMouseUp = () => {
-      setIsDragging(false);
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-    };
-
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
-  };
 
   const fetchDiffData = useCallback(
     async (selection?: DiffSelection) => {
@@ -1593,8 +1599,8 @@ function App() {
             } ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
             style={{
               width: isMobile ? '100%' : isFileTreeOpen ? `${sidebarWidth}px` : 'auto',
-              minWidth: isMobile ? '0px' : isFileTreeOpen ? '200px' : 'auto',
-              maxWidth: isMobile ? 'none' : isFileTreeOpen ? '600px' : 'none',
+              minWidth: isMobile ? '0px' : isFileTreeOpen ? `${SIDEBAR_MIN_WIDTH}px` : 'auto',
+              maxWidth: isMobile ? 'none' : isFileTreeOpen ? `${SIDEBAR_MAX_WIDTH}px` : 'none',
             }}
           >
             <h1>
@@ -1898,8 +1904,8 @@ function App() {
               }`}
               style={{
                 width: isMobile ? 'min(85vw, 360px)' : `${sidebarWidth}px`,
-                minWidth: isMobile ? '0px' : '200px',
-                maxWidth: isMobile ? 'none' : '600px',
+                minWidth: isMobile ? '0px' : `${SIDEBAR_MIN_WIDTH}px`,
+                maxWidth: isMobile ? 'none' : `${SIDEBAR_MAX_WIDTH}px`,
                 height: '100%',
                 transform: isMobile
                   ? isFileDrawerOpen
@@ -1964,7 +1970,7 @@ function App() {
               style={{
                 width: isFileTreeOpen ? '4px' : '0px',
               }}
-              onMouseDown={handleMouseDown}
+              onMouseDown={startResize(sidebarWidth, setSidebarWidth, clampSidebarWidth, 1)}
               title="Drag to resize file list"
             />
           )}

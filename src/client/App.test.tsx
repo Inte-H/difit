@@ -1506,6 +1506,25 @@ describe('App Component - Sidebar persistence', () => {
       expect(window.localStorage.getItem('difit.sidebarOpen')).toBe('true');
     });
   });
+
+  it('widens the file list by the distance dragged, within its limits', async () => {
+    renderApp();
+
+    const handle = await screen.findByTitle('Drag to resize file list');
+    const box = document.getElementById('file-tree-panel')!.parentElement!;
+    expect(box.style.width).toBe('280px');
+
+    fireEvent.mouseDown(handle, { clientX: 300 });
+    fireEvent.mouseMove(document, { clientX: 350 });
+    fireEvent.mouseUp(document);
+    expect(box.style.width).toBe('330px');
+    expect(window.localStorage.getItem('difit.sidebarWidth')).toBe('330');
+
+    fireEvent.mouseDown(handle, { clientX: 300 });
+    fireEvent.mouseMove(document, { clientX: 900 });
+    fireEvent.mouseUp(document);
+    expect(box.style.width).toBe('600px');
+  });
 });
 
 describe('App Component - Mobile layout', () => {
