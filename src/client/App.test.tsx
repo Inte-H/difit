@@ -3010,7 +3010,7 @@ describe('App Component - Commits of the review', () => {
         await waitFor(() =>
           expect(diffQueries().at(-1)).toEqual([COMMITS[1]!.parentSha, COMMITS[1]!.sha]),
         );
-        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        await waitFor(() => expect(drawerButton()).toHaveAttribute('aria-expanded', 'false'));
         await waitFor(() => expect(drawerButton()).toHaveTextContent('abc1234'));
       });
 
@@ -3041,7 +3041,7 @@ describe('App Component - Commits of the review', () => {
         await waitFor(() =>
           expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[1]!.sha]),
         );
-        expect(drawerButton()).toHaveAttribute('aria-expanded', 'false');
+        await waitFor(() => expect(drawerButton()).toHaveAttribute('aria-expanded', 'false'));
         await waitFor(() =>
           expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'),
         );
