@@ -260,6 +260,15 @@ describe('CommitList', () => {
       expect(onResize).toHaveBeenLastCalledWith(300);
     });
 
+    it('keeps the chosen height when every commit already shows and the edge is dragged up', () => {
+      const onResize = renderResizable(undefined, { listContentHeight: 150 });
+
+      fireEvent.mouseDown(edge(), { clientY: 500 });
+      fireEvent.mouseMove(document, { clientY: 0 });
+
+      expect(onResize).not.toHaveBeenCalled();
+    });
+
     it('takes at most part of the sidebar until a height is chosen, then at most that', () => {
       renderResizable();
       expect(region().style.maxHeight).toBe('40%');

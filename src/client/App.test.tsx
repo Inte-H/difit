@@ -2124,23 +2124,6 @@ describe('App Component - Commits of the review', () => {
 
     expect(commits.style.maxHeight).toContain('400px');
     expect(window.localStorage.getItem('difit.commitListHeight')).toBe('400');
-  });
-
-  it('saves the first height the commit list is dragged to with the difit settings', async () => {
-    renderApp();
-
-    const commits = await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
-    expect(commits.style.maxHeight).toBe('40%');
-    Object.defineProperty(document.getElementById('file-tree-panel')!, 'clientHeight', {
-      value: 800,
-    });
-    vi.spyOn(commits, 'getBoundingClientRect').mockReturnValue({ height: 300 } as DOMRect);
-    Object.defineProperty(within(commits).getByRole('list'), 'scrollHeight', { value: 1000 });
-    const edge = within(commits).getByRole('separator', { name: '커밋 목록 높이 조절' });
-    fireEvent.mouseDown(edge, { clientY: 500 });
-    fireEvent.mouseMove(document, { clientY: 400 });
-    fireEvent.mouseUp(document);
-
     await waitFor(() => {
       const saved = vi
         .mocked(global.fetch)

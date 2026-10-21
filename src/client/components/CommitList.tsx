@@ -188,8 +188,13 @@ export function CommitList({
     const list = listRef.current;
     const content = list ? startHeight - list.clientHeight + list.scrollHeight : startHeight;
     const room = Math.min(content, (section.parentElement?.clientHeight ?? 0) - FILES_ROOM_PX);
-    const onMove = (move: MouseEvent) =>
-      onResize(Math.max(MIN_HEIGHT_PX, Math.min(room, startHeight + startY - move.clientY)));
+    let shownHeight = startHeight;
+    const onMove = (move: MouseEvent) => {
+      const next = Math.max(MIN_HEIGHT_PX, Math.min(room, startHeight + startY - move.clientY));
+      if (next === shownHeight) return;
+      shownHeight = next;
+      onResize(next);
+    };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);

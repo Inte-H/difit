@@ -187,6 +187,12 @@ const getStoredCommitListHeight = (): number | null => {
   return stored ? parseCommitListHeight(Number.parseInt(stored, 10)) : null;
 };
 
+const storeCommitListHeight = (height: number) => {
+  try {
+    window.localStorage.setItem(COMMIT_LIST_HEIGHT_STORAGE_KEY, String(height));
+  } catch {}
+};
+
 function App() {
   const [diffData, setDiffData] = useState<DiffResponse | null>(null);
   const [diffDataVersion, setDiffDataVersion] = useState(0);
@@ -1014,6 +1020,7 @@ function App() {
       const remoteCommitListHeight = parseCommitListHeight(client.commitListHeight);
       if (remoteCommitListHeight !== null) {
         setCommitListHeight(remoteCommitListHeight);
+        storeCommitListHeight(remoteCommitListHeight);
       } else {
         const localCommitListHeight = getStoredCommitListHeight();
         if (localCommitListHeight !== null) {
@@ -1047,22 +1054,11 @@ function App() {
   }, [sidebarWidth]);
 
   const handleCommitListResize = useCallback((height: number) => {
-    setCommitListHeight(Math.round(height));
+    const rounded = Math.round(height);
+    setCommitListHeight(rounded);
+    storeCommitListHeight(rounded);
+    saveClientSettings({ commitListHeight: rounded });
   }, []);
-
-  const skipInitialCommitListHeightSaveRef = useRef(true);
-  useEffect(() => {
-    if (commitListHeight !== null) {
-      try {
-        window.localStorage.setItem(COMMIT_LIST_HEIGHT_STORAGE_KEY, String(commitListHeight));
-      } catch {}
-    }
-    if (skipInitialCommitListHeightSaveRef.current) {
-      skipInitialCommitListHeightSaveRef.current = false;
-      return;
-    }
-    saveClientSettings({ commitListHeight });
-  }, [commitListHeight]);
 
   const skipInitialSidebarOpenSaveRef = useRef(true);
   useEffect(() => {
