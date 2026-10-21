@@ -855,6 +855,12 @@ function App() {
   useEffect(() => {
     if (commentsPanelFocusRequest > 0) commentsPanelRef.current?.focus();
   }, [commentsPanelFocusRequest]);
+  const refocusCommentsPanelAfterLoadRef = useRef(false);
+  useEffect(() => {
+    if (loading || !refocusCommentsPanelAfterLoadRef.current) return;
+    refocusCommentsPanelAfterLoadRef.current = false;
+    commentsPanelRef.current?.focus();
+  }, [loading]);
 
   // Track which file the mouse is over so `v` works without a cursor
   const hoveredFileIndexRef = useRef<number | null>(null);
@@ -1596,7 +1602,11 @@ function App() {
       !thread.isOutdated &&
       diffData.files.some(({ path }) => path === thread.file);
     if (!placedHere && showsPartOfReview && review) {
-      showDiff(thread.madeView ?? review.requested);
+      const nextSelection = thread.madeView ?? review.requested;
+      refocusCommentsPanelAfterLoadRef.current =
+        !diffSelectionsEqual(nextSelection, selectedRevision) &&
+        (commentsPanelRef.current?.hasFocus() ?? false);
+      showDiff(nextSelection);
       pendingCommentNavigationRef.current = thread.id;
       return;
     }

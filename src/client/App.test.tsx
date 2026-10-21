@@ -3114,6 +3114,23 @@ describe('App Component - Commits of the review', () => {
     expect(await (await diffMain()).findByText('Look here')).toBeInTheDocument();
   });
 
+  it('keeps the keys in the list after going to another view to show a comment', async () => {
+    renderApp();
+    await screen.findByRole('region', { name: '리뷰 범위의 커밋' });
+    fireEvent.click(commitButton(/1111111/));
+    await waitFor(() => expect(commitButton(/1111111/)).toHaveAttribute('aria-current', 'true'));
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+    expect(await (await diffMain()).findByText('Look here')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(within(commentsPanel()!).getByRole('button', { name: /Look here/ })).toHaveFocus(),
+    );
+  });
+
   it('goes back to the whole review for a comment on a file the shown commit leaves alone', async () => {
     mockComments = [
       createMockThread({ id: 'c9', filePath: 'other.ts', line: 1, body: 'Elsewhere' }),
