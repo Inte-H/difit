@@ -16,6 +16,7 @@ const chunk = (changeKind: ChunkChangeKind | undefined, start: number): MergedCh
   newLines: 2,
   changeKind,
   originalIndices: [start],
+  originalLineRanges: [{ originalIndex: start, start: 0, end: 2, changeKind }],
   hiddenLinesBefore: 0,
   hiddenLinesAfter: 0,
   lines: [
@@ -64,6 +65,32 @@ function renderViewer(props: Partial<DiffViewerBodyProps>) {
   return render(viewer(props));
 }
 
+// A code change and a comment-only change joined by the opened line between them.
+const codeThenComment = (): MergedChunk => ({
+  header: '@@ -1,5 +1,5 @@',
+  oldStart: 1,
+  oldLines: 5,
+  newStart: 1,
+  newLines: 5,
+  changeKind: 'code',
+  originalIndices: [0, 1],
+  originalLineRanges: [
+    { originalIndex: 0, start: 0, end: 2, changeKind: 'code' },
+    { originalIndex: 1, start: 4, end: 6, changeKind: 'comment' },
+  ],
+  hiddenLinesBefore: 0,
+  hiddenLinesAfter: 0,
+  lines: [
+    { type: 'delete', content: 'a = 1;', oldLineNumber: 1 },
+    { type: 'add', content: 'a = 2;', newLineNumber: 1 },
+    { type: 'normal', content: 'b();', oldLineNumber: 2, newLineNumber: 2 },
+    { type: 'normal', content: 'opened();', oldLineNumber: 3, newLineNumber: 3 },
+    { type: 'delete', content: '// old note', oldLineNumber: 4 },
+    { type: 'add', content: '// new note', newLineNumber: 4 },
+    { type: 'normal', content: 'c();', oldLineNumber: 5, newLineNumber: 5 },
+  ],
+});
+
 describe('TextDiffViewer folding', () => {
   it('folds a comment-only chunk into one line and opens it on click', () => {
     renderViewer({});
@@ -88,6 +115,120 @@ describe('TextDiffViewer folding', () => {
     expect(screen.getByRole('button', { name: '주석 1줄 바뀜 · 펼치기' })).toBeInTheDocument();
   });
 
+  it.each(['unified', 'split'] as const)(
+    'folds the comment-only part of a chunk that also changes code in %s mode',
+    (diffMode) => {
+      renderViewer({ mergedChunks: [codeThenComment()], diffMode });
+
+      const fold = screen.getByRole('button', { name: '주석 1줄 바뀜 · 펼치기' });
+      expect(shown('a = 2;')).toBe(true);
+      expect(shown('opened();')).toBe(true);
+      expect(shown('// new note')).toBe(false);
+      expect(shown('c();')).toBe(false);
+
+      fireEvent.click(fold);
+      expect(shown('// new note')).toBe(true);
+    },
+  );
+
+  it('keeps the comment-only part folded while the cursor is outside it', () => {
+    renderViewer({
+      mergedChunks: [codeThenComment()],
+      cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 3, side: 'right' },
+    });
+
+    expect(screen.getByRole('button', { name: '주석 1줄 바뀜 · 펼치기' })).toBeInTheDocument();
+  });
+
+  it('opens the comment-only part when the cursor moves into it', () => {
+    renderViewer({
+      mergedChunks: [codeThenComment()],
+      cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 5, side: 'right' },
+    });
+
+    expect(shown('// new note')).toBe(true);
+  });
+
+  it.each(['unified', 'split'] as const)(
+    'keeps a comment form open after the cursor leaves the folded part in %s mode',
+    (diffMode) => {
+      const { rerender } = renderViewer({
+        mergedChunks: [codeThenComment()],
+        diffMode,
+        cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 5, side: 'right' },
+        commentTrigger: { fileIndex: 0, chunkIndex: 0, lineIndex: 5 },
+      });
+      expect(screen.getByRole('textbox')).toBeInTheDocument();
+
+      rerender(
+        viewer({
+          mergedChunks: [codeThenComment()],
+          diffMode,
+          cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 0, side: 'right' },
+          commentTrigger: null,
+        }),
+      );
+
+      expect(screen.getByRole('textbox')).toBeInTheDocument();
+      expect(shown('// new note')).toBe(true);
+    },
+  );
+
+  it('keeps a comment form open on a wholly folded chunk after the cursor leaves it', () => {
+    const { rerender } = renderViewer({
+      cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 1, side: 'right' },
+      commentTrigger: { fileIndex: 0, chunkIndex: 0, lineIndex: 1 },
+    });
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+
+    rerender(
+      viewer({
+        cursor: { fileIndex: 0, chunkIndex: 1, lineIndex: 0, side: 'right' },
+        commentTrigger: null,
+      }),
+    );
+
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+    expect(shown('// new 10')).toBe(true);
+  });
+
+  it('folds and opens each comment-only part of one chunk on its own', () => {
+    const twoNotes = codeThenComment();
+    twoNotes.originalIndices = [0, 1, 2];
+    twoNotes.lines = [
+      ...twoNotes.lines,
+      { type: 'normal', content: 'd();', oldLineNumber: 6, newLineNumber: 6 },
+      { type: 'delete', content: '// old tail', oldLineNumber: 7 },
+      { type: 'add', content: '// new tail', newLineNumber: 7 },
+    ];
+    twoNotes.originalLineRanges = [
+      ...twoNotes.originalLineRanges,
+      { originalIndex: 2, start: 8, end: 9, changeKind: 'comment' },
+    ];
+    const thread: CommentThread = {
+      id: 't1',
+      file: 'src/a.ts',
+      line: 7,
+      side: 'new',
+      createdAt: '2026-10-23T00:00:00.000Z',
+      updatedAt: '2026-10-23T00:00:00.000Z',
+      messages: [],
+    };
+
+    const { rerender } = renderViewer({ mergedChunks: [twoNotes] });
+    const folds = screen.getAllByRole('button', { name: '주석 1줄 바뀜 · 펼치기' });
+    expect(folds).toHaveLength(2);
+
+    fireEvent.click(folds[1]!);
+    expect(shown('// new tail')).toBe(true);
+    expect(shown('// new note')).toBe(false);
+
+    rerender(viewer({ mergedChunks: [twoNotes], foldCommentChanges: false }));
+    rerender(viewer({ mergedChunks: [twoNotes], threads: [thread] }));
+    expect(shown('// new tail')).toBe(true);
+    expect(shown('// new note')).toBe(false);
+  });
+
   it('labels a whitespace-only chunk as such', () => {
     renderViewer({ mergedChunks: [chunk('whitespace', 10)] });
 
@@ -102,6 +243,7 @@ describe('TextDiffViewer folding', () => {
       { type: 'add', content: '  a,', newLineNumber: 11 },
       { type: 'add', content: '  b);', newLineNumber: 12 },
     ];
+    split.originalLineRanges = [{ originalIndex: 10, start: 0, end: 3, changeKind: 'whitespace' }];
     renderViewer({ mergedChunks: [split] });
 
     expect(screen.getByRole('button', { name: '공백 3줄 바뀜 · 펼치기' })).toBeInTheDocument();

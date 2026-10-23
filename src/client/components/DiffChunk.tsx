@@ -28,6 +28,13 @@ import { DiffLineRow } from './DiffLineRow';
 import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
 import { FixupOverlayRow } from './FixupOverlayCard';
+import {
+  type FoldedLines,
+  FoldedLinesRow,
+  foldAt,
+  foldsClearOfForms,
+  NO_FOLDS,
+} from './FoldedLines';
 import { SelectionCommentBar } from './SelectionCommentBar';
 import type { AppearanceSettings } from './SettingsModal';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
@@ -66,6 +73,7 @@ interface DiffChunkProps {
   onCommentTriggerHandled?: () => void;
   filename?: string;
   onOpenInEditor?: (filePath: string, lineNumber: number) => void;
+  foldedLines?: readonly FoldedLines[];
 }
 
 export const DiffChunk = memo(function DiffChunk({
@@ -87,6 +95,7 @@ export const DiffChunk = memo(function DiffChunk({
   onCommentTriggerHandled,
   filename,
   onOpenInEditor,
+  foldedLines = NO_FOLDS,
 }: DiffChunkProps) {
   const [startLine, setStartLine] = useState<number | null>(null);
   const [endLine, setEndLine] = useState<number | null>(null);
@@ -427,11 +436,13 @@ export const DiffChunk = memo(function DiffChunk({
         filename={filename}
         commentTrigger={commentTrigger}
         onCommentTriggerHandled={onCommentTriggerHandled}
+        foldedLines={foldedLines}
       />
     );
   }
 
   const { editing, editLine, editHunk, editRange } = directEditing;
+  const folds = foldsClearOfForms(foldedLines, chunk.lines, commentingLine, editing);
   const selected = codeSelection.selected;
 
   return (
@@ -467,6 +478,12 @@ export const DiffChunk = memo(function DiffChunk({
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
         <tbody>
           {chunk.lines.map((line, index) => {
+            const fold = foldAt(folds, index);
+            if (fold) {
+              return index === fold.start ? (
+                <FoldedLinesRow key={index} fold={fold} colSpan={3} />
+              ) : null;
+            }
             const currentLineNumber = line.newLineNumber || line.oldLineNumber || 0;
             const currentLineSide: DiffSide = line.type === 'delete' ? 'old' : 'new';
             const formTargetLineNumber = commentingLine

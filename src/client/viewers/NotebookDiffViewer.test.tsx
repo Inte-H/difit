@@ -56,6 +56,7 @@ const mergedChunks: MergedChunk[] = [
       },
     ],
     originalIndices: [0],
+    originalLineRanges: [],
     hiddenLinesBefore: 0,
     hiddenLinesAfter: 0,
   },

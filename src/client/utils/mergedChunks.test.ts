@@ -21,6 +21,7 @@ function createMergedChunk(content: string): MergedChunk {
       },
     ],
     originalIndices: [0],
+    originalLineRanges: [],
     hiddenLinesBefore: 0,
     hiddenLinesAfter: 0,
   };
