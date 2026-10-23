@@ -37,8 +37,8 @@ const shown = (code: string) => document.body.textContent?.includes(code) ?? fal
 const noop = () => {};
 const asyncNoop = async () => {};
 
-function renderViewer(props: Partial<DiffViewerBodyProps>) {
-  return render(
+function viewer(props: Partial<DiffViewerBodyProps>) {
+  return (
     <WordHighlightProvider>
       <TextDiffViewer
         file={file}
@@ -56,8 +56,12 @@ function renderViewer(props: Partial<DiffViewerBodyProps>) {
         onUpdateMessage={noop}
         {...props}
       />
-    </WordHighlightProvider>,
+    </WordHighlightProvider>
   );
+}
+
+function renderViewer(props: Partial<DiffViewerBodyProps>) {
+  return render(viewer(props));
 }
 
 describe('TextDiffViewer folding', () => {
@@ -71,6 +75,17 @@ describe('TextDiffViewer folding', () => {
     fireEvent.click(fold);
     expect(shown('// new 10')).toBe(true);
     expect(screen.queryByRole('button', { name: /펼치기/ })).toBeNull();
+  });
+
+  it('folds an opened chunk again when folding is turned off and back on', () => {
+    const { rerender } = renderViewer({});
+    fireEvent.click(screen.getByRole('button', { name: '주석 1줄 바뀜 · 펼치기' }));
+
+    rerender(viewer({ foldCommentChanges: false }));
+    rerender(viewer({ foldCommentChanges: true }));
+
+    expect(shown('// new 10')).toBe(false);
+    expect(screen.getByRole('button', { name: '주석 1줄 바뀜 · 펼치기' })).toBeInTheDocument();
   });
 
   it('labels a whitespace-only chunk as such', () => {
