@@ -4,8 +4,10 @@ import { type EditRange, rangeOfLine } from '../utils/directEdit';
 export interface FoldedLines {
   start: number;
   end: number;
-  label: string;
-  onUnfold: () => void;
+  summary: string;
+  folded: boolean;
+  locked?: boolean;
+  onToggle: () => void;
 }
 
 export const NO_FOLDS: readonly FoldedLines[] = [];
@@ -13,7 +15,7 @@ export const NO_FOLDS: readonly FoldedLines[] = [];
 export const foldAt = (folds: readonly FoldedLines[], index: number) =>
   folds.find((fold) => index >= fold.start && index <= fold.end);
 
-export function foldsClearOfForms(
+export function lockFoldsUnderForms(
   folds: readonly FoldedLines[],
   lines: DiffLine[],
   commentingLine: { side: DiffSide; lineNumber: LineNumber } | null,
@@ -37,19 +39,26 @@ export function foldsClearOfForms(
     }
     return false;
   };
-  const closed = folds.filter((fold) => !touches(fold));
-  if (closed.length === folds.length) return folds;
-  return closed.length > 0 ? closed : NO_FOLDS;
+  let changed = false;
+  const lockedFolds = folds.map((fold) => {
+    if (!touches(fold)) return fold;
+    changed = true;
+    return { ...fold, folded: false, locked: true };
+  });
+  return changed ? lockedFolds : folds;
 }
 
 function FoldedLinesButton({ fold }: { fold: FoldedLines }) {
   return (
     <button
       type="button"
-      onClick={fold.onUnfold}
-      className="w-full px-3 py-1.5 text-left text-xs font-mono bg-github-bg-secondary text-github-text-secondary hover:text-github-text-primary hover:bg-github-bg-tertiary border-y border-github-border cursor-pointer"
+      onClick={fold.onToggle}
+      disabled={fold.locked}
+      title={fold.locked ? '입력창이 열려 있는 동안에는 접을 수 없습니다' : undefined}
+      aria-expanded={!fold.folded}
+      className="w-full px-3 py-1.5 text-left text-xs font-mono bg-github-bg-secondary text-github-text-secondary enabled:hover:text-github-text-primary enabled:hover:bg-github-bg-tertiary border-y border-github-border enabled:cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
     >
-      {fold.label}
+      {`${fold.summary} · ${fold.folded ? '펼치기' : '접기'}`}
     </button>
   );
 }

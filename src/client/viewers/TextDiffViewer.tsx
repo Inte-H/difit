@@ -4,7 +4,8 @@ import type { CommentThread, DiffLine } from '../../types/diff';
 import { LEAVES_CODE_ALONE_LABEL, leavesCodeAlone } from '../../utils/changeKind';
 import { DiffChunk } from '../components/DiffChunk';
 import { ExpandButton } from '../components/ExpandButton';
-import { type FoldedLines, NO_FOLDS } from '../components/FoldedLines';
+import type { FoldedLines } from '../components/FoldedLines';
+import type { CursorPosition } from '../hooks/keyboardNavigation';
 
 import type { DiffViewerBodyProps } from './types';
 
@@ -18,6 +19,16 @@ function holdsThread(lines: DiffLine[], threads: CommentThread[]) {
     );
   });
 }
+
+const sameCursor = (a: CursorPosition, b: CursorPosition | null | undefined) =>
+  !!b &&
+  a.fileIndex === b.fileIndex &&
+  a.chunkIndex === b.chunkIndex &&
+  a.lineIndex === b.lineIndex &&
+  a.side === b.side;
+
+type FoldEntry = FoldedLines & { originalIndex: number };
+const NO_FOLD_ENTRIES: readonly FoldEntry[] = [];
 
 // A block of consecutive changes counts its larger side, so one edited line is one line.
 function changedLineCount(lines: DiffLine[]) {
@@ -60,8 +71,16 @@ export function TextDiffViewer({
   onCommentTriggerHandled,
 }: DiffViewerBodyProps) {
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set());
+  // A part folded with the cursor inside stays folded until the cursor moves.
+  const [foldedUnderCursor, setFoldedUnderCursor] = useState<{
+    originalIndex: number;
+    cursor: CursorPosition;
+  } | null>(null);
   if (!foldCommentChanges && unfolded.size > 0) {
     setUnfolded(new Set());
+  }
+  if (foldedUnderCursor && (!foldCommentChanges || !sameCursor(foldedUnderCursor.cursor, cursor))) {
+    setFoldedUnderCursor(null);
   }
 
   const renderExpandButton = (
@@ -118,48 +137,66 @@ export function TextDiffViewer({
 
   const foldsByChunk = useMemo(
     () =>
-      mergedChunks.map((mergedChunk): readonly FoldedLines[] => {
-        if (!foldCommentChanges) return NO_FOLDS;
+      mergedChunks.map((mergedChunk): readonly FoldEntry[] => {
+        if (!foldCommentChanges) return NO_FOLD_ENTRIES;
         const folds = mergedChunk.originalLineRanges.flatMap(
           ({ originalIndex, start, end, changeKind }) => {
             const lines = mergedChunk.lines.slice(start, end + 1);
-            if (
-              !leavesCodeAlone(changeKind) ||
-              unfolded.has(originalIndex) ||
-              holdsThread(lines, threads)
-            ) {
+            if (!leavesCodeAlone(changeKind) || holdsThread(lines, threads)) {
               return [];
             }
+            const folded = !unfolded.has(originalIndex);
             return [
               {
+                originalIndex,
                 start,
                 end,
-                label: `${LEAVES_CODE_ALONE_LABEL[changeKind]} ${changedLineCount(lines)}줄 바뀜 · 펼치기`,
-                onUnfold: () => setUnfolded((prev) => new Set(prev).add(originalIndex)),
+                summary: `${LEAVES_CODE_ALONE_LABEL[changeKind]} ${changedLineCount(lines)}줄 바뀜`,
+                folded,
+                onToggle: () =>
+                  setUnfolded((prev) => {
+                    const next = new Set(prev);
+                    if (folded) next.add(originalIndex);
+                    else next.delete(originalIndex);
+                    return next;
+                  }),
               },
             ];
           },
         );
-        return folds.length > 0 ? folds : NO_FOLDS;
+        return folds.length > 0 ? folds : NO_FOLD_ENTRIES;
       }),
     [mergedChunks, foldCommentChanges, unfolded, threads],
   );
 
-  const foldsAt = (mergedIndex: number) => {
-    const folds = foldsByChunk[mergedIndex] ?? NO_FOLDS;
-    const lineIndexHere = (
-      position: { chunkIndex: number; lineIndex: number } | null | undefined,
-    ) => (position?.chunkIndex === mergedIndex ? position.lineIndex : null);
-    const held = [lineIndexHere(cursor), lineIndexHere(commentTrigger)].filter(
-      (lineIndex) => lineIndex !== null,
-    );
-    if (held.length === 0) return folds;
-    const open = folds.filter(
-      (fold) => !held.some((lineIndex) => lineIndex >= fold.start && lineIndex <= fold.end),
-    );
-    if (open.length === folds.length) return folds;
-    return open.length > 0 ? open : NO_FOLDS;
-  };
+  const shownFolds = useMemo(
+    () =>
+      foldsByChunk.map((folds, mergedIndex): readonly FoldedLines[] => {
+        if (!cursor || cursor.chunkIndex !== mergedIndex) return folds;
+        const holds = (fold: FoldEntry) =>
+          foldedUnderCursor?.originalIndex !== fold.originalIndex &&
+          cursor.lineIndex >= fold.start &&
+          cursor.lineIndex <= fold.end;
+        if (!folds.some(holds)) return folds;
+        return folds.map((fold) =>
+          holds(fold)
+            ? {
+                ...fold,
+                folded: false,
+                onToggle: () => {
+                  setUnfolded((prev) => {
+                    const next = new Set(prev);
+                    next.delete(fold.originalIndex);
+                    return next;
+                  });
+                  setFoldedUnderCursor({ originalIndex: fold.originalIndex, cursor });
+                },
+              }
+            : fold,
+        );
+      }),
+    [foldsByChunk, cursor, foldedUnderCursor],
+  );
 
   return (
     <>
@@ -169,7 +206,7 @@ export function TextDiffViewer({
         const firstOriginalIndex = mergedChunk.originalIndices[0] ?? 0;
         const lastOriginalIndex =
           mergedChunk.originalIndices[mergedChunk.originalIndices.length - 1] ?? 0;
-        const folds = foldsAt(mergedIndex);
+        const folds = shownFolds[mergedIndex] ?? NO_FOLD_ENTRIES;
 
         return (
           <React.Fragment key={mergedIndex}>
