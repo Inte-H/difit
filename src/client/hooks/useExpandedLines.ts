@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 
 import {
+  type ChunkChangeKind,
   type DiffFile,
   type DiffChunk,
   type DiffLine,
@@ -17,8 +18,17 @@ interface UseExpandedLinesOptions {
   diffIdentity?: string | number;
 }
 
+interface OriginalLineRange {
+  originalIndex: number;
+  start: number;
+  end: number;
+  changeKind?: ChunkChangeKind;
+}
+
 export interface MergedChunk extends DiffChunk {
   originalIndices: number[];
+  // Where each original chunk's own lines sit in `lines`.
+  originalLineRanges: OriginalLineRange[];
   hiddenLinesBefore: number;
   hiddenLinesAfter: number;
 }
@@ -82,6 +92,21 @@ async function fetchLineCount(
     throw new Error(`Failed to fetch line count: ${response.statusText}`);
   }
   return response.json() as Promise<{ oldLineCount?: number; newLineCount?: number }>;
+}
+
+function withLines(chunk: DiffChunk, lines: DiffLine[]): DiffChunk {
+  const firstLine = lines[0];
+  const lastLine = lines[lines.length - 1];
+  const oldStart = firstLine?.oldLineNumber ?? chunk.oldStart;
+  const newStart = firstLine?.newLineNumber ?? chunk.newStart;
+  return {
+    ...chunk,
+    lines,
+    oldStart,
+    newStart,
+    oldLines: (lastLine?.oldLineNumber ?? chunk.oldStart + chunk.oldLines - 1) - oldStart + 1,
+    newLines: (lastLine?.newLineNumber ?? chunk.newStart + chunk.newLines - 1) - newStart + 1,
+  };
 }
 
 export function useExpandedLines({
@@ -484,22 +509,18 @@ export function useExpandedLines({
     [expandedState, getExpandedCount],
   );
 
-  const getExpandedChunk = useCallback(
-    (file: DiffFile, chunk: DiffChunk, chunkIndex: number): DiffChunk => {
+  const getOpenedLines = useCallback(
+    (file: DiffFile, chunk: DiffChunk, chunkIndex: number) => {
+      const above: DiffLine[] = [];
+      const below: DiffLine[] = [];
       const fileState = expandedState[file.path];
-      if (!fileState) return chunk;
+      if (!fileState) return { above, below };
 
       const expandedUp = getExpandedCount(file.path, chunkIndex, 'up');
       const expandedDown = getExpandedCount(file.path, chunkIndex, 'down');
 
-      if (expandedUp === 0 && expandedDown === 0) {
-        return chunk;
-      }
-
       const oldContent = fileState.oldContent || [];
       const newContent = fileState.newContent || [];
-
-      const newLines: DiffLine[] = [];
 
       // Add expanded lines before (up direction)
       if (expandedUp > 0) {
@@ -526,7 +547,7 @@ export function useExpandedLines({
           const newLineNum = actualStartNew + i + 1;
           const content = oldContent[oldLineNum - 1] ?? newContent[newLineNum - 1] ?? '';
 
-          newLines.push({
+          above.push({
             type: 'normal',
             content: content,
             oldLineNumber: oldLineNum,
@@ -535,9 +556,6 @@ export function useExpandedLines({
           } as DiffLine);
         }
       }
-
-      // Add original chunk lines
-      newLines.push(...chunk.lines);
 
       // Add expanded lines after (down direction)
       if (expandedDown > 0) {
@@ -554,7 +572,7 @@ export function useExpandedLines({
           const newLineNum = chunkEndNew + i + 1;
           const content = oldContent[oldLineNum - 1] ?? newContent[newLineNum - 1] ?? '';
 
-          newLines.push({
+          below.push({
             type: 'normal',
             content: content,
             oldLineNumber: oldLineNum,
@@ -564,24 +582,7 @@ export function useExpandedLines({
         }
       }
 
-      // Update chunk metadata
-      const firstLine = newLines[0];
-      const lastLine = newLines[newLines.length - 1];
-
-      return {
-        ...chunk,
-        lines: newLines,
-        oldStart: firstLine?.oldLineNumber ?? chunk.oldStart,
-        newStart: firstLine?.newLineNumber ?? chunk.newStart,
-        oldLines:
-          (lastLine?.oldLineNumber ?? chunk.oldStart + chunk.oldLines - 1) -
-          (firstLine?.oldLineNumber ?? chunk.oldStart) +
-          1,
-        newLines:
-          (lastLine?.newLineNumber ?? chunk.newStart + chunk.newLines - 1) -
-          (firstLine?.newLineNumber ?? chunk.newStart) +
-          1,
-      };
+      return { above, below };
     },
     [expandedState, getExpandedCount],
   );
@@ -594,22 +595,31 @@ export function useExpandedLines({
         const chunk = file.chunks[i];
         if (!chunk) continue;
 
-        const expandedChunk = getExpandedChunk(file, chunk, i);
+        const { above, below } = getOpenedLines(file, chunk, i);
+        const expandedChunk =
+          above.length > 0 || below.length > 0
+            ? withLines(chunk, [...above, ...chunk.lines, ...below])
+            : chunk;
         const hiddenBefore = getHiddenLinesBefore(file, chunk, i);
         const hiddenAfter = getHiddenLinesAfter(file, chunk, i);
 
-        // Check if we should merge with previous chunk
         const lastMerged = mergedChunks[mergedChunks.length - 1];
+        const offset = lastMerged && hiddenBefore === 0 ? lastMerged.lines.length : 0;
+        const ownLines: OriginalLineRange = {
+          originalIndex: i,
+          start: offset + above.length,
+          end: offset + above.length + chunk.lines.length - 1,
+          changeKind: chunk.changeKind,
+        };
         if (lastMerged && hiddenBefore === 0) {
-          // Merge with previous chunk
           lastMerged.lines = [...lastMerged.lines, ...expandedChunk.lines];
           lastMerged.originalIndices.push(i);
+          lastMerged.originalLineRanges.push(ownLines);
           lastMerged.hiddenLinesAfter = hiddenAfter;
           lastMerged.changeKind = combineChangeKinds([
             lastMerged.changeKind,
             expandedChunk.changeKind,
           ]);
-          // Update chunk metadata
           const lastLine = lastMerged.lines[lastMerged.lines.length - 1];
           lastMerged.oldLines =
             (lastLine?.oldLineNumber ?? lastMerged.oldStart + lastMerged.oldLines - 1) -
@@ -620,10 +630,10 @@ export function useExpandedLines({
             lastMerged.newStart +
             1;
         } else {
-          // Create new merged chunk
           mergedChunks.push({
             ...expandedChunk,
             originalIndices: [i],
+            originalLineRanges: [ownLines],
             hiddenLinesBefore: hiddenBefore,
             hiddenLinesAfter: hiddenAfter,
           });
@@ -632,7 +642,7 @@ export function useExpandedLines({
 
       return mergedChunks;
     },
-    [getExpandedChunk, getHiddenLinesBefore, getHiddenLinesAfter],
+    [getOpenedLines, getHiddenLinesBefore, getHiddenLinesAfter],
   );
 
   return {

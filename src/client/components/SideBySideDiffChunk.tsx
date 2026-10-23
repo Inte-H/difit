@@ -27,6 +27,13 @@ import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { FixupOverlayRow } from './FixupOverlayCard';
+import {
+  type FoldedLines,
+  FoldedLinesRow,
+  foldAt,
+  foldsClearOfForms,
+  NO_FOLDS,
+} from './FoldedLines';
 import { LineEndActions, LineNumberActions } from './LineActions';
 import { SelectionCommentBar } from './SelectionCommentBar';
 import type { AppearanceSettings } from './SettingsModal';
@@ -65,6 +72,7 @@ interface SideBySideDiffChunkProps {
   onCommentTriggerHandled?: () => void;
   filename?: string;
   onOpenInEditor?: (filePath: string, lineNumber: number) => void;
+  foldedLines?: readonly FoldedLines[];
 }
 
 interface SideBySideLine {
@@ -166,6 +174,7 @@ export function SideBySideDiffChunk({
   onCommentTriggerHandled,
   filename,
   onOpenInEditor,
+  foldedLines = NO_FOLDS,
 }: SideBySideDiffChunkProps) {
   const { getOldTokens, getNewTokens } = useFileLevelTokensLookup();
   const [startLine, setStartLine] = useState<LineSelection | null>(null);
@@ -182,6 +191,11 @@ export function SideBySideDiffChunk({
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
   const { editing, editLine, editHunk, editRange } = directEditing;
+  const folds = foldsClearOfForms(foldedLines, chunk.lines, commentingLine, editing);
+  const foldOf = (sideLine: SideBySideLine | undefined) =>
+    sideLine &&
+    (foldAt(folds, sideLine.oldLineOriginalIndex ?? -1) ??
+      foldAt(folds, sideLine.newLineOriginalIndex ?? -1));
   const dragFromLineNumber = useRef(false);
   const canHover = useCanHover();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -586,6 +600,12 @@ export function SideBySideDiffChunk({
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
         <tbody>
           {sideBySideLines.map((sideLine, index) => {
+            const fold = foldOf(sideLine);
+            if (fold) {
+              return foldOf(sideBySideLines[index - 1]) === fold ? null : (
+                <FoldedLinesRow key={index} fold={fold} colSpan={4} />
+              );
+            }
             const oldThreads = sideLine.oldLineNumber
               ? getThreadsForLine(sideLine.oldLineNumber, 'old')
               : [];
