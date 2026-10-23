@@ -59,6 +59,9 @@ export function TextDiffViewer({
   onCommentTriggerHandled,
 }: DiffViewerBodyProps) {
   const [unfolded, setUnfolded] = useState<ReadonlySet<number>>(new Set());
+  if (!foldCommentChanges && unfolded.size > 0) {
+    setUnfolded(new Set());
+  }
 
   const renderExpandButton = (
     position: 'top' | 'middle' | 'bottom',
