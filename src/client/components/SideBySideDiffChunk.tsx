@@ -31,7 +31,7 @@ import {
   type FoldedLines,
   FoldedLinesRow,
   foldAt,
-  foldsClearOfForms,
+  lockFoldsUnderForms,
   NO_FOLDS,
 } from './FoldedLines';
 import { LineEndActions, LineNumberActions } from './LineActions';
@@ -191,7 +191,7 @@ export function SideBySideDiffChunk({
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
   const { editing, editLine, editHunk, editRange } = directEditing;
-  const folds = foldsClearOfForms(foldedLines, chunk.lines, commentingLine, editing);
+  const folds = lockFoldsUnderForms(foldedLines, chunk.lines, commentingLine, editing);
   const foldOf = (sideLine: SideBySideLine | undefined) =>
     sideLine &&
     (foldAt(folds, sideLine.oldLineOriginalIndex ?? -1) ??
@@ -598,13 +598,22 @@ export function SideBySideDiffChunk({
         />
       )}
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
+        <colgroup>
+          <col className="w-[var(--line-number-width)]" />
+          <col className="w-1/2" />
+          <col className="w-[var(--line-number-width)]" />
+          <col className="w-1/2" />
+        </colgroup>
         <tbody>
           {sideBySideLines.map((sideLine, index) => {
             const fold = foldOf(sideLine);
-            if (fold) {
-              return foldOf(sideBySideLines[index - 1]) === fold ? null : (
-                <FoldedLinesRow key={index} fold={fold} colSpan={4} />
-              );
+            const foldStartsHere = fold && foldOf(sideBySideLines[index - 1]) !== fold;
+            if (fold?.folded) {
+              return foldStartsHere ? (
+                <React.Fragment key={index}>
+                  <FoldedLinesRow fold={fold} colSpan={4} />
+                </React.Fragment>
+              ) : null;
             }
             const oldThreads = sideLine.oldLineNumber
               ? getThreadsForLine(sideLine.oldLineNumber, 'old')
@@ -684,6 +693,7 @@ export function SideBySideDiffChunk({
 
             return (
               <React.Fragment key={index}>
+                {fold && foldStartsHere && <FoldedLinesRow fold={fold} colSpan={4} />}
                 <tr
                   data-diff-line-row="true"
                   className="group cursor-pointer"

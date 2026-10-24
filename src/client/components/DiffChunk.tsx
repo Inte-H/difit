@@ -32,7 +32,7 @@ import {
   type FoldedLines,
   FoldedLinesRow,
   foldAt,
-  foldsClearOfForms,
+  lockFoldsUnderForms,
   NO_FOLDS,
 } from './FoldedLines';
 import { SelectionCommentBar } from './SelectionCommentBar';
@@ -442,7 +442,7 @@ export const DiffChunk = memo(function DiffChunk({
   }
 
   const { editing, editLine, editHunk, editRange } = directEditing;
-  const folds = foldsClearOfForms(foldedLines, chunk.lines, commentingLine, editing);
+  const folds = lockFoldsUnderForms(foldedLines, chunk.lines, commentingLine, editing);
   const selected = codeSelection.selected;
 
   return (
@@ -476,12 +476,19 @@ export const DiffChunk = memo(function DiffChunk({
         />
       )}
       <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
+        <colgroup>
+          <col className="w-[var(--line-number-width)]" />
+          <col className="w-[var(--line-number-width)]" />
+          <col className="w-full" />
+        </colgroup>
         <tbody>
           {chunk.lines.map((line, index) => {
             const fold = foldAt(folds, index);
-            if (fold) {
+            if (fold?.folded) {
               return index === fold.start ? (
-                <FoldedLinesRow key={index} fold={fold} colSpan={3} />
+                <React.Fragment key={index}>
+                  <FoldedLinesRow fold={fold} colSpan={3} />
+                </React.Fragment>
               ) : null;
             }
             const currentLineNumber = line.newLineNumber || line.oldLineNumber || 0;
@@ -511,6 +518,7 @@ export const DiffChunk = memo(function DiffChunk({
 
             return (
               <React.Fragment key={index}>
+                {fold && index === fold.start && <FoldedLinesRow fold={fold} colSpan={3} />}
                 <DiffLineRow
                   line={line}
                   index={index}
