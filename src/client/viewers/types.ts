@@ -1,6 +1,13 @@
 import type { ComponentType } from 'react';
 
-import type { CommentThread, DiffFile, DiffSide, DiffViewMode, LineNumber } from '../../types/diff';
+import type {
+  CommentThread,
+  DiffFile,
+  DiffSide,
+  DiffViewMode,
+  ExpandedRange,
+  LineNumber,
+} from '../../types/diff';
 import type { AppearanceSettings } from '../components/SettingsModal';
 import type { CursorPosition } from '../hooks/keyboardNavigation';
 import type { MergedChunk } from '../hooks/useExpandedLines';
@@ -18,17 +25,7 @@ export type DiffViewerBodyProps = {
   mergedChunks: MergedChunk[];
   foldCommentChanges?: boolean;
   isExpandLoading: boolean;
-  expandHiddenLines: (
-    file: DiffFile,
-    chunkIndex: number,
-    direction: 'up' | 'down',
-    count?: number,
-  ) => Promise<void>;
-  expandAllBetweenChunks: (
-    file: DiffFile,
-    chunkIndex: number,
-    hiddenLines: number,
-  ) => Promise<void>;
+  openHiddenLines: (file: DiffFile, ranges: readonly ExpandedRange[]) => Promise<void>;
   onAddComment?: (
     line: LineNumber,
     body: string,

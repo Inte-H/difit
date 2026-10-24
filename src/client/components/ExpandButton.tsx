@@ -1,7 +1,7 @@
 import { ArrowDownFromLine, ArrowUpFromLine, Loader2, UnfoldVertical } from 'lucide-react';
 import { memo, type ReactElement } from 'react';
 
-const DEFAULT_EXPAND_COUNT = 20;
+export const DEFAULT_EXPAND_COUNT = 20;
 
 interface ExpandButtonProps {
   direction: 'up' | 'down' | 'both';

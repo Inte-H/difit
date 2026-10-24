@@ -5,7 +5,8 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
-import type { CommentThread, DiffFile, ReviewDecision } from '../../types/diff';
+import type { CommentThread, DiffFile, ReviewDecision, ThreadFixup } from '../../types/diff';
+import type { FixupOnlyFiles } from '../utils/fixupSpread';
 
 import { FileList, type FileListHandle } from './FileList';
 
@@ -594,5 +595,169 @@ describe('FileList keys', () => {
 
     expect(documentKeys).toContain('B');
     expect(getTreeRow('src')).toHaveFocus();
+  });
+});
+
+describe('FileList fixups', () => {
+  const fixupFiles: ThreadFixup['files'] = [
+    { path: 'src/a.test.ts', status: 'added', chunks: [] },
+    { path: 'pnpm-lock.yaml', status: 'modified', isGenerated: true, chunks: [] },
+    { path: 'src/old.ts', status: 'deleted', chunks: [] },
+  ];
+  const fixup: ThreadFixup = {
+    sha: 'abc1234def5678',
+    shortSha: 'abc1234',
+    patchId: 'patch',
+    authoredAt: '2026-01-02T00:00:00.000Z',
+    subject: 'fixup! add a',
+    threadIds: ['t1'],
+    files: fixupFiles,
+  };
+  const fixupOnly: FixupOnlyFiles[] = [
+    { fixup, threads: [{ id: 't1', file: 'src/a.ts', line: 3 }], files: fixupFiles },
+  ];
+  const touched = new Map([
+    ['src/a.ts', { fixupSha: fixup.sha, path: 'src/a.ts' }],
+    ['src/b.ts', { fixupSha: fixup.sha, path: 'src/b.ts' }],
+  ]);
+
+  const renderList = (props: Partial<ComponentProps<typeof FileList>> = {}) => {
+    const ref = createRef<FileListHandle>();
+    const onScrollToFile = vi.fn();
+    const onRevealFixupFile = vi.fn();
+    const onFileSelected = vi.fn();
+    const view = render(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <FileList
+          ref={ref}
+          files={[createFile('src/a.ts'), createFile('src/b.ts'), createFile('README.md')]}
+          onScrollToFile={onScrollToFile}
+          onFileSelected={onFileSelected}
+          comments={[createThread('t1', 'src/a.ts')]}
+          decisions={[]}
+          reviewedFiles={new Set()}
+          onToggleReviewed={vi.fn()}
+          onToggleFolderReviewed={vi.fn()}
+          selectedFileIndex={null}
+          fixupTouchedFiles={touched}
+          fixupOnly={fixupOnly}
+          onRevealFixupFile={onRevealFixupFile}
+          {...props}
+        />
+      </HotkeysProvider>,
+    );
+    return { ...view, ref, onScrollToFile, onRevealFixupFile, onFileSelected };
+  };
+
+  const group = () => screen.getByRole('region', { name: 'fixup abc1234에서만 수정한 파일' });
+
+  it('marks every reviewed file a fixup touched, the commented one included', () => {
+    renderList();
+
+    expect(
+      within(getTreeRow('src/a.ts')).getByRole('button', { name: 'fixup 수정' }),
+    ).toBeVisible();
+    expect(getTreeRow('src/a.ts')).toHaveTextContent(/^a\.tsfixup 수정1$/);
+    expect(
+      within(getTreeRow('src/b.ts')).getByRole('button', { name: 'fixup 수정' }),
+    ).toBeVisible();
+    expect(within(getTreeRow('README.md')).queryByRole('button')).toBeNull();
+  });
+
+  it('reveals the fixup file from the marker instead of going to the file', async () => {
+    const user = userEvent.setup();
+    const { onRevealFixupFile, onScrollToFile, onFileSelected } = renderList();
+
+    await user.click(within(getTreeRow('src/b.ts')).getByRole('button', { name: 'fixup 수정' }));
+
+    expect(onRevealFixupFile).toHaveBeenCalledWith(fixup.sha, 'src/b.ts');
+    expect(onScrollToFile).not.toHaveBeenCalled();
+    expect(onFileSelected).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists the files only the fixup changed below the tree, outside the file count', () => {
+    renderList();
+
+    expect(screen.getByText('Files changed (3)')).toBeInTheDocument();
+    expect(
+      within(group()).getByRole('heading', { name: 'fixup abc1234에서만 수정한 파일 (3)' }),
+    ).toBeVisible();
+    const rows = within(group()).getAllByRole('button');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'src/a.test.ts새 파일',
+      'pnpm-lock.yaml생성된 파일',
+      'src/old.ts지운 파일',
+    ]);
+    for (const row of rows) expect(row.closest('[data-tree-row="true"]')).toBeNull();
+  });
+
+  it('reveals a file of the group and marks the focused one', async () => {
+    const user = userEvent.setup();
+    const { onRevealFixupFile, onFileSelected, rerender } = renderList();
+
+    await user.click(within(group()).getByRole('button', { name: /pnpm-lock\.yaml/ }));
+
+    expect(onRevealFixupFile).toHaveBeenCalledWith(fixup.sha, 'pnpm-lock.yaml');
+    expect(onFileSelected).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <FileList
+          files={[createFile('src/a.ts')]}
+          onScrollToFile={vi.fn()}
+          comments={[]}
+          decisions={[]}
+          reviewedFiles={new Set()}
+          onToggleReviewed={vi.fn()}
+          onToggleFolderReviewed={vi.fn()}
+          selectedFileIndex={null}
+          fixupOnly={fixupOnly}
+          focusedFixupFile={{ fixupSha: fixup.sha, path: 'pnpm-lock.yaml' }}
+        />
+      </HotkeysProvider>,
+    );
+
+    expect(within(group()).getByRole('button', { name: /pnpm-lock\.yaml/ })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
+    expect(within(group()).getByRole('button', { name: /src\/a\.test\.ts/ })).not.toHaveAttribute(
+      'aria-current',
+    );
+  });
+
+  it('filters the group with the file filter and drops it when nothing matches', async () => {
+    const user = userEvent.setup();
+    renderList();
+
+    await user.type(screen.getByPlaceholderText('Filter files...'), 'test');
+    expect(
+      within(group())
+        .getAllByRole('button')
+        .map((row) => row.textContent),
+    ).toEqual(['src/a.test.ts새 파일']);
+
+    await user.clear(screen.getByPlaceholderText('Filter files...'));
+    await user.type(screen.getByPlaceholderText('Filter files...'), 'README');
+    expect(
+      screen.queryByRole('region', { name: 'fixup abc1234에서만 수정한 파일' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('keeps the group out of the j and k moves over the review files', async () => {
+    const user = userEvent.setup();
+    const { ref } = renderList();
+    act(() => ref.current!.focus());
+
+    await user.keyboard('jjjj');
+
+    expect(getTreeRow('README.md')).toHaveFocus();
+  });
+
+  it('shows no marker and no group without fixups', () => {
+    renderList({ fixupTouchedFiles: new Map(), fixupOnly: [] });
+
+    expect(screen.queryByRole('button', { name: 'fixup 수정' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/에서만 수정한 파일/)).not.toBeInTheDocument();
   });
 });

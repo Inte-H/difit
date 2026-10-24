@@ -34,6 +34,12 @@ import {
 } from '../../utils/changeKind';
 import { isThreadResolved } from '../../utils/reviewDecisions';
 import { isSafariBrowser } from '../utils/browser';
+import {
+  type FixupFileRef,
+  type FixupOnlyFiles,
+  fixupFileLabels,
+  fixupFileName,
+} from '../utils/fixupSpread';
 import { keyByPosition } from '../utils/keyByPosition';
 
 import { Checkbox } from './Checkbox';
@@ -58,7 +64,14 @@ interface FileListProps {
   scrollVisibleFileIndex?: number | null;
   pickedCommentFilePath?: string | null;
   onEscape?: () => void;
+  fixupTouchedFiles?: ReadonlyMap<string, FixupFileRef>;
+  fixupOnly?: FixupOnlyFiles[];
+  focusedFixupFile?: FixupFileRef | null;
+  onRevealFixupFile?: (fixupSha: string, path: string) => void;
 }
+
+const NO_FIXUP_TOUCHED_FILES: ReadonlyMap<string, FixupFileRef> = new Map();
+const NO_FIXUP_ONLY: FixupOnlyFiles[] = [];
 
 interface TreeNode {
   name: string;
@@ -249,6 +262,10 @@ export const FileList = memo(function FileList({
   scrollVisibleFileIndex = null,
   pickedCommentFilePath = null,
   onEscape,
+  fixupTouchedFiles = NO_FIXUP_TOUCHED_FILES,
+  fixupOnly = NO_FIXUP_ONLY,
+  focusedFixupFile = null,
+  onRevealFixupFile,
 }: FileListProps) {
   const fileTree = useMemo(() => buildFileTree(files), [files]);
   const shouldUseStickyDirectoryHeaders = useMemo(
@@ -336,6 +353,21 @@ export const FileList = memo(function FileList({
       }
     );
   }, [fileTree, filterText]);
+
+  const filteredFixupOnly = useMemo(() => {
+    const normalizedFilter = filterText.trim().toLowerCase();
+    return fixupOnly
+      .map((group) => ({
+        ...group,
+        files: group.files.filter((file) => file.path.toLowerCase().includes(normalizedFilter)),
+      }))
+      .filter((group) => group.files.length > 0);
+  }, [fixupOnly, filterText]);
+
+  const revealFixupFile = ({ fixupSha, path }: FixupFileRef) => {
+    onRevealFixupFile?.(fixupSha, path);
+    onFileSelected?.();
+  };
 
   const scrollVisiblePath =
     scrollVisibleFileIndex === null ? undefined : files[scrollVisibleFileIndex]?.path;
@@ -604,6 +636,7 @@ export const FileList = memo(function FileList({
       const isScrollVisible = scrollVisibleFileIndex === fileIndex;
       const isPickedCommentFile = pickedCommentFilePath === file.path;
       const changeKind = combineChangeKinds(file.chunks.map((chunk) => chunk.changeKind));
+      const fixupRef = fixupTouchedFiles.get(file.path);
 
       return (
         <div
@@ -658,6 +691,18 @@ export const FileList = memo(function FileList({
             >
               {LEAVES_CODE_ALONE_LABEL[changeKind]}
             </span>
+          )}
+          {fixupRef && (
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                revealFixupFile(fixupRef);
+              }}
+              className="shrink-0 text-xs text-github-warning hover:underline"
+            >
+              fixup 수정
+            </button>
           )}
           {commentCount > 0 && <CommentCount count={commentCount} />}
         </div>
@@ -723,6 +768,45 @@ export const FileList = memo(function FileList({
         tabIndex={-1}
       >
         {filteredFileTree.children?.map((child) => renderTreeNode(child))}
+        {filteredFixupOnly.map(({ fixup, files: fixupFiles }) => (
+          <section
+            key={fixup.sha}
+            aria-label={`fixup ${fixup.shortSha}에서만 수정한 파일`}
+            className="mt-2 border-t border-github-border pb-2"
+          >
+            <h4 className="m-0 px-4 py-2 text-xs font-semibold text-github-warning">
+              fixup {fixup.shortSha}에서만 수정한 파일 ({fixupFiles.length})
+            </h4>
+            {fixupFiles.map((file) => {
+              const ref = { fixupSha: fixup.sha, path: file.path };
+              const isFocused =
+                focusedFixupFile?.fixupSha === fixup.sha && focusedFixupFile.path === file.path;
+              return (
+                <button
+                  key={file.path}
+                  type="button"
+                  aria-current={isFocused ? 'true' : undefined}
+                  onClick={() => revealFixupFile(ref)}
+                  className={`flex w-full min-w-0 items-center gap-2 px-4 py-1.5 text-left hover:bg-github-bg-tertiary ${ROW_FOCUS_CLASS} ${
+                    isFocused ? 'bg-github-bg-tertiary' : ''
+                  }`}
+                >
+                  <span
+                    className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-sm text-github-text-primary"
+                    title={fixupFileName(file)}
+                  >
+                    {fixupFileName(file)}
+                  </span>
+                  {fixupFileLabels(file).map((label) => (
+                    <span key={label} className="shrink-0 text-xs text-github-text-secondary">
+                      {label}
+                    </span>
+                  ))}
+                </button>
+              );
+            })}
+          </section>
+        ))}
       </div>
     </div>
   );

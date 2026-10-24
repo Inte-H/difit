@@ -471,10 +471,10 @@ export interface FileExpandedState {
   newTotalLines?: number;
 }
 
-interface ExpandedRange {
-  chunkIndex: number;
-  direction: 'up' | 'down';
-  count: number;
+// Old-side line numbers, both ends included; `end` may be Infinity for "to the end of the file".
+export interface ExpandedRange {
+  start: number;
+  end: number;
 }
 
 export interface ExpandedLine extends DiffLine {

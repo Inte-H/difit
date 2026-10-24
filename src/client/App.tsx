@@ -25,6 +25,7 @@ import {
   type LineNumber,
   type CommentThread,
   type RevisionsResponse,
+  type ReviewScope,
   type ReviewView,
   type ReviewViewAction,
 } from '../types/diff';
@@ -43,6 +44,7 @@ import {
   reviewViewShown,
   selectReviewView,
   selectionAtCommit,
+  type ViewBinding,
 } from '../utils/diffSelection';
 import { countOpenThreadsByCommit } from '../utils/openCommentCounts';
 import {
@@ -66,6 +68,7 @@ import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
 import { CommitList, ShownCommits } from './components/CommitList';
 import { FileList, type FileListHandle } from './components/FileList';
+import { FixupOnlySections } from './components/FixupOnlySections';
 import { GitHubIcon } from './components/GitHubIcon';
 import { HelpModal } from './components/HelpModal';
 import { Logo } from './components/Logo';
@@ -103,7 +106,7 @@ import { useViewport } from './hooks/useViewport';
 import { fetchClientSettings, saveClientSettings } from './services/userSettings';
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
-import { getFileElementId } from './utils/domUtils';
+import { fixupFileElementId, getFileElementId } from './utils/domUtils';
 import { findCommentPosition } from './utils/navigation/positionHelpers';
 import { resolveEventSourceUrl } from './utils/eventSourceUrl';
 import {
@@ -112,8 +115,24 @@ import {
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
 import { directEditFailureMessage } from './utils/directEdit';
+import {
+  type AnsweredThread,
+  fixupFileKey,
+  type FixupFileRef,
+  type FixupSpread,
+  reviewPathsOf,
+  sameAnsweredThread,
+  spreadFixups,
+} from './utils/fixupSpread';
 import { fetchFixupTarget } from './utils/fixupTarget';
-import { buildFileLineIndex, placeThread } from './utils/outdatedComments';
+import { keepWhileSame } from './utils/keepWhileSame';
+import {
+  buildFileLineIndex,
+  type FileLineIndex,
+  type Placement,
+  placeThread,
+  type ThreadPlacement,
+} from './utils/outdatedComments';
 
 const EMPTY_COMMENT_THREADS: CommentThread[] = [];
 const EMPTY_MERGED_CHUNKS: MergedChunk[] = [];
@@ -226,6 +245,78 @@ const getStoredCommentsPanelOpen = () => getStoredBoolean(COMMENTS_PANEL_OPEN_ST
 
 const getInitialCommentsPanelOpen = () => getStoredCommentsPanelOpen() ?? false;
 
+const placedLine = (placement: Placement): ThreadPlacement => ({
+  line: placement.line,
+  isOutdated: placement.kind === 'stale',
+  ...(placement.kind === 'stale' ? { outdatedReason: placement.reason } : {}),
+});
+
+const withPlacement = (
+  { outdatedReason: _outdatedReason, ...thread }: CommentThread,
+  placement: ThreadPlacement,
+): CommentThread => ({ ...thread, ...placement });
+
+function placeThreads(
+  threads: readonly DiffCommentThread[],
+  view: DiffSelection | null,
+  review: ReviewScope | undefined,
+  targetCommit: string | null,
+  lineIndexOf: (path: string) => FileLineIndex | undefined,
+): { normalizedThreads: CommentThread[]; hiddenThreadIds: Set<string> } {
+  const hidden = new Set<string>();
+  const placed = threads.map((thread): CommentThread => {
+    const placement = placeThread(
+      thread,
+      { view, review, targetCommit },
+      lineIndexOf(thread.filePath),
+    );
+    if (placement.kind === 'hidden') hidden.add(thread.id);
+    const madeView = review && view ? madeViewElsewhere(thread, view, review) : undefined;
+    return {
+      id: thread.id,
+      file: thread.filePath,
+      ...placedLine(placement),
+      side: thread.position.side,
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      codeContent: thread.codeSnapshot?.content,
+      anchorCommit: thread.codeSnapshot?.commit,
+      messages: thread.messages,
+      ...(thread.fixupTarget
+        ? { fixupCommit: fixupCommitOf(thread.fixupTarget, review?.commits ?? []) }
+        : {}),
+      ...(madeView ? { madeView } : {}),
+    };
+  });
+  return { normalizedThreads: placed, hiddenThreadIds: hidden };
+}
+
+const anchorKeyOf = ({
+  id,
+  filePath,
+  position,
+  codeSnapshot,
+  fixupTarget,
+  view,
+}: DiffCommentThread) => JSON.stringify([id, filePath, position, codeSnapshot, fixupTarget, view]);
+
+const newThread = (
+  filePath: string,
+  line: LineNumber,
+  body: string,
+  codeContent: string | undefined,
+  side: DiffSide | undefined,
+  binding: ViewBinding | undefined,
+) => ({
+  filePath,
+  body,
+  side: side || ('new' as const),
+  line: typeof line === 'number' ? line : { start: line[0], end: line[1] },
+  codeSnapshot:
+    codeContent !== undefined ? { content: codeContent, language: undefined } : undefined,
+  binding,
+});
+
 function App() {
   const [diffData, setDiffData] = useState<DiffResponse | null>(null);
   const [diffDataVersion, setDiffDataVersion] = useState(0);
@@ -275,6 +366,7 @@ function App() {
   selectedRevisionRef.current = selectedRevision;
   const diffRequestIdRef = useRef(0);
   const pendingCommentNavigationRef = useRef<string | null>(null);
+  const pendingFixupRevealRef = useRef<FixupFileRef | null>(null);
   const activeDiffAbortControllerRef = useRef<AbortController | null>(null);
   const resolvedSelection = useMemo<DiffSelection | null>(() => {
     if (!diffData?.baseCommitish || !diffData?.targetCommitish) {
@@ -368,6 +460,8 @@ function App() {
   );
   const decisionsRef = useRef(decisions);
   decisionsRef.current = decisions;
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
   const addThreadRef = useRef(addThread);
   addThreadRef.current = addThread;
 
@@ -416,6 +510,7 @@ function App() {
   const [showFixupOverlay, setShowFixupOverlay] = useState(true);
   const [directEditCount, setDirectEditCount] = useState(0);
   const {
+    fixups,
     fixupsByThread,
     newerTarget,
     loaded: fixupsLoaded,
@@ -690,8 +785,7 @@ function App() {
   // Lift expand state to App level so navigation and rendering share the same merged chunks
   const {
     isLoading: isExpandLoading,
-    expandLines,
-    expandAllBetweenChunks,
+    openLines,
     prefetchFileContent,
     getMergedChunks,
     lastUpdatedAt,
@@ -753,39 +847,81 @@ function App() {
     return map;
   }, [navigableFiles]);
 
-  const { normalizedThreads, hiddenThreadIds } = useMemo(() => {
-    const hidden = new Set<string>();
-    const placed = threads.map((thread): CommentThread => {
-      const placement = placeThread(
-        thread,
-        { view: resolvedSelection, review, targetCommit },
-        fileLineIndexByPath.get(thread.filePath),
-      );
-      if (placement.kind === 'hidden') hidden.add(thread.id);
-      const madeView =
-        review && resolvedSelection
-          ? madeViewElsewhere(thread, resolvedSelection, review)
-          : undefined;
-      return {
+  // Threads on files only a fixup changed are placed once the spread says which fixup shows them.
+  const reviewPlacement = useMemo(
+    () =>
+      placeThreads(threads, resolvedSelection, review, targetCommit, (path) =>
+        fileLineIndexByPath.get(path),
+      ),
+    [threads, fileLineIndexByPath, targetCommit, resolvedSelection, review],
+  );
+  const answeredThreadsRef = useRef<readonly AnsweredThread[]>([]);
+  const answeredThreads = useMemo(() => {
+    answeredThreadsRef.current = keepWhileSame(
+      answeredThreadsRef.current,
+      reviewPlacement.normalizedThreads
+        .filter((thread) => !reviewPlacement.hiddenThreadIds.has(thread.id))
+        .map(({ id, file, line, isOutdated }) => ({ id, file, line, isOutdated })),
+      sameAnsweredThread,
+    );
+    return answeredThreadsRef.current;
+  }, [reviewPlacement]);
+  const outsideThreadsRef = useRef<readonly DiffCommentThread[]>([]);
+  const outsideThreads = useMemo(() => {
+    outsideThreadsRef.current = keepWhileSame(
+      outsideThreadsRef.current,
+      threads.filter((thread) => !fileLineIndexByPath.has(thread.filePath)),
+      (thread, before) => anchorKeyOf(thread) === anchorKeyOf(before),
+    );
+    return outsideThreadsRef.current;
+  }, [threads, fileLineIndexByPath]);
+  // Fixup line numbers are counted on the review target, so only the whole review shows them.
+  const fixupSpread = useMemo<FixupSpread>(() => {
+    const overlay = { enabled: showFixupOverlay && !showsPartOfReview, fixupsByThread, decisions };
+    const context = { view: resolvedSelection, review, targetCommit };
+    const lineIndexes = new Map<string, FileLineIndex>();
+    return spreadFixups(overlay, fixups, answeredThreads, diffData?.files ?? [], {
+      threads: outsideThreads.map((thread) => ({
         id: thread.id,
         file: thread.filePath,
-        line: placement.line,
-        isOutdated: placement.kind === 'stale',
-        ...(placement.kind === 'stale' ? { outdatedReason: placement.reason } : {}),
-        side: thread.position.side,
-        createdAt: thread.createdAt,
-        updatedAt: thread.updatedAt,
-        codeContent: thread.codeSnapshot?.content,
-        anchorCommit: thread.codeSnapshot?.commit,
-        messages: thread.messages,
-        ...(thread.fixupTarget
-          ? { fixupCommit: fixupCommitOf(thread.fixupTarget, review?.commits ?? []) }
-          : {}),
-        ...(madeView ? { madeView } : {}),
-      };
+        snapshotCommit: thread.codeSnapshot?.commit,
+        thread,
+      })),
+      place: ({ thread }, file, fixup) => {
+        const key = fixupFileKey({ fixupSha: fixup.sha, path: file.path });
+        const index = lineIndexes.get(key) ?? buildFileLineIndex(file);
+        lineIndexes.set(key, index);
+        const placement = placeThread(thread, context, index, fixup.sha);
+        return placement.kind === 'hidden' ? null : placedLine(placement);
+      },
     });
-    return { normalizedThreads: placed, hiddenThreadIds: hidden };
-  }, [threads, fileLineIndexByPath, targetCommit, resolvedSelection, review]);
+  }, [
+    showFixupOverlay,
+    showsPartOfReview,
+    fixupsByThread,
+    decisions,
+    fixups,
+    answeredThreads,
+    diffData,
+    outsideThreads,
+    resolvedSelection,
+    review,
+    targetCommit,
+  ]);
+  const fixupOnlyRef = useRef(fixupSpread.fixupOnly);
+  fixupOnlyRef.current = fixupSpread.fixupOnly;
+  const fixupReviewPaths = useMemo(() => reviewPathsOf(fixups), [fixups]);
+  const { normalizedThreads, hiddenThreadIds } = useMemo(() => {
+    const { outsidePlacements } = fixupSpread;
+    if (outsidePlacements.size === 0) return reviewPlacement;
+    return {
+      normalizedThreads: reviewPlacement.normalizedThreads.map((thread) => {
+        const placed = outsidePlacements.get(thread.id);
+        return placed ? withPlacement(thread, placed.placement) : thread;
+      }),
+      hiddenThreadIds: reviewPlacement.hiddenThreadIds,
+    };
+  }, [reviewPlacement, fixupSpread.outsidePlacements]);
   const drawnThreads = useMemo(
     () => normalizedThreads.filter((thread) => !hiddenThreadIds.has(thread.id)),
     [normalizedThreads, hiddenThreadIds],
@@ -825,6 +961,18 @@ function App() {
     });
     return map;
   }, [drawnThreads, unresolvedThreads, showResolvedThreads, keptPickedThreadId, resolvedThreadIds]);
+  const threadsByFixupOnlyFile = useMemo(() => {
+    const map = new Map<string, CommentThread[]>();
+    for (const [path, fileThreads] of threadsByFile) {
+      for (const thread of fileThreads) {
+        const placed = fixupSpread.outsidePlacements.get(thread.id);
+        if (!placed) continue;
+        const key = fixupFileKey({ fixupSha: placed.fixupSha, path });
+        map.set(key, [...(map.get(key) ?? []), thread]);
+      }
+    }
+    return map;
+  }, [threadsByFile, fixupSpread.outsidePlacements]);
 
   // State to trigger comment creation from keyboard
   const [commentTrigger, setCommentTrigger] = useState<{
@@ -1266,6 +1414,7 @@ function App() {
 
       hasUserSelectedRevisionRef.current = true;
       pendingCommentNavigationRef.current = null;
+      pendingFixupRevealRef.current = null;
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
       refocusCommentsPanelAfterLoadRef.current = commentsPanelRef.current?.hasFocus() ?? false;
@@ -1369,6 +1518,46 @@ function App() {
     resolvedSelection,
     submitDirectEdit,
   ]);
+  const [focusedFixupFile, setFocusedFixupFile] = useState<FixupFileRef | null>(null);
+  const pickThreadRef = useRef<(threadId: string) => void>(() => {});
+  const pickThread = useCallback((threadId: string) => pickThreadRef.current(threadId), []);
+  const revealFixupFile = useCallback(
+    (fixupSha: string, path: string) => {
+      const ref = { fixupSha, path };
+      if (showsPartOfReview) {
+        selectView({ kind: 'all' });
+        pendingFixupRevealRef.current = ref;
+        return;
+      }
+      const place = fixupSpread.places.get(fixupFileKey(ref));
+      if (!place) return;
+      setFocusedFixupFile(ref);
+      if (place.kind === 'card') {
+        pickThreadRef.current(place.threadId);
+        return;
+      }
+      if (place.kind === 'box') {
+        setCollapsedFiles((prev) => {
+          if (!prev.has(place.reviewPath)) return prev;
+          const next = new Set(prev);
+          next.delete(place.reviewPath);
+          return next;
+        });
+      }
+      scrollFileIntoDiffContainer(
+        place.kind === 'box' ? place.reviewPath : path,
+        fixupFileElementId(fixupSha, path),
+      );
+    },
+    [showsPartOfReview, selectView, fixupSpread, scrollFileIntoDiffContainer],
+  );
+  useEffect(() => {
+    const ref = pendingFixupRevealRef.current;
+    if (!ref || showsPartOfReview || !fixupSpread.places.has(fixupFileKey(ref))) return;
+    if (!collapsedInitializedRef.current && !hasLoadedInitialViewedFiles) return;
+    pendingFixupRevealRef.current = null;
+    revealFixupFile(ref.fixupSha, ref.path);
+  }, [showsPartOfReview, fixupSpread, hasLoadedInitialViewedFiles, revealFixupFile]);
   const fixupOverlay = useMemo<FixupOverlayState>(
     () => ({
       enabled: showFixupOverlay,
@@ -1380,6 +1569,12 @@ function App() {
       openReviewAt,
       showView: showDiff,
       directEdit,
+      boxesByFile: fixupSpread.boxesByFile,
+      fixupPlaces: fixupSpread.places,
+      fixupReviewPaths,
+      focusedFixupFile,
+      revealFixupFile,
+      pickThread,
     }),
     [
       showFixupOverlay,
@@ -1391,6 +1586,11 @@ function App() {
       openReviewAt,
       showDiff,
       directEdit,
+      fixupSpread,
+      fixupReviewPaths,
+      focusedFixupFile,
+      revealFixupFile,
+      pickThread,
     ],
   );
 
@@ -1565,25 +1765,34 @@ function App() {
       side?: DiffSide,
     ): Promise<void> => {
       const ofReview = review && resolvedSelection && isViewOfReview(resolvedSelection, review);
-      const fixupTarget = ofReview
-        ? await fetchFixupTarget(resolvedSelection, file, line, side || 'new')
-        : undefined;
-      addThreadRef.current({
-        filePath: file,
-        body,
-        side: side || 'new',
-        line: typeof line === 'number' ? line : { start: line[0], end: line[1] },
-        codeSnapshot:
-          codeContent !== undefined
-            ? {
-                content: codeContent,
-                language: undefined,
-              }
-            : undefined,
-        binding: ofReview ? bindingForView(review, resolvedSelection, fixupTarget) : undefined,
-      });
+      let binding: ViewBinding | undefined;
+      if (ofReview) {
+        const fixupTarget = await fetchFixupTarget(resolvedSelection, file, line, side || 'new');
+        binding = bindingForView(review, resolvedSelection, fixupTarget);
+      }
+      addThreadRef.current(newThread(file, line, body, codeContent, side, binding));
     },
     [review, resolvedSelection],
+  );
+  const handleAddFixupOnlyComment = useCallback(
+    (
+      fixupSha: string,
+      file: string,
+      line: LineNumber,
+      body: string,
+      codeContent?: string,
+      side?: DiffSide,
+    ): Promise<void> => {
+      const group = fixupOnlyRef.current.find(({ fixup }) => fixup.sha === fixupSha);
+      const fixupTarget =
+        (group?.threads ?? [])
+          .map(({ id }) => threadsRef.current.find((thread) => thread.id === id)?.fixupTarget)
+          .find((target) => target !== undefined) ?? targetCommit;
+      const binding = fixupTarget ? { fixupTarget, snapshotCommit: fixupSha } : undefined;
+      addThreadRef.current(newThread(file, line, body, codeContent, side, binding));
+      return Promise.resolve();
+    },
+    [targetCommit],
   );
 
   const showCopyAllNotice = (notice: CopyAllNotice) => {
@@ -1638,8 +1847,17 @@ function App() {
 
     jumpToThread(thread, collapsedFiles.has(thread.file));
   };
+  pickThreadRef.current = (threadId) => {
+    const thread = normalizedThreads.find(({ id }) => id === threadId);
+    if (thread) pickComment(thread);
+  };
   const jumpToThread = (thread: CommentThread, afterRender: boolean) => {
     if (!diffData) return;
+    const placed = fixupSpread.outsidePlacements.get(thread.id);
+    if (placed) {
+      revealFixupFile(placed.fixupSha, thread.file);
+      return;
+    }
     const files = diffData.files;
     setCollapsedFiles((prev) => {
       if (!prev.has(thread.file)) return prev;
@@ -2196,6 +2414,10 @@ function App() {
                   scrollVisibleFileIndex={scrollVisibleFileIndex}
                   pickedCommentFilePath={pickedThread?.file ?? null}
                   {...(isMobile && { onEscape: () => setIsFileDrawerOpen(false) })}
+                  fixupTouchedFiles={fixupSpread.touchedReviewFiles}
+                  fixupOnly={fixupSpread.fixupOnly}
+                  focusedFixupFile={focusedFixupFile}
+                  onRevealFixupFile={revealFixupFile}
                 />
               </div>
               {showsCommitList && (
@@ -2303,8 +2525,7 @@ function App() {
                         }
                         onCommentTriggerHandled={handleCommentTriggerHandled}
                         mergedChunks={mergedChunks}
-                        expandLines={expandLines}
-                        expandAllBetweenChunks={expandAllBetweenChunks}
+                        openLines={openLines}
                         prefetchFileContent={prefetchFileContent}
                         isExpandLoading={isExpandLoading}
                         diffVersion={diffDataVersion}
@@ -2335,6 +2556,21 @@ function App() {
                   </div>
                 );
               })}
+              <FixupOnlySections
+                groups={fixupSpread.fixupOnly}
+                threadsByFixupFile={threadsByFixupOnlyFile}
+                firstFileIndex={diffData.files.length}
+                fixupOverlay={fixupOverlay}
+                diffMode={diffMode}
+                showAuthorBadges={showAuthorBadges}
+                syntaxTheme={settings.syntaxTheme}
+                onAddComment={takesComments ? handleAddFixupOnlyComment : undefined}
+                onResolveThread={resolveThread}
+                onReplyToThread={handleReplyToThread}
+                onRemoveMessage={removeMessage}
+                onUpdateMessage={updateMessage}
+                onOpenInEditor={canOpenInEditor ? handleOpenInEditor : undefined}
+              />
             </main>
           </PickedThreadProvider>
 

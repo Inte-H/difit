@@ -20,7 +20,7 @@ export interface ThreadPlacement {
   outdatedReason?: AnchorStaleReason;
 }
 
-export function buildFileLineIndex(file: DiffFile): FileLineIndex {
+export function buildFileLineIndex(file: Pick<DiffFile, 'chunks'>): FileLineIndex {
   const oldIndex = new Map<number, string>();
   const newIndex = new Map<number, string>();
 
@@ -93,6 +93,7 @@ export function placeThread(
   thread: DiffCommentThread,
   { view, review, targetCommit }: PlacementContext,
   index: FileLineIndex | undefined,
+  indexCommit?: string,
 ): Placement {
   const storedLine = toLineNumber(thread.position.line);
   let madeOnThisView: boolean | undefined;
@@ -107,7 +108,8 @@ export function placeThread(
     const anchorCommit = thread.codeSnapshot?.commit;
     madeOnThisView =
       isSameView(thread.view ?? review.selection, view) &&
-      (anchorCommit === undefined || isSameCommit(anchorCommit, view.targetCommitish));
+      (anchorCommit === undefined ||
+        isSameCommit(anchorCommit, indexCommit ?? view.targetCommitish));
   }
 
   const placement = locateThread(thread, index, targetCommit, madeOnThisView);
