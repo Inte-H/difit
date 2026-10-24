@@ -1230,7 +1230,7 @@ export async function startServer(options: ServerOptions): Promise<{
     const { followedRef } = options;
     try {
       const [fixups, newerTarget] = await Promise.all([
-        parser.listThreadFixups(selection).then((listed) => parser.classifyFixups(listed)),
+        parser.listFixupsForScreen(selection),
         followedRef
           ? parser.findNewerTarget(
               selection.targetCommitish,
