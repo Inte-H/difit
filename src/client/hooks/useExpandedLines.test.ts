@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { DiffFile } from '../../types/diff';
 
-import { useExpandedLines } from './useExpandedLines';
+import { rangesAroundNewLines, useExpandedLines } from './useExpandedLines';
 
 function createMockDiffFile(): DiffFile {
   return {
@@ -86,7 +86,7 @@ describe('useExpandedLines', () => {
     );
 
     await act(async () => {
-      await result.current.expandLines(file, 0, 'up', 1);
+      await result.current.openLines(file, [{ start: 1, end: 1 }]);
     });
 
     expect(result.current.getMergedChunks(file)[0]?.lines[0]?.content).toBe('base a line 1');
@@ -102,7 +102,7 @@ describe('useExpandedLines', () => {
     });
 
     await act(async () => {
-      await result.current.expandLines(file, 0, 'up', 1);
+      await result.current.openLines(file, [{ start: 1, end: 1 }]);
     });
 
     expect(result.current.getMergedChunks(file)[0]?.lines[0]?.content).toBe('base b line 1');
@@ -153,7 +153,7 @@ describe('useExpandedLines', () => {
     );
 
     await act(async () => {
-      await result.current.expandLines(file, 0, 'up', 1);
+      await result.current.openLines(file, [{ start: 1, end: 1 }]);
     });
 
     expect(result.current.getMergedChunks(file)[0]?.lines[0]?.content).toBe('base a line 1');
@@ -169,7 +169,7 @@ describe('useExpandedLines', () => {
     });
 
     await act(async () => {
-      await result.current.expandLines(file, 0, 'up', 1);
+      await result.current.openLines(file, [{ start: 1, end: 1 }]);
     });
 
     expect(result.current.getMergedChunks(file)[0]?.lines[0]?.content).toBe(
@@ -189,7 +189,7 @@ describe('useExpandedLines', () => {
 
     await act(async () => {
       await result.current.prefetchFileContent(file);
-      await result.current.expandLines(file, 0, 'up', 1);
+      await result.current.openLines(file, [{ start: 1, end: 1 }]);
     });
 
     expect(global.fetch).not.toHaveBeenCalled();
@@ -241,7 +241,7 @@ describe('useExpandedLines change kinds', () => {
     ]);
 
     await act(async () => {
-      await result.current.expandAllBetweenChunks(file, 1, 1);
+      await result.current.openLines(file, [{ start: 2, end: 2 }]);
     });
 
     expect(result.current.getMergedChunks(file).map((chunk) => chunk.changeKind)).toEqual([merged]);
@@ -257,7 +257,7 @@ describe('useExpandedLines change kinds', () => {
     ]);
 
     await act(async () => {
-      await result.current.expandAllBetweenChunks(file, 1, 1);
+      await result.current.openLines(file, [{ start: 2, end: 2 }]);
     });
 
     const [merged] = result.current.getMergedChunks(file);
@@ -282,8 +282,8 @@ describe('useExpandedLines change kinds', () => {
     const { result } = renderExpanded();
 
     await act(async () => {
-      await result.current.expandLines(file, 0, 'up', 1);
-      await result.current.expandLines(file, 0, 'down', 1);
+      await result.current.openLines(file, [{ start: 2, end: 2 }]);
+      await result.current.openLines(file, [{ start: 4, end: 4 }]);
     });
 
     const [merged] = result.current.getMergedChunks(file);
@@ -293,5 +293,167 @@ describe('useExpandedLines change kinds', () => {
     ]);
     expect(merged?.hiddenLinesBefore).toBe(1);
     expect(merged?.hiddenLinesAfter).toBe(1);
+  });
+});
+
+describe('useExpandedLines lines opened inside a gap', () => {
+  const content = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n');
+
+  const changeAt = (line: number, newStart: number, added: number) => ({
+    header: `@@ -${line} +${newStart},${added} @@`,
+    oldStart: line,
+    oldLines: 1,
+    newStart,
+    newLines: added,
+    lines: [
+      { type: 'delete' as const, content: `old ${line}`, oldLineNumber: line },
+      ...Array.from({ length: added }, (_, index) => ({
+        type: 'add' as const,
+        content: `new ${newStart + index}`,
+        newLineNumber: newStart + index,
+      })),
+    ],
+  });
+
+  // Old line 2 becomes new lines 2-4, so every later new line is two past its old line.
+  const file: DiffFile = {
+    path: 'src/gap.ts',
+    status: 'modified',
+    additions: 4,
+    deletions: 2,
+    chunks: [changeAt(2, 2, 3), changeAt(30, 32, 1)],
+  };
+
+  const shape = (chunks: ReturnType<ReturnType<typeof useExpandedLines>['getMergedChunks']>) =>
+    chunks.map((chunk) => ({
+      originalIndices: chunk.originalIndices,
+      hiddenLinesBefore: chunk.hiddenLinesBefore,
+      hiddenLinesAfter: chunk.hiddenLinesAfter,
+      oldLines: chunk.lines.flatMap((line) => line.oldLineNumber ?? []),
+    }));
+
+  beforeEach(() => {
+    vi.mocked(global.fetch).mockImplementation(() =>
+      Promise.resolve({ ok: true, text: async () => `${content}\n` } as Response),
+    );
+  });
+
+  const renderOpened = async (newLines: number[]) => {
+    const hook = renderHook(() =>
+      useExpandedLines({ baseCommitish: 'base', targetCommitish: 'target' }),
+    );
+    await act(async () => {
+      await hook.result.current.openLines(file, rangesAroundNewLines(file, newLines, 3));
+    });
+    return hook;
+  };
+
+  it('opens three lines on each side of a hidden new line, mapped to its old line', () => {
+    expect(rangesAroundNewLines(file, [17], 3)).toEqual([{ start: 12, end: 18 }]);
+    expect(rangesAroundNewLines(file, [6, 30], 3)).toEqual([
+      { start: 3, end: 7 },
+      { start: 25, end: 29 },
+    ]);
+    expect(rangesAroundNewLines(file, [1, 3, 32], 3)).toEqual([{ start: 1, end: 1 }]);
+    expect(rangesAroundNewLines(file, [40], 3)).toEqual([{ start: 35, end: 41 }]);
+    expect(rangesAroundNewLines({ ...file, status: 'added' }, [17], 3)).toEqual([]);
+  });
+
+  it('shows the opened lines as their own chunk and keeps the hidden counts around it', async () => {
+    const { result } = await renderOpened([17]);
+    const merged = result.current.getMergedChunks(file);
+
+    expect(shape(merged)).toEqual([
+      { originalIndices: [0], hiddenLinesBefore: 1, hiddenLinesAfter: 0, oldLines: [2] },
+      {
+        originalIndices: [],
+        hiddenLinesBefore: 9,
+        hiddenLinesAfter: 0,
+        oldLines: [12, 13, 14, 15, 16, 17, 18],
+      },
+      { originalIndices: [1], hiddenLinesBefore: 11, hiddenLinesAfter: 10, oldLines: [30] },
+    ]);
+    const band = merged[1];
+    expect(band?.lines[0]).toMatchObject({
+      type: 'normal',
+      content: 'line 12',
+      newLineNumber: 14,
+      isExpanded: true,
+    });
+    expect(band).toMatchObject({ oldStart: 12, oldLines: 7, newStart: 14, newLines: 7 });
+    expect(band?.originalLineRanges).toEqual([]);
+  });
+
+  it('merges later manual expansion with the opened lines', async () => {
+    const { result } = await renderOpened([17]);
+
+    await act(async () => {
+      await result.current.openLines(file, [{ start: 3, end: 11 }]);
+    });
+    expect(
+      shape(result.current.getMergedChunks(file)).map((chunk) => chunk.hiddenLinesBefore),
+    ).toEqual([1, 11]);
+    const [first] = result.current.getMergedChunks(file);
+    expect(first?.originalLineRanges).toEqual([
+      { originalIndex: 0, start: 0, end: 3, changeKind: undefined },
+    ]);
+
+    await act(async () => {
+      await result.current.openLines(file, [{ start: 19, end: 22 }]);
+    });
+    expect(
+      shape(result.current.getMergedChunks(file)).map((chunk) => chunk.hiddenLinesBefore),
+    ).toEqual([1, 7]);
+
+    await act(async () => {
+      await result.current.openLines(file, [{ start: 23, end: 29 }]);
+    });
+    const [whole] = result.current.getMergedChunks(file);
+    expect(shape(result.current.getMergedChunks(file))).toEqual([
+      {
+        originalIndices: [0, 1],
+        hiddenLinesBefore: 1,
+        hiddenLinesAfter: 10,
+        oldLines: Array.from({ length: 29 }, (_, index) => index + 2),
+      },
+    ]);
+    expect(whole?.originalLineRanges.map((range) => [range.start, range.end])).toEqual([
+      [0, 3],
+      [31, 32],
+    ]);
+  });
+
+  it('opens lines before the first chunk and after the last one', async () => {
+    const tail = await renderOpened([42]);
+    expect(shape(tail.result.current.getMergedChunks(file)).slice(1)).toEqual([
+      { originalIndices: [1], hiddenLinesBefore: 27, hiddenLinesAfter: 0, oldLines: [30] },
+      {
+        originalIndices: [],
+        hiddenLinesBefore: 6,
+        hiddenLinesAfter: 0,
+        oldLines: [37, 38, 39, 40],
+      },
+    ]);
+
+    const lead = await renderOpened([1]);
+    expect(shape(lead.result.current.getMergedChunks(file))[0]).toEqual({
+      originalIndices: [0],
+      hiddenLinesBefore: 0,
+      hiddenLinesAfter: 0,
+      oldLines: [1, 2],
+    });
+  });
+
+  it('does nothing for lines that are already open', async () => {
+    const { result } = await renderOpened([17]);
+    const fetches = vi.mocked(global.fetch).mock.calls.length;
+    const updatedAt = result.current.lastUpdatedAt;
+
+    await act(async () => {
+      await result.current.openLines(file, [{ start: 13, end: 15 }]);
+    });
+
+    expect(vi.mocked(global.fetch).mock.calls.length).toBe(fetches);
+    expect(result.current.lastUpdatedAt).toBe(updatedAt);
   });
 });

@@ -22,8 +22,13 @@ interface DiffViewerHeaderProps {
   isChangedSinceViewed?: boolean;
   onToggleCollapsed: (path: string) => void;
   onToggleAllCollapsed: (shouldCollapse: boolean) => void;
-  onToggleReviewed: (path: string) => void;
+  // Without it the file has no viewed state and no Viewed button.
+  onToggleReviewed?: (path: string) => void;
+  labels?: readonly string[];
+  onRevealFixup?: () => void;
 }
+
+const NO_LABELS: readonly string[] = [];
 
 const getFileIcon = (status: DiffFile['status']) => {
   switch (status) {
@@ -52,11 +57,14 @@ export const DiffViewerHeader = ({
   onToggleCollapsed,
   onToggleAllCollapsed,
   onToggleReviewed,
+  labels = NO_LABELS,
+  onRevealFixup,
 }: DiffViewerHeaderProps) => {
   const [isCopied, setIsCopied] = useState(false);
 
   return (
     <div
+      data-file-header
       className={`bg-github-bg-secondary border-t-2 border-t-github-accent border-b border-github-border px-5 py-4 flex items-center justify-between flex-wrap gap-3 sticky top-0 z-10 ${
         isFocused ? 'keyboard-focused-file-header' : ''
       }`}
@@ -110,6 +118,20 @@ export const DiffViewerHeader = ({
             (renamed from {file.oldPath})
           </span>
         )}
+        {labels.map((label) => (
+          <span key={label} className="shrink-0 text-xs text-github-warning">
+            {label}
+          </span>
+        ))}
+        {onRevealFixup && (
+          <button
+            type="button"
+            onClick={onRevealFixup}
+            className="shrink-0 text-xs text-github-warning hover:underline"
+          >
+            fixup 수정
+          </button>
+        )}
       </div>
 
       <div className="flex items-center gap-3">
@@ -130,18 +152,20 @@ export const DiffViewerHeader = ({
             -{file.deletions}
           </span>
         </div>
-        <button
-          onClick={() => onToggleReviewed(file.path)}
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${
-            isReviewed
-              ? 'bg-github-accent text-white'
-              : 'dark:bg-slate-600 dark:text-white dark:border-slate-500 dark:hover:bg-slate-500 dark:hover:border-slate-400 bg-github-bg-secondary text-github-text-primary border border-github-border hover:bg-github-bg-tertiary hover:border-github-text-muted'
-          }`}
-          title={isReviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
-        >
-          {isReviewed ? <Check size={14} /> : <Square size={14} />}
-          Viewed
-        </button>
+        {onToggleReviewed && (
+          <button
+            onClick={() => onToggleReviewed(file.path)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all duration-200 ${
+              isReviewed
+                ? 'bg-github-accent text-white'
+                : 'dark:bg-slate-600 dark:text-white dark:border-slate-500 dark:hover:bg-slate-500 dark:hover:border-slate-400 bg-github-bg-secondary text-github-text-primary border border-github-border hover:bg-github-bg-tertiary hover:border-github-text-muted'
+            }`}
+            title={isReviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
+          >
+            {isReviewed ? <Check size={14} /> : <Square size={14} />}
+            Viewed
+          </button>
+        )}
       </div>
     </div>
   );

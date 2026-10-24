@@ -27,7 +27,7 @@ import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
 import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
-import { FixupOverlayRow } from './FixupOverlayCard';
+import { FixupBoxRows, FixupOverlayRow } from './FixupOverlayCard';
 import {
   type FoldedLines,
   FoldedLinesRow,
@@ -600,6 +600,13 @@ export const DiffChunk = memo(function DiffChunk({
                       selection,
                     });
                   }}
+                />
+
+                <FixupBoxRows
+                  filePath={filename}
+                  lineNumber={line.type === 'delete' ? undefined : line.newLineNumber}
+                  colSpan={3}
+                  syntaxTheme={syntaxTheme}
                 />
 
                 {lineThreads.map((thread) => {

@@ -334,6 +334,25 @@ describe('placeThread', () => {
     });
   });
 
+  it("keeps a thread made on a fixup's own file at its stored line in that fixup's tree", () => {
+    const fixupSha = sha('3');
+    const thread = buildThread({
+      filePath: 'src/new.test.ts',
+      codeSnapshot: { content: 'const value = 1;', commit: fixupSha },
+      fixupTarget: PIN.sha,
+    });
+
+    expect(placeThread(thread, shownOn(WHOLE), repeated, fixupSha)).toEqual({
+      kind: 'stored',
+      line: 10,
+    });
+    expect(placeThread(thread, shownOn(WHOLE), repeated)).toEqual({
+      kind: 'stale',
+      reason: 'ambiguous',
+      line: 10,
+    });
+  });
+
   it('relocates an imported thread whose snapshot comes from an older commit', () => {
     const thread = buildThread({
       codeSnapshot: { content: 'const value = 1;', commit: 'abcdef0' },

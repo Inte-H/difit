@@ -16,6 +16,18 @@ import { useViewedFiles } from './hooks/useViewedFiles';
 import { useViewport } from './hooks/useViewport';
 import { resetClientSettingsForTests } from './services/userSettings';
 import { getFileElementId } from './utils/domUtils';
+import { spreadFixups } from './utils/fixupSpread';
+import { placeThread } from './utils/outdatedComments';
+
+vi.mock('./utils/outdatedComments', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./utils/outdatedComments')>();
+  return { ...actual, placeThread: vi.fn(actual.placeThread) };
+});
+
+vi.mock('./utils/fixupSpread', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./utils/fixupSpread')>();
+  return { ...actual, spreadFixups: vi.fn(actual.spreadFixups) };
+});
 
 // Mock the useViewport hook
 vi.mock('./hooks/useViewport', () => ({
@@ -2549,6 +2561,8 @@ describe('App Component - Commits of the review', () => {
     ],
   };
   let review: DiffResponse['review'] = REVIEW;
+  let moreReviewFiles: DiffResponse['files'] = [];
+  let directEditAvailable = false;
   let firstStepLine = 'const a = 1;';
   const fileOf = (target: string | null) =>
     target === COMMITS[0]!.sha
@@ -2578,8 +2592,9 @@ describe('App Component - Commits of the review', () => {
     targetCommitish: (target ?? requested.targetCommitish).slice(0, 7),
     requestedBaseCommitish: base ?? requested.baseCommitish,
     requestedTargetCommitish: target ?? requested.targetCommitish,
-    files: [fileOf(target)],
+    files: [fileOf(target), ...moreReviewFiles],
     ...(review ? { review } : {}),
+    ...(directEditAvailable ? { directEditAvailable } : {}),
   });
   const pinnedThread = (line: string): DiffCommentThread => ({
     ...createMockThread({ id: 'c3', filePath: 'test.ts', line: 1, body: 'Pinned here' }),
@@ -2612,6 +2627,8 @@ describe('App Component - Commits of the review', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     review = REVIEW;
+    moreReviewFiles = [];
+    directEditAvailable = false;
     firstStepLine = 'const a = 1;';
     fixupsFor.current = [];
     chosenFixupTarget = undefined;
@@ -3496,6 +3513,891 @@ describe('App Component - Commits of the review', () => {
       expect(document.getElementById('comment-thread-c3')).toHaveAttribute('data-picked', 'true'),
     );
     mockViewedFiles = new Set<string>();
+  });
+
+  describe('files only a fixup changed', () => {
+    const FIXUP_SHA = 'f'.repeat(40);
+    const added = (path: string, contents: string[]) => ({
+      path,
+      status: 'added' as const,
+      chunks: [
+        {
+          header: `@@ -0,0 +1,${contents.length} @@`,
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: contents.length,
+          lines: contents.map((content, index) => ({
+            type: 'add' as const,
+            content,
+            newLineNumber: index + 1,
+          })),
+        },
+      ],
+    });
+    const fixupAnsweringC1 = () => ({
+      sha: FIXUP_SHA,
+      shortSha: 'fffffff',
+      patchId: 'patch-1',
+      authoredAt: '2026-01-01T00:00:00Z',
+      subject: 'fixup! second step',
+      threadIds: ['c1'],
+      files: [
+        { path: 'test.ts', status: 'modified', chunks: file.chunks },
+        added('src/new.test.ts', ['first case', 'second case']),
+        { ...added('pnpm-lock.yaml', ['lock entry']), isGenerated: true },
+      ],
+    });
+    const fixupOnlyRegion = async () =>
+      (await diffMain()).findByRole('region', { name: 'fixup fffffff에서만 수정한 파일' });
+    const sectionOf = (path: string) =>
+      document.querySelector<HTMLElement>(`[data-fixup-only-file="${path}"]`)!;
+
+    beforeEach(() => {
+      fixupsFor.current = [fixupAnsweringC1()];
+    });
+
+    it('draws them below the review files, the generated one folded, on the whole review only', async () => {
+      renderApp();
+
+      const region = await fixupOnlyRegion();
+      expect(
+        within(region).getByRole('heading', {
+          name: 'fixup fffffff에서만 수정한 파일 — 승인하면 원래 커밋에 합쳐진다',
+        }),
+      ).toBeInTheDocument();
+      expect(
+        document.getElementById(getFileElementId('test.ts'))!.compareDocumentPosition(region),
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(sectionOf('src/new.test.ts')).toHaveTextContent('second case');
+      expect(sectionOf('src/new.test.ts')).toHaveTextContent('새 파일');
+      expect(sectionOf('pnpm-lock.yaml')).toHaveTextContent('생성된 파일');
+      expect(sectionOf('pnpm-lock.yaml')).not.toHaveTextContent('lock entry');
+      expect(within(region).queryByRole('button', { name: /Viewed/ })).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: /Viewed/ })).toHaveLength(1);
+
+      fireEvent.click(commitButton(/abc1234/));
+      await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+      expect(
+        (await diffMain()).queryByRole('region', { name: 'fixup fffffff에서만 수정한 파일' }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('unfolds the generated file when its name on the comment card is clicked', async () => {
+      renderApp();
+      await fixupOnlyRegion();
+
+      const card = await screen.findByTestId('fixup-overlay-card');
+      fireEvent.click(within(card).getByRole('button', { name: 'pnpm-lock.yaml' }));
+
+      await waitFor(() => expect(sectionOf('pnpm-lock.yaml')).toHaveTextContent('lock entry'));
+    });
+
+    it('opens the whole review to show a file named on the card of one commit', async () => {
+      renderApp();
+      await fixupOnlyRegion();
+      fireEvent.click(commitButton(/abc1234/));
+      await waitFor(() => expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true'));
+
+      const card = await screen.findByTestId('fixup-overlay-card');
+      fireEvent.click(within(card).getByRole('button', { name: 'pnpm-lock.yaml' }));
+
+      await waitFor(() => expect(commitButton('전체')).toHaveAttribute('aria-current', 'true'));
+      await waitFor(() => expect(sectionOf('pnpm-lock.yaml')).toHaveTextContent('lock entry'));
+    });
+
+    it.each([
+      ['the commented thread', COMMITS[0]!.sha, COMMITS[0]!.sha],
+      ['the review target, when the thread has none', undefined, 'abc1234'],
+    ])(
+      'binds a comment there to the commit of %s without asking the server',
+      async (_, threadTarget, expected) => {
+        mockComments = [
+          {
+            ...createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+            ...(threadTarget ? { fixupTarget: threadTarget } : {}),
+          },
+        ];
+        renderApp();
+        const region = await fixupOnlyRegion();
+
+        const row = region.querySelector('[data-diff-line-row="true"]')!;
+        fireEvent.mouseEnter(row.children[2]!);
+        fireEvent.mouseDown(within(region).getByRole('button', { name: 'Add a comment' }), {
+          shiftKey: true,
+        });
+        fireEvent.change(await within(region).findByPlaceholderText(/comment/i), {
+          target: { value: 'Name this case' },
+        });
+        fireEvent.click(within(region).getByRole('button', { name: 'Submit' }));
+
+        await waitFor(() =>
+          expect(addedThreads()).toEqual([
+            [
+              expect.objectContaining({
+                filePath: 'src/new.test.ts',
+                line: 1,
+                binding: { fixupTarget: expected, snapshotCommit: FIXUP_SHA },
+              }),
+            ],
+          ]),
+        );
+        expect(fixupTargetQueries()).toEqual([]);
+      },
+    );
+
+    it('binds a comment there to the commit of the first thread the fixup answers that names one', async () => {
+      fixupsFor.current = [{ ...fixupAnsweringC1(), threadIds: ['c1', 'c2'] }];
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({ id: 'c2', filePath: 'test.ts', line: 1, body: 'And here' }),
+          fixupTarget: COMMITS[0]!.sha,
+        },
+      ];
+      renderApp();
+      const region = await fixupOnlyRegion();
+
+      const row = region.querySelector('[data-diff-line-row="true"]')!;
+      fireEvent.mouseEnter(row.children[2]!);
+      fireEvent.mouseDown(within(region).getByRole('button', { name: 'Add a comment' }), {
+        shiftKey: true,
+      });
+      fireEvent.change(await within(region).findByPlaceholderText(/comment/i), {
+        target: { value: 'Name this case' },
+      });
+      fireEvent.click(within(region).getByRole('button', { name: 'Submit' }));
+
+      await waitFor(() =>
+        expect(addedThreads()).toEqual([
+          [
+            expect.objectContaining({
+              filePath: 'src/new.test.ts',
+              binding: { fixupTarget: COMMITS[0]!.sha, snapshotCommit: FIXUP_SHA },
+            }),
+          ],
+        ]),
+      );
+    });
+
+    it('numbers a comment on a line the fixup deleted in the fixup parent and draws it there', async () => {
+      fixupsFor.current = [
+        {
+          ...fixupAnsweringC1(),
+          files: [
+            { path: 'test.ts', status: 'modified', chunks: file.chunks },
+            {
+              path: 'src/kept.ts',
+              status: 'modified',
+              chunks: [
+                {
+                  header: '@@ -1,3 +1,2 @@',
+                  oldStart: 1,
+                  oldLines: 3,
+                  newStart: 1,
+                  newLines: 2,
+                  lines: [
+                    { type: 'normal', content: 'first', oldLineNumber: 1, newLineNumber: 1 },
+                    { type: 'delete', content: 'dropped', oldLineNumber: 2 },
+                    { type: 'normal', content: 'last', oldLineNumber: 3, newLineNumber: 2 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+
+      const deletedRow = [
+        ...sectionOf('src/kept.ts').querySelectorAll('[data-diff-line-row="true"]'),
+      ].find((row) => row.textContent?.includes('dropped'))!;
+      fireEvent.mouseEnter(deletedRow.children[0]!);
+      fireEvent.mouseDown(
+        within(sectionOf('src/kept.ts')).getByRole('button', { name: 'Add a comment' }),
+        { shiftKey: true },
+      );
+      fireEvent.change(await within(sectionOf('src/kept.ts')).findByPlaceholderText(/comment/i), {
+        target: { value: 'Why drop this' },
+      });
+      fireEvent.click(within(sectionOf('src/kept.ts')).getByRole('button', { name: 'Submit' }));
+
+      await waitFor(() =>
+        expect(addedThreads()).toEqual([
+          [
+            expect.objectContaining({
+              filePath: 'src/kept.ts',
+              side: 'old',
+              line: 2,
+              binding: expect.objectContaining({ snapshotCommit: FIXUP_SHA }),
+            }),
+          ],
+        ]),
+      );
+    });
+
+    it('draws a stored comment on a line the fixup deleted at its line, not as outdated', async () => {
+      fixupsFor.current = [
+        {
+          ...fixupAnsweringC1(),
+          files: [
+            { path: 'test.ts', status: 'modified', chunks: file.chunks },
+            {
+              path: 'src/kept.ts',
+              status: 'modified',
+              chunks: [
+                {
+                  header: '@@ -1,3 +1,1 @@',
+                  oldStart: 1,
+                  oldLines: 3,
+                  newStart: 1,
+                  newLines: 1,
+                  lines: [
+                    { type: 'delete', content: 'same', oldLineNumber: 1 },
+                    { type: 'delete', content: 'same', oldLineNumber: 2 },
+                    { type: 'normal', content: 'last', oldLineNumber: 3, newLineNumber: 1 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({ id: 'c5', filePath: 'src/kept.ts', line: 2, body: 'Why drop' }),
+          position: { side: 'old', line: 2 },
+          codeSnapshot: { content: 'same', commit: FIXUP_SHA },
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+
+      await waitFor(() => expect(sectionOf('src/kept.ts')).toHaveTextContent('Why drop'));
+      expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+    });
+
+    it.each(['unified', 'split'])(
+      'draws their header and added lines in the fixup scope in the %s view',
+      async (mode) => {
+        window.localStorage.setItem('difit.diffViewMode', mode);
+        renderApp();
+        await fixupOnlyRegion();
+
+        const section = sectionOf('src/new.test.ts');
+        expect(section.querySelector('[data-file-header]')).toHaveTextContent('src/new.test.ts');
+        const addedLines = [...section.querySelectorAll('.bg-diff-addition-bg')];
+        expect(addedLines.some((line) => line.textContent?.includes('first case'))).toBe(true);
+        expect(
+          document.getElementById(getFileElementId('test.ts'))!.closest('[data-fixup-only-file]'),
+        ).toBeNull();
+      },
+    );
+
+    it('offers no direct edit there, since their lines are counted in the fixup', async () => {
+      directEditAvailable = true;
+      renderApp();
+      const region = await fixupOnlyRegion();
+
+      const reviewFile = document.getElementById(getFileElementId('test.ts'))!;
+      fireEvent.mouseEnter(reviewFile.querySelector('[data-diff-line-row="true"]')!.children[2]!);
+      expect(
+        within(reviewFile).getByRole('button', { name: '줄 직접 고치기' }),
+      ).toBeInTheDocument();
+
+      fireEvent.mouseEnter(region.querySelector('[data-diff-line-row="true"]')!.children[2]!);
+      expect(within(region).getByRole('button', { name: 'Add a comment' })).toBeInTheDocument();
+      expect(within(region).queryByRole('button', { name: '줄 직접 고치기' })).toBeNull();
+      expect(within(region).queryByRole('button', { name: /hunk 고치기/ })).toBeNull();
+    });
+
+    it('keeps a file the review deletes and the fixup brings back as a review file', async () => {
+      moreReviewFiles = [
+        {
+          path: 'gone.ts',
+          status: 'deleted',
+          additions: 0,
+          deletions: 1,
+          chunks: [
+            {
+              header: '@@ -1,1 +0,0 @@',
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 0,
+              newLines: 0,
+              lines: [{ type: 'delete', content: 'old gone', oldLineNumber: 1 }],
+            },
+          ],
+        },
+      ];
+      fixupsFor.current = [
+        {
+          ...fixupAnsweringC1(),
+          files: [
+            { path: 'test.ts', status: 'modified', chunks: file.chunks },
+            added('gone.ts', ['back again']),
+          ],
+        },
+      ];
+      chosenFixupTarget = COMMITS[1]!.sha;
+      renderApp();
+
+      const card = await screen.findByTestId('fixup-overlay-card');
+      await waitFor(() => expect(card).toHaveTextContent('back again'));
+      expect(sectionOf('gone.ts')).toBeNull();
+
+      const deletedFile = document.getElementById(getFileElementId('gone.ts'))!;
+      const row = deletedFile.querySelector('[data-diff-line-row="true"]')!;
+      fireEvent.mouseEnter(row.children[0]!);
+      fireEvent.mouseDown(within(deletedFile).getByRole('button', { name: 'Add a comment' }), {
+        shiftKey: true,
+      });
+      fireEvent.change(await within(deletedFile).findByPlaceholderText(/comment/i), {
+        target: { value: 'Why delete this' },
+      });
+      fireEvent.click(within(deletedFile).getByRole('button', { name: 'Submit' }));
+
+      await waitFor(() =>
+        expect(addedThreads()).toEqual([
+          [
+            expect.objectContaining({
+              filePath: 'gone.ts',
+              binding: expect.not.objectContaining({ snapshotCommit: FIXUP_SHA }),
+            }),
+          ],
+        ]),
+      );
+      expect(fixupTargetQueries()).toEqual([expect.objectContaining({ path: 'gone.ts' })]);
+    });
+
+    it('draws a comment made there at its line, not as outdated', async () => {
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({
+            id: 'c4',
+            filePath: 'src/new.test.ts',
+            line: 2,
+            body: 'Name this case',
+          }),
+          codeSnapshot: { content: 'second case', commit: FIXUP_SHA },
+          fixupTarget: COMMITS[1]!.sha,
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Name this case'));
+      expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+    });
+
+    it('shows its section when an outdated comment made there is picked from the list', async () => {
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({
+            id: 'c4',
+            filePath: 'src/new.test.ts',
+            line: 2,
+            body: 'Gone case',
+          }),
+          codeSnapshot: { content: 'vanished case', commit: FIXUP_SHA },
+          fixupTarget: COMMITS[1]!.sha,
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Gone case'));
+      expect(
+        within(sectionOf('src/new.test.ts')).getByLabelText('Outdated comment'),
+      ).toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Toggle comments panel' }));
+      fireEvent.click(within(commentsPanel()!).getByRole('button', { name: /Gone case/ }));
+
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveClass('border-github-accent'));
+    });
+
+    it('spreads a fixup answering a thread made there like any other fixup', async () => {
+      const replaced = (line: number, from: string, to: string) => ({
+        header: `@@ -${line},1 +${line},1 @@`,
+        oldStart: line,
+        oldLines: 1,
+        newStart: line,
+        newLines: 1,
+        lines: [
+          { type: 'delete' as const, content: from, oldLineNumber: line },
+          { type: 'add' as const, content: to, newLineNumber: line },
+        ],
+      });
+      moreReviewFiles = [
+        {
+          path: 'src/m.ts',
+          status: 'modified',
+          additions: 0,
+          deletions: 0,
+          chunks: [
+            {
+              header: '@@ -1,1 +1,1 @@',
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lines: [
+                { type: 'normal', content: 'const m = 1;', oldLineNumber: 1, newLineNumber: 1 },
+              ],
+            },
+          ],
+        },
+      ];
+      fixupsFor.current = [
+        fixupAnsweringC1(),
+        {
+          sha: 'e'.repeat(40),
+          shortSha: 'eeeeeee',
+          patchId: 'patch-2',
+          authoredAt: '2026-01-02T00:00:00Z',
+          subject: 'fixup! second step',
+          threadIds: ['c4'],
+          files: [
+            {
+              path: 'src/new.test.ts',
+              status: 'modified',
+              chunks: [replaced(2, 'second case', 'renamed case')],
+            },
+            {
+              path: 'src/m.ts',
+              status: 'modified',
+              chunks: [replaced(1, 'const m = 1;', 'const m = 2;')],
+            },
+          ],
+        },
+      ];
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({
+            id: 'c4',
+            filePath: 'src/new.test.ts',
+            line: 2,
+            body: 'Name this case',
+          }),
+          codeSnapshot: { content: 'second case', commit: FIXUP_SHA },
+          fixupTarget: COMMITS[1]!.sha,
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+
+      const reviewFile = document.getElementById(getFileElementId('src/m.ts'))!;
+      await waitFor(() =>
+        expect(within(reviewFile).getByTestId('fixup-file-box')).toHaveTextContent('const m = 2;'),
+      );
+      const card = within(sectionOf('src/new.test.ts')).getByTestId('fixup-overlay-card');
+      expect(card).toHaveTextContent('renamed case');
+      fireEvent.click(within(card).getByRole('button', { name: 'src/m.ts' }));
+      await waitFor(() =>
+        expect(within(reviewFile).getByTestId('fixup-file-box')).toHaveClass(
+          'border-github-accent',
+        ),
+      );
+    });
+
+    it('keeps drawing a file there and a thread on it when the same fixup answers that thread', async () => {
+      fixupsFor.current = [{ ...fixupAnsweringC1(), threadIds: ['c1', 'c4'] }];
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({
+            id: 'c4',
+            filePath: 'src/new.test.ts',
+            line: 2,
+            body: 'Name this case',
+          }),
+          codeSnapshot: { content: 'second case', commit: FIXUP_SHA },
+          fixupTarget: COMMITS[1]!.sha,
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Name this case'));
+      expect(sectionOf('src/new.test.ts')).toHaveTextContent('second case');
+      expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+    });
+
+    describe('a later fixup answering a thread made there and a thread on a review file', () => {
+      const LATER_SHA = 'e'.repeat(40);
+      const madeThere = {
+        ...createMockThread({ id: 'c4', filePath: 'src/new.test.ts', line: 2, body: 'Name it' }),
+        codeSnapshot: { content: 'second case', commit: FIXUP_SHA },
+        fixupTarget: COMMITS[1]!.sha,
+      };
+      const laterFixup = (newTestFile: unknown) => ({
+        sha: LATER_SHA,
+        shortSha: 'eeeeeee',
+        patchId: 'patch-2',
+        authoredAt: '2026-01-02T00:00:00Z',
+        subject: 'fixup! second step',
+        threadIds: ['c2', 'c4'],
+        files: [newTestFile],
+      });
+      const laterRegion = () =>
+        screen.queryByRole('region', { name: 'fixup eeeeeee에서만 수정한 파일' });
+
+      beforeEach(() => {
+        mockComments = [
+          createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+          createMockThread({ id: 'c2', filePath: 'test.ts', line: 1, body: 'And here' }),
+          madeThere,
+        ];
+      });
+
+      it('keeps the thread in the section it was made in and draws the change on its card', async () => {
+        fixupsFor.current = [
+          fixupAnsweringC1(),
+          laterFixup({
+            path: 'src/new.test.ts',
+            status: 'modified',
+            chunks: [
+              {
+                header: '@@ -2,1 +2,1 @@',
+                oldStart: 2,
+                oldLines: 1,
+                newStart: 2,
+                newLines: 1,
+                lines: [
+                  { type: 'delete', content: 'second case', oldLineNumber: 2 },
+                  { type: 'add', content: 'renamed case', newLineNumber: 2 },
+                ],
+              },
+            ],
+          }),
+        ];
+        renderApp();
+        await fixupOnlyRegion();
+
+        await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Name it'));
+        const card = within(sectionOf('src/new.test.ts')).getByTestId('fixup-overlay-card');
+        expect(card).toHaveTextContent('renamed case');
+        expect(laterRegion()).toBeNull();
+        expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+      });
+
+      it('keeps the thread at its line there when the later fixup only shifts it', async () => {
+        fixupsFor.current = [
+          fixupAnsweringC1(),
+          laterFixup({
+            path: 'src/new.test.ts',
+            status: 'modified',
+            chunks: [
+              {
+                header: '@@ -1,2 +1,3 @@',
+                oldStart: 1,
+                oldLines: 2,
+                newStart: 1,
+                newLines: 3,
+                lines: [
+                  { type: 'add', content: 'zeroth case', newLineNumber: 1 },
+                  { type: 'normal', content: 'first case', oldLineNumber: 1, newLineNumber: 2 },
+                  { type: 'normal', content: 'second case', oldLineNumber: 2, newLineNumber: 3 },
+                ],
+              },
+            ],
+          }),
+        ];
+        renderApp();
+        await fixupOnlyRegion();
+
+        await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Name it'));
+        expect(sectionOf('src/new.test.ts')).toHaveTextContent('src/new.test.ts:2');
+        const card = within(sectionOf('src/new.test.ts')).getByTestId('fixup-overlay-card');
+        expect(card).toHaveTextContent('zeroth case');
+        expect(laterRegion()).toBeNull();
+      });
+    });
+
+    it('gives a later fixup renaming a file there to the card of the thread made on it', async () => {
+      fixupsFor.current = [
+        fixupAnsweringC1(),
+        {
+          sha: 'e'.repeat(40),
+          shortSha: 'eeeeeee',
+          patchId: 'patch-2',
+          authoredAt: '2026-01-02T00:00:00Z',
+          subject: 'fixup! second step',
+          threadIds: ['c4'],
+          files: [
+            {
+              path: 'src/renamed.test.ts',
+              oldPath: 'src/new.test.ts',
+              status: 'renamed',
+              chunks: [
+                {
+                  header: '@@ -2,1 +2,1 @@',
+                  oldStart: 2,
+                  oldLines: 1,
+                  newStart: 2,
+                  newLines: 1,
+                  lines: [
+                    { type: 'delete', content: 'second case', oldLineNumber: 2 },
+                    { type: 'add', content: 'renamed case', newLineNumber: 2 },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        {
+          ...createMockThread({ id: 'c4', filePath: 'src/new.test.ts', line: 2, body: 'Name it' }),
+          codeSnapshot: { content: 'second case', commit: FIXUP_SHA },
+          fixupTarget: COMMITS[1]!.sha,
+        },
+      ];
+      renderApp();
+      await fixupOnlyRegion();
+
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Name it'));
+      const card = within(sectionOf('src/new.test.ts')).getByTestId('fixup-overlay-card');
+      await waitFor(() => expect(card).toHaveTextContent('renamed case'));
+      expect(sectionOf('src/renamed.test.ts')).toBeNull();
+      expect(
+        screen.queryByRole('region', { name: 'fixup eeeeeee에서만 수정한 파일' }),
+      ).not.toBeInTheDocument();
+    });
+
+    describe('a file several of their fixups changed', () => {
+      const B_SHA = 'e'.repeat(40);
+      const C_SHA = 'd'.repeat(40);
+      const replaced = (line: number, from: string, to: string) => ({
+        header: `@@ -${line},1 +${line},1 @@`,
+        oldStart: line,
+        oldLines: 1,
+        newStart: line,
+        newLines: 1,
+        lines: [
+          { type: 'delete' as const, content: from, oldLineNumber: line },
+          { type: 'add' as const, content: to, newLineNumber: line },
+        ],
+      });
+      const fixupOf = (sha: string, threadIds: string[], files: unknown[]) => ({
+        sha,
+        shortSha: sha.slice(0, 7),
+        patchId: `patch-${sha}`,
+        authoredAt: '2026-01-02T00:00:00Z',
+        subject: 'fixup! second step',
+        threadIds,
+        files,
+      });
+      const addingP = () => ({
+        ...fixupAnsweringC1(),
+        files: [
+          { path: 'test.ts', status: 'modified', chunks: file.chunks },
+          added('p.ts', ['p one', 'p two']),
+        ],
+      });
+      const madeOn = (id: string, path: string, line: number, content: string, sha: string) => ({
+        ...createMockThread({ id, filePath: path, line, body: `Look at ${id}` }),
+        codeSnapshot: { content, commit: sha },
+        fixupTarget: COMMITS[1]!.sha,
+      });
+      const regionOf = (shortSha: string) =>
+        within(screen.getByRole('main')).queryByRole('region', {
+          name: `fixup ${shortSha}에서만 수정한 파일`,
+        });
+      const fileIn = (shortSha: string, path: string) =>
+        regionOf(shortSha)?.querySelector<HTMLElement>(`[data-fixup-only-file="${path}"]`) ?? null;
+
+      it('answers a thread made on one group with a fixup on a file a later group shows', async () => {
+        fixupsFor.current = [
+          addingP(),
+          fixupOf(
+            B_SHA,
+            ['y'],
+            [
+              { path: 'p.ts', status: 'modified', chunks: [replaced(2, 'p two', 'p 2')] },
+              added('q.ts', ['q one', 'q two']),
+            ],
+          ),
+          fixupOf(
+            C_SHA,
+            ['z'],
+            [{ path: 'q.ts', status: 'modified', chunks: [replaced(1, 'q one', 'q 1')] }],
+          ),
+        ];
+        mockComments = [
+          createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+          madeOn('y', 'p.ts', 2, 'p two', FIXUP_SHA),
+          madeOn('z', 'q.ts', 1, 'q one', B_SHA),
+        ];
+        renderApp();
+        await fixupOnlyRegion();
+
+        await waitFor(() => expect(fileIn('eeeeeee', 'q.ts')).toHaveTextContent('Look at z'));
+        expect(
+          within(fileIn('eeeeeee', 'q.ts')!).getByTestId('fixup-overlay-card'),
+        ).toHaveTextContent('q 1');
+        expect(fileIn('fffffff', 'p.ts')).toHaveTextContent('Look at y');
+        expect(
+          within(fileIn('fffffff', 'p.ts')!).getByTestId('fixup-overlay-card'),
+        ).toHaveTextContent('p 2');
+        expect(regionOf('ddddddd')).toBeNull();
+        expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+      });
+
+      it('draws the card of a thread on the group it was made on when a group between changed its line', async () => {
+        mockComments = [
+          createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+          createMockThread({ id: 'c2', filePath: 'test.ts', line: 1, body: 'And here' }),
+          madeOn('y', 'p.ts', 2, 'p two', FIXUP_SHA),
+        ];
+        fixupsFor.current = [
+          addingP(),
+          fixupOf(
+            B_SHA,
+            ['c2'],
+            [{ path: 'p.ts', status: 'modified', chunks: [replaced(2, 'p two', 'p 2')] }],
+          ),
+          fixupOf(
+            C_SHA,
+            ['y'],
+            [{ path: 'p.ts', status: 'modified', chunks: [replaced(2, 'p 2', 'p II')] }],
+          ),
+        ];
+        renderApp();
+        await fixupOnlyRegion();
+
+        await waitFor(() => expect(fileIn('fffffff', 'p.ts')).toHaveTextContent('Look at y'));
+        expect(
+          within(fileIn('fffffff', 'p.ts')!).getByTestId('fixup-overlay-card'),
+        ).toHaveTextContent('p II');
+        expect(fileIn('eeeeeee', 'p.ts')).toHaveTextContent('p 2');
+        expect(fileIn('eeeeeee', 'p.ts')).not.toHaveTextContent('Look at y');
+        expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+      });
+
+      it('takes a comment in the section of an older group, bound to its fixup, and draws it there', async () => {
+        mockComments = [
+          createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+          createMockThread({ id: 'c2', filePath: 'test.ts', line: 1, body: 'And here' }),
+        ];
+        fixupsFor.current = [
+          addingP(),
+          fixupOf(
+            B_SHA,
+            ['c2'],
+            [{ path: 'p.ts', status: 'modified', chunks: [replaced(2, 'p two', 'p 2')] }],
+          ),
+        ];
+        const { rerender } = renderApp();
+        await fixupOnlyRegion();
+        await waitFor(() => expect(fileIn('eeeeeee', 'p.ts')).not.toBeNull());
+
+        const older = fileIn('fffffff', 'p.ts')!;
+        fireEvent.mouseEnter(older.querySelector('[data-diff-line-row="true"]')!.children[2]!);
+        fireEvent.mouseDown(within(older).getByRole('button', { name: 'Add a comment' }), {
+          shiftKey: true,
+        });
+        fireEvent.change(await within(older).findByPlaceholderText(/comment/i), {
+          target: { value: 'Name this' },
+        });
+        fireEvent.click(within(older).getByRole('button', { name: 'Submit' }));
+
+        await waitFor(() =>
+          expect(addedThreads()).toEqual([
+            [
+              expect.objectContaining({
+                filePath: 'p.ts',
+                line: 1,
+                binding: { fixupTarget: 'abc1234', snapshotCommit: FIXUP_SHA },
+              }),
+            ],
+          ]),
+        );
+
+        mockComments = [...mockComments, madeOn('c6', 'p.ts', 1, 'p one', FIXUP_SHA)];
+        rerender(
+          <HotkeysProvider initiallyActiveScopes={['navigation']}>
+            <App />
+          </HotkeysProvider>,
+        );
+        await waitFor(() => expect(fileIn('fffffff', 'p.ts')).toHaveTextContent('Look at c6'));
+        expect(fileIn('eeeeeee', 'p.ts')).not.toHaveTextContent('Look at c6');
+        expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+      });
+    });
+
+    it('reads the lines of a file there once for all the threads on it', async () => {
+      const madeThere = (id: string, line: number, content: string) => ({
+        ...createMockThread({ id, filePath: 'src/new.test.ts', line, body: `Look at ${id}` }),
+        codeSnapshot: { content, commit: FIXUP_SHA },
+        fixupTarget: COMMITS[1]!.sha,
+      });
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        madeThere('c4', 1, 'first case'),
+        madeThere('c5', 2, 'second case'),
+      ];
+      vi.mocked(placeThread).mockClear();
+      renderApp();
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Look at c5'));
+
+      const indexes = vi
+        .mocked(placeThread)
+        .mock.calls.filter(([, , , indexCommit]) => indexCommit === FIXUP_SHA)
+        .map(([, , index]) => index);
+      expect(indexes.length).toBeGreaterThan(0);
+      expect(new Set(indexes).size * 2).toBe(indexes.length);
+    });
+
+    it('places only their threads again and keeps the fixup spread when a thread gets a reply', async () => {
+      const onFixupOnlyFile = {
+        ...createMockThread({ id: 'c4', filePath: 'src/new.test.ts', line: 2, body: 'Name this' }),
+        codeSnapshot: { content: 'second case', commit: FIXUP_SHA },
+        fixupTarget: COMMITS[1]!.sha,
+      };
+      mockComments = [
+        createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+        createMockThread({ id: 'c2', filePath: 'test.ts', line: 1, body: 'And here' }),
+        onFixupOnlyFile,
+      ];
+      const { rerender } = renderApp();
+      await waitFor(() => expect(sectionOf('src/new.test.ts')).toHaveTextContent('Name this'));
+      vi.mocked(placeThread).mockClear();
+      vi.mocked(spreadFixups).mockClear();
+
+      const [first, second] = mockComments;
+      mockComments = [
+        { ...first!, messages: [...first!.messages, { ...first!.messages[0]!, id: 'r1' }] },
+        second!,
+        {
+          ...onFixupOnlyFile,
+          messages: [
+            ...onFixupOnlyFile.messages,
+            { ...onFixupOnlyFile.messages[0]!, id: 'r2', body: 'Renamed it' },
+          ],
+        },
+      ];
+      rerender(
+        <HotkeysProvider initiallyActiveScopes={['navigation']}>
+          <App />
+        </HotkeysProvider>,
+      );
+
+      expect(vi.mocked(placeThread).mock.calls.map(([thread]) => thread.id)).toEqual([
+        'c1',
+        'c2',
+        'c4',
+      ]);
+      expect(spreadFixups).not.toHaveBeenCalled();
+      expect(sectionOf('src/new.test.ts')).toHaveTextContent('Renamed it');
+      expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+    });
   });
 
   it('opens the commit a comment was made on to show it from the list', async () => {

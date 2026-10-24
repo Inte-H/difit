@@ -5,12 +5,12 @@ import {
   type DiffFile,
   type DiffChunk,
   type DiffLine,
+  type ExpandedLine,
   type ExpandedLinesState,
+  type ExpandedRange,
   type FileExpandedState,
 } from '../../types/diff';
 import { combineChangeKinds } from '../../utils/changeKind';
-
-const DEFAULT_EXPAND_COUNT = 20;
 
 interface UseExpandedLinesOptions {
   baseCommitish?: string;
@@ -26,10 +26,13 @@ interface OriginalLineRange {
 }
 
 export interface MergedChunk extends DiffChunk {
+  // Empty for lines opened in the middle of a gap, away from every chunk.
   originalIndices: number[];
   // Where each original chunk's own lines sit in `lines`.
   originalLineRanges: OriginalLineRange[];
+  // Old lines hidden right above `oldStart`.
   hiddenLinesBefore: number;
+  // Old lines hidden from `oldStart + oldLines`; set on the last chunk only, -1 while the file length is unknown.
   hiddenLinesAfter: number;
 }
 
@@ -38,21 +41,9 @@ interface UseExpandedLinesResult {
   isLoading: boolean;
   lastUpdatedFilePath: string | null;
   lastUpdatedAt: number;
-  expandLines: (
-    file: DiffFile,
-    chunkIndex: number,
-    direction: 'up' | 'down',
-    count?: number,
-  ) => Promise<void>;
-  expandAllBetweenChunks: (
-    file: DiffFile,
-    chunkIndex: number,
-    hiddenLines: number,
-  ) => Promise<void>;
+  openLines: (file: DiffFile, ranges: readonly ExpandedRange[]) => Promise<void>;
   prefetchFileContent: (file: DiffFile) => Promise<void>;
   getMergedChunks: (file: DiffFile) => MergedChunk[];
-  getHiddenLinesBefore: (file: DiffFile, chunk: DiffChunk, chunkIndex: number) => number;
-  getHiddenLinesAfter: (file: DiffFile, chunk: DiffChunk, chunkIndex: number) => number;
 }
 
 async function fetchFileContent(
@@ -94,19 +85,179 @@ async function fetchLineCount(
   return response.json() as Promise<{ oldLineCount?: number; newLineCount?: number }>;
 }
 
-function withLines(chunk: DiffChunk, lines: DiffLine[]): DiffChunk {
-  const firstLine = lines[0];
-  const lastLine = lines[lines.length - 1];
-  const oldStart = firstLine?.oldLineNumber ?? chunk.oldStart;
-  const newStart = firstLine?.newLineNumber ?? chunk.newStart;
+const showsWholeFile = (file: DiffFile) => file.status === 'added' || file.status === 'deleted';
+
+// The unchanged old lines between chunks[index - 1] and chunks[index]; index === chunks.length is the tail.
+export function gapBeforeChunk(file: DiffFile, index: number): ExpandedRange | null {
+  if (showsWholeFile(file)) return null;
+  const prev = file.chunks[index - 1];
+  const next = file.chunks[index];
+  if (!prev && !next) return null;
   return {
-    ...chunk,
-    lines,
-    oldStart,
-    newStart,
-    oldLines: (lastLine?.oldLineNumber ?? chunk.oldStart + chunk.oldLines - 1) - oldStart + 1,
-    newLines: (lastLine?.newLineNumber ?? chunk.newStart + chunk.newLines - 1) - newStart + 1,
+    start: prev ? prev.oldStart + prev.oldLines : 1,
+    end: next ? next.oldStart - 1 : Number.POSITIVE_INFINITY,
   };
+}
+
+// New line number minus old line number, the same for every line of that gap.
+function gapShift(file: DiffFile, index: number): number {
+  const next = file.chunks[index];
+  if (next) return next.newStart - next.oldStart;
+  const last = file.chunks[index - 1];
+  return last ? last.newStart + last.newLines - (last.oldStart + last.oldLines) : 0;
+}
+
+// `context` old lines on each side of every hidden new-side line, kept inside its gap.
+export function rangesAroundNewLines(
+  file: DiffFile,
+  newLines: readonly number[],
+  context: number,
+): ExpandedRange[] {
+  return Array.from({ length: file.chunks.length + 1 }, (_, index) => index).flatMap((index) => {
+    const gap = gapBeforeChunk(file, index);
+    if (!gap) return [];
+    const shift = gapShift(file, index);
+    return newLines.flatMap((newLine) => {
+      const oldLine = newLine - shift;
+      if (oldLine < gap.start || oldLine > gap.end) return [];
+      return [
+        {
+          start: Math.max(gap.start, oldLine - context),
+          end: Math.min(gap.end, oldLine + context),
+        },
+      ];
+    });
+  });
+}
+
+function withRanges(
+  ranges: readonly ExpandedRange[],
+  added: readonly ExpandedRange[],
+): ExpandedRange[] {
+  const merged: ExpandedRange[] = [];
+  for (const range of [...ranges, ...added].sort((a, b) => a.start - b.start)) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end + 1) {
+      last.end = Math.max(last.end, range.end);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+const covers = (ranges: readonly ExpandedRange[], range: ExpandedRange) =>
+  ranges.some((opened) => opened.start <= range.start && opened.end >= range.end);
+
+function buildMergedChunks(
+  file: DiffFile,
+  fileState: FileExpandedState | undefined,
+): MergedChunk[] {
+  const opened = fileState?.expandedRanges ?? [];
+  const oldContent = fileState?.oldContent ?? [];
+  const newContent = fileState?.newContent ?? [];
+  const totalLines = fileState?.oldTotalLines || fileState?.newTotalLines;
+  const mergedChunks: MergedChunk[] = [];
+  let current: MergedChunk | null = null;
+  let hiddenRun = 0;
+  let tailHidden = 0;
+
+  const place = (
+    lines: DiffLine[],
+    oldStart: number,
+    oldStop: number,
+    newStart: number,
+    newStop: number,
+  ) => {
+    const target: MergedChunk = current ?? {
+      header: '',
+      oldStart,
+      oldLines: 0,
+      newStart,
+      newLines: 0,
+      lines: [],
+      originalIndices: [],
+      originalLineRanges: [],
+      hiddenLinesBefore: hiddenRun,
+      hiddenLinesAfter: 0,
+    };
+    if (!current) {
+      mergedChunks.push(target);
+      current = target;
+      hiddenRun = 0;
+    }
+    const offset = target.lines.length;
+    target.lines = target.lines.concat(lines);
+    target.oldLines = oldStop - target.oldStart;
+    target.newLines = newStop - target.newStart;
+    return { target, offset };
+  };
+
+  const chunkCount = file.chunks.length;
+  for (let index = 0; index <= chunkCount; index++) {
+    const gap = gapBeforeChunk(file, index);
+    if (gap) {
+      const isTail = index === chunkCount;
+      const end = isTail ? (totalLines ?? gap.start - 1) : gap.end;
+      const shift = gapShift(file, index);
+      let next = gap.start;
+      for (const range of opened) {
+        const from = Math.max(range.start, next);
+        const to = Math.min(range.end, end);
+        if (from > to) continue;
+        if (from > next) {
+          current = null;
+          hiddenRun = from - next;
+        }
+        const lines: DiffLine[] = [];
+        for (let oldLine = from; oldLine <= to; oldLine++) {
+          const newLine = oldLine + shift;
+          const line: ExpandedLine = {
+            type: 'normal',
+            content: oldContent[oldLine - 1] ?? newContent[newLine - 1] ?? '',
+            oldLineNumber: oldLine,
+            newLineNumber: newLine,
+            isExpanded: true,
+          };
+          lines.push(line);
+        }
+        place(lines, from, to + 1, from + shift, to + 1 + shift);
+        next = to + 1;
+      }
+      const hidden = Math.max(0, end - next + 1);
+      if (isTail) {
+        tailHidden = totalLines === undefined ? -1 : hidden;
+      } else if (hidden > 0) {
+        current = null;
+        hiddenRun = hidden;
+      }
+    }
+
+    const chunk = file.chunks[index];
+    if (!chunk) continue;
+    const { target, offset } = place(
+      chunk.lines,
+      chunk.oldStart,
+      chunk.oldStart + chunk.oldLines,
+      chunk.newStart,
+      chunk.newStart + chunk.newLines,
+    );
+    if (target.originalIndices.length === 0) target.header = chunk.header;
+    target.originalIndices.push(index);
+    target.originalLineRanges.push({
+      originalIndex: index,
+      start: offset,
+      end: offset + chunk.lines.length - 1,
+      changeKind: chunk.changeKind,
+    });
+    target.changeKind = combineChangeKinds(
+      target.originalLineRanges.map((range) => range.changeKind),
+    );
+  }
+
+  const last = mergedChunks[mergedChunks.length - 1];
+  if (last) last.hiddenLinesAfter = tailHidden;
+  return mergedChunks;
 }
 
 export function useExpandedLines({
@@ -217,13 +368,12 @@ export function useExpandedLines({
     setLastUpdatedAt((prev) => prev + 1);
   }, []);
 
-  const expandLines = useCallback(
-    async (
-      file: DiffFile,
-      chunkIndex: number,
-      direction: 'up' | 'down',
-      count: number = DEFAULT_EXPAND_COUNT,
-    ) => {
+  const openLines = useCallback(
+    async (file: DiffFile, ranges: readonly ExpandedRange[]) => {
+      const wanted = ranges.filter((range) => range.start <= range.end);
+      const opened = expandedStateRef.current[file.path]?.expandedRanges ?? [];
+      if (isStdinDiff || wanted.every((range) => covers(opened, range))) return;
+
       const revisionGeneration = revisionGenerationRef.current;
       setIsLoading(true);
       try {
@@ -232,41 +382,19 @@ export function useExpandedLines({
           return;
         }
 
-        // Use functional update to ensure we're working with the latest state
         setExpandedState((prev) => {
           const currentFileState = prev[file.path];
-          // Merge: fileState has content from fetch, currentFileState has latest expandedRanges
-          const currentRanges = currentFileState?.expandedRanges || fileState.expandedRanges || [];
-
-          // Find existing range or create new one
-          const existingRangeIndex = currentRanges.findIndex(
-            (r) => r.chunkIndex === chunkIndex && r.direction === direction,
-          );
-
-          const newRanges = [...currentRanges];
-
-          if (existingRangeIndex >= 0 && newRanges[existingRangeIndex]) {
-            // Update existing range
-            const existingRange = newRanges[existingRangeIndex];
-            newRanges[existingRangeIndex] = {
-              chunkIndex: existingRange.chunkIndex,
-              direction: existingRange.direction,
-              count: existingRange.count + count,
-            };
-          } else {
-            // Add new range
-            newRanges.push({ chunkIndex, direction, count });
-          }
-
           return {
             ...prev,
             [file.path]: {
-              // Use fileState for content (from fetch), preserve existing content if available
               oldContent: currentFileState?.oldContent ?? fileState.oldContent,
               newContent: currentFileState?.newContent ?? fileState.newContent,
               oldTotalLines: currentFileState?.oldTotalLines ?? fileState.oldTotalLines,
               newTotalLines: currentFileState?.newTotalLines ?? fileState.newTotalLines,
-              expandedRanges: newRanges,
+              expandedRanges: withRanges(
+                currentFileState?.expandedRanges ?? fileState.expandedRanges,
+                wanted,
+              ),
             },
           };
         });
@@ -275,94 +403,7 @@ export function useExpandedLines({
         setIsLoading(false);
       }
     },
-    [ensureFileContent, markFileUpdated],
-  );
-
-  const expandAllBetweenChunks = useCallback(
-    async (file: DiffFile, chunkIndex: number, hiddenLines: number) => {
-      const revisionGeneration = revisionGenerationRef.current;
-      setIsLoading(true);
-      try {
-        const fileState = await ensureFileContent(file);
-        if (!fileState || revisionGenerationRef.current !== revisionGeneration) {
-          return;
-        }
-
-        // Use functional update to ensure we're working with the latest state
-        setExpandedState((prev) => {
-          const currentFileState = prev[file.path];
-          // Merge: fileState has content from fetch, currentFileState has latest expandedRanges
-          const currentRanges = currentFileState?.expandedRanges || fileState.expandedRanges || [];
-
-          const newRanges = [...currentRanges];
-
-          // For the gap before chunkIndex, we need to consider BOTH:
-          // 1. 'up' direction from current chunk (user clicked "expand down" button in middle position)
-          // 2. 'down' direction from previous chunk (user clicked "expand up" button in middle position)
-          // This is because the UI buttons call different functions based on direction
-
-          const existingUpIndex = newRanges.findIndex(
-            (r) => r.chunkIndex === chunkIndex && r.direction === 'up',
-          );
-
-          const existingDownPrevIndex = newRanges.findIndex(
-            (r) => r.chunkIndex === chunkIndex - 1 && r.direction === 'down',
-          );
-
-          // Calculate total already expanded from both directions
-          let alreadyExpandedUp = 0;
-          let alreadyExpandedDownPrev = 0;
-
-          if (existingUpIndex >= 0 && newRanges[existingUpIndex]) {
-            alreadyExpandedUp = newRanges[existingUpIndex].count;
-          }
-          if (existingDownPrevIndex >= 0 && newRanges[existingDownPrevIndex]) {
-            alreadyExpandedDownPrev = newRanges[existingDownPrevIndex].count;
-          }
-
-          // hiddenLines is the REMAINING hidden lines after subtracting existing expanded
-          // Total to expand = alreadyExpanded + remaining
-          const totalToExpand = alreadyExpandedUp + alreadyExpandedDownPrev + hiddenLines;
-
-          // Remove the 'down' range from previous chunk (if exists) to consolidate into 'up' direction
-          // We need to remove it first before updating 'up' to avoid index shifting issues
-          const filteredRanges = newRanges.filter(
-            (r) => !(r.chunkIndex === chunkIndex - 1 && r.direction === 'down'),
-          );
-
-          // Now find or create the 'up' range
-          const upIndexInFiltered = filteredRanges.findIndex(
-            (r) => r.chunkIndex === chunkIndex && r.direction === 'up',
-          );
-
-          if (upIndexInFiltered >= 0 && filteredRanges[upIndexInFiltered]) {
-            filteredRanges[upIndexInFiltered] = {
-              chunkIndex,
-              direction: 'up',
-              count: totalToExpand,
-            };
-          } else {
-            filteredRanges.push({ chunkIndex, direction: 'up', count: totalToExpand });
-          }
-
-          return {
-            ...prev,
-            [file.path]: {
-              // Use fileState for content (from fetch), preserve existing content if available
-              oldContent: currentFileState?.oldContent ?? fileState.oldContent,
-              newContent: currentFileState?.newContent ?? fileState.newContent,
-              oldTotalLines: currentFileState?.oldTotalLines ?? fileState.oldTotalLines,
-              newTotalLines: currentFileState?.newTotalLines ?? fileState.newTotalLines,
-              expandedRanges: filteredRanges,
-            },
-          };
-        });
-        markFileUpdated(file.path);
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [ensureFileContent, markFileUpdated],
+    [ensureFileContent, markFileUpdated, isStdinDiff],
   );
 
   // Pre-fetch only line counts (lightweight) to show bottom expand button
@@ -418,231 +459,9 @@ export function useExpandedLines({
     [baseCommitish, targetCommitish, isStdinDiff, markFileUpdated],
   );
 
-  const getExpandedCount = useCallback(
-    (filePath: string, chunkIndex: number, direction: 'up' | 'down'): number => {
-      const fileState = expandedState[filePath];
-      if (!fileState) return 0;
-
-      const range = fileState.expandedRanges.find(
-        (r) => r.chunkIndex === chunkIndex && r.direction === direction,
-      );
-      return range?.count || 0;
-    },
-    [expandedState],
-  );
-
-  const getHiddenLinesBefore = useCallback(
-    (file: DiffFile, chunk: DiffChunk, chunkIndex: number): number => {
-      // Fully added/deleted files show all lines in the diff - no hidden lines
-      if (file.status === 'added' || file.status === 'deleted') {
-        return 0;
-      }
-
-      const prevChunk = file.chunks[chunkIndex - 1];
-      let hiddenLines: number;
-
-      if (!prevChunk) {
-        // First chunk - lines before it
-        hiddenLines = chunk.oldStart - 1;
-      } else {
-        // Gap between previous chunk and current chunk
-        const prevEnd = prevChunk.oldStart + prevChunk.oldLines;
-        hiddenLines = chunk.oldStart - prevEnd;
-      }
-
-      // Subtract already expanded lines
-      // For "before" current chunk, we use "up" direction of current chunk
-      const expandedUp = getExpandedCount(file.path, chunkIndex, 'up');
-      // Also subtract "down" expansion from previous chunk
-      const expandedDownPrev =
-        chunkIndex > 0 ? getExpandedCount(file.path, chunkIndex - 1, 'down') : 0;
-
-      return Math.max(0, hiddenLines - expandedUp - expandedDownPrev);
-    },
-    [getExpandedCount],
-  );
-
-  /**
-   * Calculates the number of hidden lines after a chunk.
-   * @param file - The diff file
-   * @param chunk - The diff chunk
-   * @param chunkIndex - The index of the chunk in the file
-   * @returns The number of hidden lines after this chunk, or:
-   *   - `-1` if the total file lines are unknown (file content not yet fetched)
-   *   - `0` if this is not the last chunk (gaps are calculated by next chunk's hiddenLinesBefore)
-   *   - `>= 0` for the actual hidden line count if known
-   */
-  const getHiddenLinesAfter = useCallback(
-    (file: DiffFile, chunk: DiffChunk, chunkIndex: number): number => {
-      // Fully added/deleted files show all lines in the diff - no hidden lines
-      if (file.status === 'added' || file.status === 'deleted') {
-        return 0;
-      }
-
-      const fileState = expandedState[file.path];
-      const totalLines = fileState?.oldTotalLines || fileState?.newTotalLines;
-
-      // If we don't know total lines yet, assume there might be more
-      if (totalLines === undefined) {
-        const nextChunk = file.chunks[chunkIndex + 1];
-        if (!nextChunk) {
-          // Last chunk - we don't know if there are more lines
-          return -1; // Unknown - file content not yet fetched
-        }
-        return 0; // Will be calculated by getHiddenLinesBefore of next chunk
-      }
-
-      const nextChunk = file.chunks[chunkIndex + 1];
-      if (nextChunk) {
-        return 0; // Not the last chunk, no lines after
-      }
-
-      // Last chunk - lines after it
-      const chunkEnd = chunk.oldStart + chunk.oldLines - 1;
-      const hiddenLines = totalLines - chunkEnd;
-
-      // Subtract already expanded lines
-      const expandedDown = getExpandedCount(file.path, chunkIndex, 'down');
-
-      return Math.max(0, hiddenLines - expandedDown);
-    },
-    [expandedState, getExpandedCount],
-  );
-
-  const getOpenedLines = useCallback(
-    (file: DiffFile, chunk: DiffChunk, chunkIndex: number) => {
-      const above: DiffLine[] = [];
-      const below: DiffLine[] = [];
-      const fileState = expandedState[file.path];
-      if (!fileState) return { above, below };
-
-      const expandedUp = getExpandedCount(file.path, chunkIndex, 'up');
-      const expandedDown = getExpandedCount(file.path, chunkIndex, 'down');
-
-      const oldContent = fileState.oldContent || [];
-      const newContent = fileState.newContent || [];
-
-      // Add expanded lines before (up direction)
-      if (expandedUp > 0) {
-        const prevChunk = file.chunks[chunkIndex - 1];
-        let startOld: number;
-
-        if (!prevChunk) {
-          startOld = Math.max(0, chunk.oldStart - 1 - expandedUp);
-        } else {
-          const prevEndOld = prevChunk.oldStart + prevChunk.oldLines - 1;
-          startOld = prevEndOld;
-        }
-
-        const endOld = chunk.oldStart - 1;
-        const endNew = chunk.newStart - 1;
-
-        // Get the actual lines to show (limited by expandedUp)
-        const linesToShowOld = Math.min(expandedUp, endOld - startOld);
-        const actualStartOld = endOld - linesToShowOld;
-        const actualStartNew = endNew - linesToShowOld;
-
-        for (let i = 0; i < linesToShowOld; i++) {
-          const oldLineNum = actualStartOld + i + 1;
-          const newLineNum = actualStartNew + i + 1;
-          const content = oldContent[oldLineNum - 1] ?? newContent[newLineNum - 1] ?? '';
-
-          above.push({
-            type: 'normal',
-            content: content,
-            oldLineNumber: oldLineNum,
-            newLineNumber: newLineNum,
-            isExpanded: true,
-          } as DiffLine);
-        }
-      }
-
-      // Add expanded lines after (down direction)
-      if (expandedDown > 0) {
-        const chunkEndOld = chunk.oldStart + chunk.oldLines - 1;
-        const chunkEndNew = chunk.newStart + chunk.newLines - 1;
-
-        const nextChunk = file.chunks[chunkIndex + 1];
-        const maxOld = nextChunk ? nextChunk.oldStart - 1 : fileState.oldTotalLines || chunkEndOld;
-
-        const linesToShow = Math.min(expandedDown, maxOld - chunkEndOld);
-
-        for (let i = 0; i < linesToShow; i++) {
-          const oldLineNum = chunkEndOld + i + 1;
-          const newLineNum = chunkEndNew + i + 1;
-          const content = oldContent[oldLineNum - 1] ?? newContent[newLineNum - 1] ?? '';
-
-          below.push({
-            type: 'normal',
-            content: content,
-            oldLineNumber: oldLineNum,
-            newLineNumber: newLineNum,
-            isExpanded: true,
-          } as DiffLine);
-        }
-      }
-
-      return { above, below };
-    },
-    [expandedState, getExpandedCount],
-  );
-
   const getMergedChunks = useCallback(
-    (file: DiffFile): MergedChunk[] => {
-      const mergedChunks: MergedChunk[] = [];
-
-      for (let i = 0; i < file.chunks.length; i++) {
-        const chunk = file.chunks[i];
-        if (!chunk) continue;
-
-        const { above, below } = getOpenedLines(file, chunk, i);
-        const expandedChunk =
-          above.length > 0 || below.length > 0
-            ? withLines(chunk, [...above, ...chunk.lines, ...below])
-            : chunk;
-        const hiddenBefore = getHiddenLinesBefore(file, chunk, i);
-        const hiddenAfter = getHiddenLinesAfter(file, chunk, i);
-
-        const lastMerged = mergedChunks[mergedChunks.length - 1];
-        const offset = lastMerged && hiddenBefore === 0 ? lastMerged.lines.length : 0;
-        const ownLines: OriginalLineRange = {
-          originalIndex: i,
-          start: offset + above.length,
-          end: offset + above.length + chunk.lines.length - 1,
-          changeKind: chunk.changeKind,
-        };
-        if (lastMerged && hiddenBefore === 0) {
-          lastMerged.lines = [...lastMerged.lines, ...expandedChunk.lines];
-          lastMerged.originalIndices.push(i);
-          lastMerged.originalLineRanges.push(ownLines);
-          lastMerged.hiddenLinesAfter = hiddenAfter;
-          lastMerged.changeKind = combineChangeKinds([
-            lastMerged.changeKind,
-            expandedChunk.changeKind,
-          ]);
-          const lastLine = lastMerged.lines[lastMerged.lines.length - 1];
-          lastMerged.oldLines =
-            (lastLine?.oldLineNumber ?? lastMerged.oldStart + lastMerged.oldLines - 1) -
-            lastMerged.oldStart +
-            1;
-          lastMerged.newLines =
-            (lastLine?.newLineNumber ?? lastMerged.newStart + lastMerged.newLines - 1) -
-            lastMerged.newStart +
-            1;
-        } else {
-          mergedChunks.push({
-            ...expandedChunk,
-            originalIndices: [i],
-            originalLineRanges: [ownLines],
-            hiddenLinesBefore: hiddenBefore,
-            hiddenLinesAfter: hiddenAfter,
-          });
-        }
-      }
-
-      return mergedChunks;
-    },
-    [getOpenedLines, getHiddenLinesBefore, getHiddenLinesAfter],
+    (file: DiffFile): MergedChunk[] => buildMergedChunks(file, expandedState[file.path]),
+    [expandedState],
   );
 
   return {
@@ -650,11 +469,8 @@ export function useExpandedLines({
     isLoading,
     lastUpdatedFilePath,
     lastUpdatedAt,
-    expandLines,
-    expandAllBetweenChunks,
+    openLines,
     prefetchFileContent,
     getMergedChunks,
-    getHiddenLinesBefore,
-    getHiddenLinesAfter,
   };
 }

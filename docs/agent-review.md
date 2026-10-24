@@ -57,9 +57,9 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
    리뷰어가 커밋 하나나 커밋 범위를 보며 단 지적에는 필드가 둘 더 있다. `view`는 지적을 단 화면의 기준(`baseCommitish`)과 대상(`targetCommitish`)이고, `fixupTarget`은 fixup을 걸 커밋의 SHA다. 전체 화면에서 단 지적에는 `fixupTarget`만 있다. 텍스트 출력에도 그 지적의 위치 줄 바로 아래에 `고쳐 넣을 커밋: <짧은 SHA> <제목>`이 붙는다. `view`가 없는 지적은 전체 화면에서 단 지적이다.
 
-   범위나 전체 화면에서 단 지적의 `fixupTarget`은 그 화면의 커밋 가운데 그 줄을 마지막으로 바꾼 커밋이다. 줄들이 여러 커밋에서 왔으면 가장 최근 커밋이고, 지운 줄이나 그 화면의 커밋이 바꾸지 않은 줄이면 그 화면의 마지막 커밋이다. 앞 회차의 fixup 커밋처럼 커밋 목록에 없는 커밋이 고친 줄은, 그 줄을 원래 만든 커밋으로 친다. `fixupTarget`이 없는 지적은 이 규칙이 생기기 전에 달았거나, 지적을 달 때 서버가 대상을 정하지 못한 지적이다.
+   범위나 전체 화면에서 단 지적의 `fixupTarget`은 그 화면의 커밋 가운데 그 줄을 마지막으로 바꾼 커밋이다. 줄들이 여러 커밋에서 왔으면 가장 최근 커밋이고, 지운 줄이나 그 화면의 커밋이 바꾸지 않은 줄이면 그 화면의 마지막 커밋이다. 앞 회차의 fixup 커밋처럼 커밋 목록에 없는 커밋이 고친 줄은, 그 줄을 원래 만든 커밋으로 친다. 리뷰 범위에는 없고 fixup에서만 수정한 파일에 단 지적의 `fixupTarget`은 그 fixup이 답한 지적의 `fixupTarget`이고, 답한 지적에 그 값이 없으면 리뷰 대상 커밋이다. `fixupTarget`이 없는 지적은 이 규칙이 생기기 전에 달았거나, 지적을 달 때 서버가 대상을 정하지 못한 지적이다.
 
-   - 줄 번호는 `view` 트리의 줄이다. 새 쪽(`"side": "new"`) 줄은 `git show <view.targetCommitish>:<파일>`, 옛 쪽 줄은 `git show <view.baseCommitish>:<파일>`로 읽는다. `view`가 없으면 리뷰 대상 커밋의 줄이다.
+   - 줄 번호는 `view` 트리의 줄이다. 새 쪽(`"side": "new"`) 줄은 `git show <view.targetCommitish>:<파일>`, 옛 쪽 줄은 `git show <view.baseCommitish>:<파일>`로 읽는다. `view`가 없으면 리뷰 대상 커밋의 줄이다. fixup에서만 수정한 파일에 단 지적은 `codeSnapshot.commit`이 그 fixup 커밋이다. 새 쪽 줄은 `git show <codeSnapshot.commit>:<파일>`, 옛 쪽 줄은 그 fixup의 부모 커밋인 `git show <codeSnapshot.commit>^:<파일>`로 읽는다.
    - 고치는 곳은 HEAD의 파일이다. 뒤 커밋이 그 줄을 옮기거나 바꿨을 수 있으니 줄 번호 대신 `codeSnapshot.content`(지적한 줄의 내용)로 자리를 찾는다. 뒤 커밋이 그 줄을 바꿨어도 fixup은 하나만 만든다([docs/adr/0002](adr/0002-one-fixup-per-thread.md)). 접을 때 생기는 충돌은 아래 「범위 중간 커밋에 접다가 충돌하면」대로 푼다.
 
 2. 코드를 고친 뒤 fixup 커밋을 만들고 스레드 id를 트레일러로 붙인다. 대상은 지적의 `fixupTarget`이고, 없으면 리뷰 대상 SHA다.
