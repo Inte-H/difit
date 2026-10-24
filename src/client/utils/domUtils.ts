@@ -16,3 +16,6 @@ export function getFileElementId(filePath: string): string {
   }
   return fileIdMap.get(filePath) ?? '';
 }
+
+export const fixupFileElementId = (fixupSha: string, path: string) =>
+  `fixup-${fixupSha.slice(0, 12)}-${getFileElementId(path)}`;

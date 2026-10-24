@@ -1,11 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 import type { CommentThread, DiffLine } from '../../types/diff';
 import { LEAVES_CODE_ALONE_LABEL, leavesCodeAlone } from '../../utils/changeKind';
 import { DiffChunk } from '../components/DiffChunk';
-import { ExpandButton } from '../components/ExpandButton';
+import { DEFAULT_EXPAND_COUNT, ExpandButton } from '../components/ExpandButton';
 import type { FoldedLines } from '../components/FoldedLines';
+import { useFixupOverlay } from '../contexts/FixupOverlayContext';
 import type { CursorPosition } from '../hooks/keyboardNavigation';
+import { rangesAroundNewLines } from '../hooks/useExpandedLines';
 
 import type { DiffViewerBodyProps } from './types';
 
@@ -20,12 +22,17 @@ function holdsThread(lines: DiffLine[], threads: CommentThread[]) {
   });
 }
 
+const holdsAnchor = (lines: DiffLine[], anchors: ReadonlySet<number>) =>
+  lines.some((line) => line.newLineNumber !== undefined && anchors.has(line.newLineNumber));
+
 const sameCursor = (a: CursorPosition, b: CursorPosition | null | undefined) =>
   !!b &&
   a.fileIndex === b.fileIndex &&
   a.chunkIndex === b.chunkIndex &&
   a.lineIndex === b.lineIndex &&
   a.side === b.side;
+
+const FIXUP_ANCHOR_CONTEXT = 3;
 
 type FoldEntry = FoldedLines & { originalIndex: number };
 const NO_FOLD_ENTRIES: readonly FoldEntry[] = [];
@@ -58,8 +65,7 @@ export function TextDiffViewer({
   mergedChunks,
   foldCommentChanges = false,
   isExpandLoading,
-  expandHiddenLines,
-  expandAllBetweenChunks,
+  openHiddenLines,
   onAddComment,
   onResolveThread,
   onReplyToThread,
@@ -83,57 +89,55 @@ export function TextDiffViewer({
     setFoldedUnderCursor(null);
   }
 
+  const opener = (start: number, end: number) => () => {
+    void openHiddenLines(file, [{ start, end }]);
+  };
+
   const renderExpandButton = (
     position: 'top' | 'middle' | 'bottom',
     mergedChunk: (typeof mergedChunks)[number],
-    firstOriginalIndex: number,
-    lastOriginalIndex: number,
   ) => {
-    if (position === 'top' && mergedChunk.hiddenLinesBefore > 0) {
-      return (
-        <ExpandButton
-          direction="down"
-          hiddenLines={mergedChunk.hiddenLinesBefore}
-          onExpandDown={() => expandHiddenLines(file, firstOriginalIndex, 'up')}
-          onExpandAll={() =>
-            expandAllBetweenChunks(file, firstOriginalIndex, mergedChunk.hiddenLinesBefore)
-          }
-          isLoading={isExpandLoading}
-        />
-      );
-    }
-
-    if (position === 'middle' && mergedChunk.hiddenLinesBefore > 0) {
-      return (
-        <ExpandButton
-          direction="both"
-          hiddenLines={mergedChunk.hiddenLinesBefore}
-          onExpandUp={() => expandHiddenLines(file, firstOriginalIndex - 1, 'down')}
-          onExpandDown={() => expandHiddenLines(file, firstOriginalIndex, 'up')}
-          onExpandAll={() =>
-            expandAllBetweenChunks(file, firstOriginalIndex, mergedChunk.hiddenLinesBefore)
-          }
-          isLoading={isExpandLoading}
-        />
-      );
-    }
-
-    if (position === 'bottom' && mergedChunk.hiddenLinesAfter > 0) {
+    if (position === 'bottom') {
+      const hidden = mergedChunk.hiddenLinesAfter;
+      if (hidden <= 0) return null;
+      const start = mergedChunk.oldStart + mergedChunk.oldLines;
       return (
         <ExpandButton
           direction="up"
-          hiddenLines={mergedChunk.hiddenLinesAfter}
-          onExpandUp={() => expandHiddenLines(file, lastOriginalIndex, 'down')}
-          onExpandAll={() =>
-            expandHiddenLines(file, lastOriginalIndex, 'down', mergedChunk.hiddenLinesAfter)
-          }
+          hiddenLines={hidden}
+          onExpandUp={opener(start, start + DEFAULT_EXPAND_COUNT - 1)}
+          onExpandAll={opener(start, start + hidden - 1)}
           isLoading={isExpandLoading}
         />
       );
     }
 
-    return null;
+    const hidden = mergedChunk.hiddenLinesBefore;
+    if (hidden <= 0) return null;
+    const end = mergedChunk.oldStart - 1;
+    const start = end - hidden + 1;
+    return (
+      <ExpandButton
+        direction={position === 'top' ? 'down' : 'both'}
+        hiddenLines={hidden}
+        onExpandUp={opener(start, start + DEFAULT_EXPAND_COUNT - 1)}
+        onExpandDown={opener(end - DEFAULT_EXPAND_COUNT + 1, end)}
+        onExpandAll={opener(start, end)}
+        isLoading={isExpandLoading}
+      />
+    );
   };
+
+  const fileBoxes = useFixupOverlay().boxesByFile.get(file.path);
+  const boxAnchors = useMemo(() => new Set(fileBoxes?.keys()), [fileBoxes]);
+
+  useEffect(() => {
+    if (isExpandLoading || boxAnchors.size === 0) return;
+    const shown = new Set(mergedChunks.flatMap((chunk) => chunk.lines.map((l) => l.newLineNumber)));
+    const hidden = [...boxAnchors].filter((anchor) => !shown.has(anchor));
+    if (hidden.length === 0) return;
+    void openHiddenLines(file, rangesAroundNewLines(file, hidden, FIXUP_ANCHOR_CONTEXT));
+  }, [boxAnchors, mergedChunks, isExpandLoading, file, openHiddenLines]);
 
   const foldsByChunk = useMemo(
     () =>
@@ -142,7 +146,11 @@ export function TextDiffViewer({
         const folds = mergedChunk.originalLineRanges.flatMap(
           ({ originalIndex, start, end, changeKind }) => {
             const lines = mergedChunk.lines.slice(start, end + 1);
-            if (!leavesCodeAlone(changeKind) || holdsThread(lines, threads)) {
+            if (
+              !leavesCodeAlone(changeKind) ||
+              holdsThread(lines, threads) ||
+              holdsAnchor(lines, boxAnchors)
+            ) {
               return [];
             }
             const folded = !unfolded.has(originalIndex);
@@ -166,7 +174,7 @@ export function TextDiffViewer({
         );
         return folds.length > 0 ? folds : NO_FOLD_ENTRIES;
       }),
-    [mergedChunks, foldCommentChanges, unfolded, threads],
+    [mergedChunks, foldCommentChanges, unfolded, threads, boxAnchors],
   );
 
   const shownFolds = useMemo(
@@ -203,18 +211,11 @@ export function TextDiffViewer({
       {mergedChunks.map((mergedChunk, mergedIndex) => {
         const isFirstMerged = mergedIndex === 0;
         const isLastMerged = mergedIndex === mergedChunks.length - 1;
-        const firstOriginalIndex = mergedChunk.originalIndices[0] ?? 0;
-        const lastOriginalIndex =
-          mergedChunk.originalIndices[mergedChunk.originalIndices.length - 1] ?? 0;
         const folds = shownFolds[mergedIndex] ?? NO_FOLD_ENTRIES;
 
         return (
           <React.Fragment key={mergedIndex}>
-            {isFirstMerged &&
-              renderExpandButton('top', mergedChunk, firstOriginalIndex, lastOriginalIndex)}
-
-            {!isFirstMerged &&
-              renderExpandButton('middle', mergedChunk, firstOriginalIndex, lastOriginalIndex)}
+            {renderExpandButton(isFirstMerged ? 'top' : 'middle', mergedChunk)}
 
             <div id={`chunk-${file.path.replace(/[^a-zA-Z0-9]/g, '-')}-${mergedIndex}`}>
               <DiffChunk
@@ -244,8 +245,7 @@ export function TextDiffViewer({
               />
             </div>
 
-            {isLastMerged &&
-              renderExpandButton('bottom', mergedChunk, firstOriginalIndex, lastOriginalIndex)}
+            {isLastMerged && renderExpandButton('bottom', mergedChunk)}
           </React.Fragment>
         );
       })}

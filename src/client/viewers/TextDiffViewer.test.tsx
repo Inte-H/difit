@@ -1,9 +1,11 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import type { ChunkChangeKind, CommentThread, DiffFile } from '../../types/diff';
+import type { ChunkChangeKind, CommentThread, DiffFile, ThreadFixup } from '../../types/diff';
+import { EMPTY_FIXUP_OVERLAY, FixupOverlayProvider } from '../contexts/FixupOverlayContext';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import type { MergedChunk } from '../hooks/useExpandedLines';
+import { boxesByAnchor, type FixupBox } from '../utils/fixupSpread';
 
 import { TextDiffViewer } from './TextDiffViewer';
 import type { DiffViewerBodyProps } from './types';
@@ -48,8 +50,7 @@ function viewer(props: Partial<DiffViewerBodyProps>) {
         mergedChunks={[chunk('comment', 10), chunk('code', 40)]}
         foldCommentChanges
         isExpandLoading={false}
-        expandHiddenLines={asyncNoop}
-        expandAllBetweenChunks={asyncNoop}
+        openHiddenLines={asyncNoop}
         onAddComment={asyncNoop}
         onResolveThread={noop}
         onReplyToThread={asyncNoop}
@@ -410,9 +411,183 @@ describe('TextDiffViewer folding', () => {
     expect(shown('// new 10')).toBe(true);
   });
 
+  it('keeps a part open, and its fixup box shown, when a fixup changed a line in it', () => {
+    const fixupChunk = chunk(undefined, 11);
+    const fixupFile: ThreadFixup['files'][number] = {
+      path: 'src/a.ts',
+      status: 'modified',
+      chunks: [fixupChunk],
+    };
+    const box: FixupBox = {
+      fixup: {
+        sha: 'abc1234abc1234',
+        shortSha: 'abc1234',
+        patchId: 'patch-abc1234',
+        authoredAt: '2026-01-01T00:00:00Z',
+        subject: 'fixup! x',
+        threadIds: ['t1'],
+        files: [fixupFile],
+      },
+      threads: [{ id: 't1', file: 'src/b.ts', line: 3 }],
+      file: fixupFile,
+      chunk: fixupChunk,
+      chunkIndex: 0,
+      anchor: 11,
+    };
+    render(
+      <FixupOverlayProvider
+        value={{
+          ...EMPTY_FIXUP_OVERLAY,
+          enabled: true,
+          boxesByFile: new Map([['src/a.ts', boxesByAnchor([box])]]),
+        }}
+      >
+        {viewer({})}
+      </FixupOverlayProvider>,
+    );
+
+    expect(shown('// new 10')).toBe(true);
+    expect(screen.queryByRole('button', { name: /펼치기/ })).toBeNull();
+    expect(screen.getByTestId('fixup-file-box')).toHaveTextContent('// new 11');
+  });
+
   it('keeps a chunk open while the cursor is in it', () => {
     renderViewer({ cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 1, side: 'right' } });
 
     expect(shown('// new 10')).toBe(true);
+  });
+});
+
+describe('TextDiffViewer lines hidden around a fixup box', () => {
+  const line = (oldLine: number) => ({
+    type: 'normal' as const,
+    content: `line ${oldLine}`,
+    oldLineNumber: oldLine,
+    newLineNumber: oldLine,
+    isExpanded: true,
+  });
+  const change = (at: number) => ({
+    header: `@@ -${at},2 +${at},2 @@`,
+    oldStart: at,
+    oldLines: 2,
+    newStart: at,
+    newLines: 2,
+    lines: [
+      { type: 'delete' as const, content: `old ${at}`, oldLineNumber: at },
+      { type: 'add' as const, content: `new ${at}`, newLineNumber: at },
+      {
+        type: 'normal' as const,
+        content: `kept ${at}`,
+        oldLineNumber: at + 1,
+        newLineNumber: at + 1,
+      },
+    ],
+  });
+  const gapFile: DiffFile = {
+    path: 'src/a.ts',
+    status: 'modified',
+    additions: 2,
+    deletions: 2,
+    chunks: [change(10), change(60)],
+  };
+  const merged = (
+    originalIndex: number,
+    hiddenLinesBefore: number,
+    hiddenLinesAfter = 0,
+  ): MergedChunk => {
+    const own = gapFile.chunks[originalIndex] ?? change(1);
+    return {
+      ...own,
+      originalIndices: [originalIndex],
+      originalLineRanges: [{ originalIndex, start: 0, end: own.lines.length - 1 }],
+      hiddenLinesBefore,
+      hiddenLinesAfter,
+    };
+  };
+  const opened = (start: number, end: number, hiddenLinesBefore: number): MergedChunk => ({
+    header: '',
+    oldStart: start,
+    oldLines: end - start + 1,
+    newStart: start,
+    newLines: end - start + 1,
+    lines: Array.from({ length: end - start + 1 }, (_, index) => line(start + index)),
+    originalIndices: [],
+    originalLineRanges: [],
+    hiddenLinesBefore,
+    hiddenLinesAfter: 0,
+  });
+  const boxAt = (anchor: number): FixupBox => {
+    const fixupFile: ThreadFixup['files'][number] = {
+      path: 'src/a.ts',
+      status: 'modified',
+      chunks: [change(anchor)],
+    };
+    return {
+      fixup: {
+        sha: 'abc1234abc1234',
+        shortSha: 'abc1234',
+        patchId: 'patch-abc1234',
+        authoredAt: '2026-01-01T00:00:00Z',
+        subject: 'fixup! x',
+        threadIds: ['t1'],
+        files: [fixupFile],
+      },
+      threads: [{ id: 't1', file: 'src/b.ts', line: 3 }],
+      file: fixupFile,
+      chunk: fixupFile.chunks[0] ?? change(anchor),
+      chunkIndex: 0,
+      anchor,
+    };
+  };
+  const renderWithBox = (
+    mergedChunks: MergedChunk[],
+    openHiddenLines: DiffViewerBodyProps['openHiddenLines'],
+  ) =>
+    render(
+      <FixupOverlayProvider
+        value={{
+          ...EMPTY_FIXUP_OVERLAY,
+          enabled: true,
+          boxesByFile: new Map([['src/a.ts', boxesByAnchor([boxAt(30)])]]),
+        }}
+      >
+        {viewer({ file: gapFile, mergedChunks, foldCommentChanges: false, openHiddenLines })}
+      </FixupOverlayProvider>,
+    );
+
+  it('opens three lines on each side of a box anchored on a hidden line', () => {
+    const openHiddenLines = vi.fn<DiffViewerBodyProps['openHiddenLines']>(async () => {});
+    renderWithBox([merged(0, 9), merged(1, 48, 5)], openHiddenLines);
+
+    expect(openHiddenLines).toHaveBeenCalledWith(gapFile, [{ start: 27, end: 33 }]);
+    expect(screen.queryByTestId('fixup-file-box')).toBeNull();
+  });
+
+  it('draws the box in the opened lines and opens nothing more', () => {
+    const openHiddenLines = vi.fn<DiffViewerBodyProps['openHiddenLines']>(async () => {});
+    renderWithBox([merged(0, 9), opened(27, 33, 15), merged(1, 26, 5)], openHiddenLines);
+
+    expect(openHiddenLines).not.toHaveBeenCalled();
+    const box = screen.getByTestId('fixup-file-box');
+    expect(box.closest('tr')?.previousElementSibling).toHaveTextContent('line 30');
+  });
+
+  it('opens the hidden part a button sits on, above or below the opened lines', () => {
+    const openHiddenLines = vi.fn<DiffViewerBodyProps['openHiddenLines']>(async () => {});
+    renderWithBox([merged(0, 9), opened(27, 33, 15), merged(1, 26, 5)], openHiddenLines);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all 9 hidden lines' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all 15 hidden lines' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 20 hidden lines above' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand 20 hidden lines below' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand all 5 hidden lines' }));
+
+    expect(openHiddenLines.mock.calls.map(([, ranges]) => ranges)).toEqual([
+      [{ start: 1, end: 9 }],
+      [{ start: 12, end: 26 }],
+      [{ start: 34, end: 53 }],
+      [{ start: 40, end: 59 }],
+      [{ start: 62, end: 66 }],
+    ]);
   });
 });

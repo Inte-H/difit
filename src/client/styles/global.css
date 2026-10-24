@@ -21,6 +21,7 @@
   --color-diff-neutral-bg: #21262d;
   --color-diff-selected-bg: #ae7c1426;
   --color-diff-selected-border: #ae7c1466;
+  --color-fixup-addition-bg: color-mix(in srgb, var(--color-github-warning) 15%, transparent);
 
   --color-comment-bg: #1c2128;
   --color-comment-border: #373e47;
@@ -312,8 +313,8 @@ tr.drag-selected-last td::after {
   --word-diff-removed-bg: rgba(191, 135, 0, 0.3);
 }
 
-/* In a review pinned to a commit, yellow marks only the fixup lines overlaid under a
-   thread, so every other yellow accent falls back to the theme's neutral colors. */
+/* In a review pinned to a commit, yellow marks only fixup lines, so every other yellow
+   accent falls back to the theme's neutral colors. */
 [data-fixup-review] {
   --color-yellow-btn-bg: var(--color-editor-btn-bg);
   --color-yellow-btn-border: var(--color-editor-btn-border);
@@ -327,4 +328,20 @@ tr.drag-selected-last td::after {
   --word-highlight-color: color-mix(in srgb, var(--color-github-text-secondary) 30%, transparent);
   --keyboard-cursor-bg: color-mix(in srgb, var(--color-github-text-secondary) 20%, transparent);
   --keyboard-cursor-border: color-mix(in srgb, var(--color-github-text-secondary) 40%, transparent);
+}
+
+[data-fixup-only-file] [data-file-header] {
+  background-color: color-mix(
+    in srgb,
+    var(--color-github-warning) 20%,
+    var(--color-github-bg-secondary)
+  );
+  border-top-color: var(--color-github-warning);
+}
+
+/* Deuteranopia keeps added lines blue, since yellow marks deletions there. */
+:root:not([data-color-vision="deuteranopia"]) [data-fixup-only-file] {
+  --color-diff-addition-bg: var(--color-fixup-addition-bg);
+  --color-diff-addition-border: var(--color-github-warning);
+  --word-diff-added-bg: color-mix(in srgb, var(--color-github-warning) 40%, transparent);
 }

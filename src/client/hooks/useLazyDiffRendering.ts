@@ -7,6 +7,28 @@ const INITIAL_RENDERED_FILE_COUNT = 8;
 const LAZY_RENDER_ROOT_MARGIN = '1200px 0px';
 const SIDEBAR_SCROLL_MAX_ATTEMPTS = 60;
 const SIDEBAR_SCROLL_CORRECTION_DELAY_MS = 180;
+// How long an element may take to be drawn after the scroll reached its file.
+const ELEMENT_WAIT_MS = 3000;
+const ELEMENT_GAP_BELOW_HEADER_PX = 8;
+const OVERLAY_SCROLLBAR_PX = 16;
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+
+// Space presses these instead of scrolling.
+const SPACE_PRESSES = 'button,[role=button],[role=checkbox],[role=switch],summary';
+
+const isTextField = (element: HTMLElement) =>
+  element instanceof HTMLInputElement ||
+  element instanceof HTMLTextAreaElement ||
+  element instanceof HTMLSelectElement;
+
+// The file header sticks to the container top and covers an element of that file landing there.
+const stickyHeaderCover = (target: HTMLElement) => {
+  const header = target
+    .closest('[data-file-path]')
+    ?.querySelector<HTMLElement>('[data-file-header]');
+  if (!header || target.contains(header)) return 0;
+  return header.getBoundingClientRect().height + ELEMENT_GAP_BELOW_HEADER_PX;
+};
 
 interface UseLazyDiffRenderingOptions {
   diffData: DiffResponse | null;
@@ -19,7 +41,8 @@ interface UseLazyDiffRenderingReturn {
   ensureFileRendered: (filePath: string) => void;
   ensureFilesRenderedUpTo: (filePath: string) => void;
   registerLazyFileContainer: (filePath: string, node: HTMLDivElement | null) => void;
-  scrollFileIntoDiffContainer: (filePath: string) => void;
+  // With elementId, scrolls to that element, or to a reviewed file's header while it is not drawn.
+  scrollFileIntoDiffContainer: (filePath: string, elementId?: string) => void;
   isFileScrolledPastContainerTop: (filePath: string) => boolean;
 }
 
@@ -35,6 +58,76 @@ export function useLazyDiffRendering({
   const generatedStatusCheckedRef = useRef<Set<string>>(new Set());
   const renderedRevisionKeyRef = useRef<string | null>(null);
   const scrollRequestIdRef = useRef(0);
+
+  // The user scrolling the diff drops a scroll still waiting for its target.
+  useEffect(() => {
+    const cancelPendingScroll = () => {
+      scrollRequestIdRef.current += 1;
+    };
+    const isInDiff = (target: EventTarget | null) => {
+      const container = diffScrollContainerRef.current;
+      return !!container && target instanceof Node && container.contains(target);
+    };
+    const onPointerScroll = (event: Event) => {
+      if (isInDiff(event.target)) cancelPendingScroll();
+    };
+    const isOnScrollbar = (event: PointerEvent) => {
+      const container = diffScrollContainerRef.current;
+      if (!container || event.target !== container) return false;
+      const rect = container.getBoundingClientRect();
+      const x = event.clientX - rect.left - container.clientLeft;
+      const y = event.clientY - rect.top - container.clientTop;
+      if (x >= container.clientWidth || y >= container.clientHeight) return true;
+      const style = getComputedStyle(container);
+      const borders = (start: string, end: string) =>
+        (parseFloat(start) || 0) + (parseFloat(end) || 0);
+      const hasOverlayScrollbarY =
+        container.scrollHeight > container.clientHeight &&
+        container.offsetWidth -
+          container.clientWidth -
+          borders(style.borderLeftWidth, style.borderRightWidth) <=
+          0;
+      const hasOverlayScrollbarX =
+        container.scrollWidth > container.clientWidth &&
+        container.offsetHeight -
+          container.clientHeight -
+          borders(style.borderTopWidth, style.borderBottomWidth) <=
+          0;
+      return (
+        (hasOverlayScrollbarY && x >= container.clientWidth - OVERLAY_SCROLLBAR_PX) ||
+        (hasOverlayScrollbarX && y >= container.clientHeight - OVERLAY_SCROLLBAR_PX)
+      );
+    };
+    // A touch never drags a scrollbar; a mouse or pen does, and its middle button starts autoscroll.
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') return;
+      if (isOnScrollbar(event) || (event.button === 1 && isInDiff(event.target))) {
+        cancelPendingScroll();
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!SCROLL_KEYS.has(event.key)) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || isTextField(target))) {
+        return;
+      }
+      if (event.key === ' ' && target instanceof Element && target.closest(SPACE_PRESSES)) return;
+      if (target === document.body || target === document.documentElement || isInDiff(target)) {
+        cancelPendingScroll();
+      }
+    };
+    const passive = { capture: true, passive: true };
+    window.addEventListener('wheel', onPointerScroll, passive);
+    window.addEventListener('touchmove', onPointerScroll, passive);
+    window.addEventListener('pointerdown', onPointerDown, passive);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('wheel', onPointerScroll, passive);
+      window.removeEventListener('touchmove', onPointerScroll, passive);
+      window.removeEventListener('pointerdown', onPointerDown, passive);
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [diffScrollContainerRef]);
 
   useEffect(() => {
     if (!diffData) {
@@ -192,14 +285,20 @@ export function useLazyDiffRendering({
   );
 
   const scrollFileIntoDiffContainer = useCallback(
-    (filePath: string) => {
-      ensureFilesRenderedUpTo(filePath);
+    (filePath: string, elementId?: string) => {
+      const files = diffData?.files ?? [];
+      const targetIndex = files.findIndex((file) => file.path === filePath);
+      // An element outside the reviewed files sits below all of them.
+      const lastAbove = targetIndex >= 0 ? targetIndex : elementId ? files.length - 1 : -1;
+      const lastAbovePath = files[lastAbove]?.path;
+      if (lastAbovePath !== undefined) ensureFilesRenderedUpTo(lastAbovePath);
 
-      const targetIndex = diffData?.files.findIndex((file) => file.path === filePath) ?? -1;
       const requiredSectionIds =
-        diffData && targetIndex >= 0
-          ? diffData.files.slice(0, targetIndex + 1).map((file) => getFileElementId(file.path))
-          : [getFileElementId(filePath)];
+        lastAbove >= 0
+          ? files.slice(0, lastAbove + 1).map((file) => getFileElementId(file.path))
+          : elementId
+            ? []
+            : [getFileElementId(filePath)];
       const requestId = scrollRequestIdRef.current + 1;
       scrollRequestIdRef.current = requestId;
 
@@ -213,21 +312,53 @@ export function useLazyDiffRendering({
         return true;
       };
 
-      const scrollToFile = () => {
+      // Which of the two it landed on, or null when neither is drawn yet.
+      const scrollToFile = (): 'element' | 'file' | null => {
         const scrollContainer = diffScrollContainerRef.current;
-        const target = document.getElementById(getFileElementId(filePath));
+        const fileSection =
+          !elementId || targetIndex >= 0
+            ? document.getElementById(getFileElementId(filePath))
+            : null;
+        const element = elementId ? document.getElementById(elementId) : null;
+        const target = element || fileSection;
         if (!scrollContainer || !target) {
-          return false;
+          return null;
         }
 
         const containerRect = scrollContainer.getBoundingClientRect();
         const targetRect = target.getBoundingClientRect();
-        const targetScrollTop = scrollContainer.scrollTop + (targetRect.top - containerRect.top);
+        const targetScrollTop =
+          scrollContainer.scrollTop +
+          (targetRect.top - containerRect.top) -
+          stickyHeaderCover(target);
 
         scrollContainer.scrollTo({
           top: Math.max(0, targetScrollTop),
         });
-        return true;
+        return element ? 'element' : 'file';
+      };
+
+      const correctLater = () => {
+        window.setTimeout(() => {
+          if (scrollRequestIdRef.current !== requestId) {
+            return;
+          }
+          scrollToFile();
+        }, SIDEBAR_SCROLL_CORRECTION_DELAY_MS);
+      };
+
+      const waitForElement = (id: string, deadline: number) => {
+        requestAnimationFrame(() => {
+          if (scrollRequestIdRef.current !== requestId) {
+            return;
+          }
+          if (document.getElementById(id)) {
+            scrollToFile();
+            correctLater();
+          } else if (Date.now() < deadline) {
+            waitForElement(id, deadline);
+          }
+        });
       };
 
       let attempts = 0;
@@ -245,7 +376,8 @@ export function useLazyDiffRendering({
             return;
           }
 
-          if (!scrollToFile()) {
+          const landed = scrollToFile();
+          if (!landed) {
             if (attempts < SIDEBAR_SCROLL_MAX_ATTEMPTS) {
               attempts++;
               attemptScroll();
@@ -253,12 +385,10 @@ export function useLazyDiffRendering({
             return;
           }
 
-          window.setTimeout(() => {
-            if (scrollRequestIdRef.current !== requestId) {
-              return;
-            }
-            scrollToFile();
-          }, SIDEBAR_SCROLL_CORRECTION_DELAY_MS);
+          correctLater();
+          if (landed === 'file' && elementId) {
+            waitForElement(elementId, Date.now() + ELEMENT_WAIT_MS);
+          }
         });
       };
       attemptScroll();

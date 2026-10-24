@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -10,6 +10,7 @@ import {
   type FixupOverlayState,
 } from '../contexts/FixupOverlayContext';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
+import { boxesByAnchor, type FixupBox } from '../utils/fixupSpread';
 
 import { DiffChunk } from './DiffChunk';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
@@ -426,6 +427,7 @@ describe('DiffChunk fixup overlay', () => {
   const renderWithOverlay = (
     threads: CommentThread[],
     fixupsByThread = new Map([['t1', [fixup]]]),
+    overlay: Partial<FixupOverlayState> = {},
   ) =>
     renderWithProviders(
       <FixupOverlayProvider
@@ -434,6 +436,7 @@ describe('DiffChunk fixup overlay', () => {
           targetCommit: 'b7c2e10',
           enabled: true,
           fixupsByThread,
+          ...overlay,
         }}
       >
         <DiffChunk
@@ -486,20 +489,107 @@ describe('DiffChunk fixup overlay', () => {
     });
   });
 
-  it('names the other files a fixup changed, since the card only draws this file', () => {
+  const fileChange = (
+    file: Partial<ThreadFixup['files'][number]> & { path: string },
+    content: string,
+  ): ThreadFixup['files'][number] => ({
+    status: 'modified',
+    chunks: [
+      {
+        header: '@@ -1,0 +1,1 @@',
+        oldStart: 1,
+        oldLines: 0,
+        newStart: 1,
+        newLines: 1,
+        lines: [{ type: 'add', content, newLineNumber: 1 }],
+      },
+    ],
+    ...file,
+  });
+
+  it('draws only this file in the card and links the other files the fixup changed', () => {
+    const touchingOthers: ThreadFixup = {
+      ...fixup,
+      files: [
+        fileChange({ path: 'src/example.test.ts' }, 'expect(three).toBe(3);'),
+        ...fixup.files,
+        fileChange({ path: 'src/caller.ts' }, 'use(three);'),
+      ],
+    };
+    const revealFixupFile = vi.fn();
+    renderWithOverlay([thread], new Map([['t1', [touchingOthers]]]), { revealFixupFile });
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(card).toHaveTextContent('const three = 3;');
+    expect(card).not.toHaveTextContent('expect(three).toBe(3);');
+    expect(card).not.toHaveTextContent('use(three);');
+    expect(card).toHaveTextContent(
+      /이 fixup에서 수정한 다른 파일:\s*src\/example\.test\.ts\s*src\/caller\.ts/,
+    );
+
+    fireEvent.click(within(card).getByRole('button', { name: 'src/caller.ts' }));
+
+    expect(revealFixupFile).toHaveBeenCalledWith('abc1234abc1234', 'src/caller.ts');
+  });
+
+  it('marks another file the fixup renamed, added or deleted', () => {
     const touchingOthers: ThreadFixup = {
       ...fixup,
       files: [
         ...fixup.files,
-        { path: 'src/example.test.ts', status: 'modified', chunks: [] },
-        { path: 'src/caller.ts', status: 'modified', chunks: [] },
+        fileChange({ path: 'src/three.ts', oldPath: 'src/third.ts', status: 'renamed' }, 'a'),
+        fileChange({ path: 'src/new.ts', status: 'added' }, 'b'),
+        fileChange({ path: 'src/gone.ts', status: 'deleted' }, 'c'),
       ],
     };
     renderWithOverlay([thread], new Map([['t1', [touchingOthers]]]));
 
-    expect(screen.getByTestId('fixup-overlay-card')).toHaveTextContent(
-      '다른 파일도 고침: src/example.test.ts, src/caller.ts',
-    );
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(card).toHaveTextContent('src/third.ts → src/three.ts');
+    expect(card).toHaveTextContent(/src\/new\.ts\s*새 파일/);
+    expect(card).toHaveTextContent(/src\/gone\.ts\s*지운 파일/);
+  });
+
+  it('links a generated file the fixup changed without drawing its changes', () => {
+    const touchingLockfile: ThreadFixup = {
+      ...fixup,
+      files: [
+        ...fixup.files,
+        fileChange({ path: 'pnpm-lock.yaml', isGenerated: true }, 'lockfileVersion: 9'),
+      ],
+    };
+    const revealFixupFile = vi.fn();
+    renderWithOverlay([thread], new Map([['t1', [touchingLockfile]]]), { revealFixupFile });
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(card).toHaveTextContent(/pnpm-lock\.yaml\s*생성된 파일/);
+    expect(card).not.toHaveTextContent('lockfileVersion: 9');
+
+    fireEvent.click(within(card).getByRole('button', { name: 'pnpm-lock.yaml' }));
+
+    expect(revealFixupFile).toHaveBeenCalledWith('abc1234abc1234', 'pnpm-lock.yaml');
+  });
+
+  it('draws a file an earlier fixup renamed on the card of a thread on its reviewed path', () => {
+    const onRenamed: ThreadFixup = {
+      ...fixup,
+      files: [fileChange({ path: 'src/renamed.ts' }, 'const three = 3;')],
+    };
+    renderWithOverlay([thread], new Map([['t1', [onRenamed]]]), {
+      fixupReviewPaths: new Map([['abc1234abc1234:src/renamed.ts', 'src/example.ts']]),
+    });
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(card).toHaveTextContent('const three = 3;');
+    expect(card).not.toHaveTextContent('이 fixup에서 수정한 다른 파일');
+  });
+
+  it('lists no other files on a fixup that changed only this file', () => {
+    renderWithOverlay([thread]);
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(card).not.toHaveTextContent('이 fixup에서 수정한 다른 파일');
+    expect(within(card).queryByRole('button')).not.toBeInTheDocument();
   });
 
   it('keeps a stale thread card, with its decision buttons, but draws no overlay card', () => {
@@ -509,6 +599,179 @@ describe('DiffChunk fixup overlay', () => {
     expect(screen.getByText('Rename this')).toBeInTheDocument();
     expect(screen.getByLabelText('Outdated comment')).toHaveTextContent('낡음');
     expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
+  });
+});
+
+describe('fixup boxes in a file the comment is not on', () => {
+  const answered = { id: 't1', file: 'src/example.ts', line: 12 };
+  const callerFixup: ThreadFixup = {
+    sha: 'abc1234abc1234',
+    shortSha: 'abc1234',
+    patchId: 'patch-abc1234',
+    authoredAt: '2026-01-01T00:00:00Z',
+    subject: 'fixup! x',
+    threadIds: ['t1'],
+    files: [],
+  };
+  const box = (overrides: Partial<FixupBox> = {}): FixupBox => {
+    const file: FixupBox['file'] = {
+      path: 'src/caller.ts',
+      status: 'modified',
+      chunks: [
+        {
+          header: '@@ -11,1 +11,1 @@',
+          oldStart: 11,
+          oldLines: 1,
+          newStart: 11,
+          newLines: 1,
+          lines: [
+            { type: 'delete', content: 'const second = 2;', oldLineNumber: 11 },
+            { type: 'add', content: 'const second = three - 1;', newLineNumber: 11 },
+          ],
+        },
+      ],
+    };
+    return {
+      fixup: { ...callerFixup, files: [file] },
+      threads: [answered],
+      file,
+      chunk: file.chunks[0]!,
+      chunkIndex: 0,
+      anchor: 11,
+      ...overrides,
+    };
+  };
+
+  const boxesView = (
+    mode: 'unified' | 'split',
+    boxes: FixupBox[],
+    overlay: Partial<FixupOverlayState> = {},
+    chunk: DiffChunkData = testChunk,
+  ) => (
+    <WordHighlightProvider>
+      <FixupOverlayProvider
+        value={{
+          ...EMPTY_FIXUP_OVERLAY,
+          targetCommit: 'b7c2e10',
+          enabled: true,
+          boxesByFile: new Map([['src/caller.ts', boxesByAnchor(boxes)]]),
+          ...overlay,
+        }}
+      >
+        <DiffChunk
+          chunk={chunk}
+          chunkIndex={0}
+          threads={[]}
+          mode={mode}
+          onAddComment={asyncNoop}
+          onResolveThread={noop}
+          onReplyToThread={asyncNoop}
+          onRemoveMessage={noop}
+          onUpdateMessage={noop}
+          filename="src/caller.ts"
+        />
+      </FixupOverlayProvider>
+    </WordHighlightProvider>
+  );
+  const renderBoxes = (...args: Parameters<typeof boxesView>) => render(boxesView(...args));
+
+  describe.each(['unified', 'split'] as const)('in the %s view', (mode) => {
+    it('draws the box across the row right below the line the fixup changed', () => {
+      const { container } = renderBoxes(mode, [box()]);
+
+      const fileBox = screen.getByTestId('fixup-file-box');
+      const boxRow = fileBox.closest('tr')!;
+      expect(boxRow.querySelector('td')?.getAttribute('colspan')).toBe(
+        mode === 'unified' ? '3' : '4',
+      );
+      const rows = [...container.querySelectorAll('table > tbody > tr')];
+      const second = container.querySelectorAll('[data-diff-line-row="true"]')[1]!;
+      expect(second).toHaveTextContent('const second = 2;');
+      expect(rows.indexOf(boxRow)).toBe(rows.indexOf(second) + 1);
+      expect(fileBox).toHaveTextContent('const second = three - 1;');
+    });
+
+    it('names and links the comment it answers, and offers no decision', () => {
+      const pickThread = vi.fn();
+      renderBoxes(mode, [box()], { pickThread });
+
+      const fileBox = screen.getByTestId('fixup-file-box');
+      expect(fileBox).toHaveTextContent(
+        'abc1234 · 지적 src/example.ts:12를 고치며 함께 수정함 · 승인과 거절은 그 지적 카드에서',
+      );
+      expect(within(fileBox).queryByRole('button', { name: '승인' })).toBeNull();
+      expect(within(fileBox).queryByRole('button', { name: '거절' })).toBeNull();
+
+      fireEvent.click(within(fileBox).getByRole('button', { name: 'src/example.ts:12' }));
+
+      expect(pickThread).toHaveBeenCalledWith('t1');
+    });
+
+    it('links every comment one fixup answers', () => {
+      const pickThread = vi.fn();
+      renderBoxes(
+        mode,
+        [box({ threads: [answered, { id: 't2', file: 'src/other.ts', line: [3, 5] }] })],
+        { pickThread },
+      );
+
+      const fileBox = screen.getByTestId('fixup-file-box');
+      expect(fileBox).toHaveTextContent('지적 src/example.ts:12, src/other.ts:3-5를 고치며');
+
+      fireEvent.click(within(fileBox).getByRole('button', { name: 'src/other.ts:3-5' }));
+
+      expect(pickThread).toHaveBeenCalledWith('t2');
+    });
+
+    it('draws a box once under a line that was replaced', () => {
+      const replaced: DiffChunkData = {
+        ...testChunk,
+        lines: [
+          { type: 'delete', content: 'const old = 0;', oldLineNumber: 11 },
+          { type: 'add', content: 'const second = 2;', newLineNumber: 11 },
+        ],
+      };
+      renderBoxes(mode, [box()], {}, replaced);
+
+      expect(screen.getAllByTestId('fixup-file-box')).toHaveLength(1);
+    });
+
+    it('draws no box under a line no fixup changed', () => {
+      renderBoxes(mode, [box({ anchor: 30 })]);
+
+      expect(screen.queryByTestId('fixup-file-box')).toBeNull();
+    });
+
+    it('keeps a generated file folded until it is opened', () => {
+      const generated = box();
+      const file = { ...generated.file, isGenerated: true };
+      renderBoxes(mode, [{ ...generated, file }]);
+
+      const fileBox = screen.getByTestId('fixup-file-box');
+      expect(fileBox).toHaveTextContent('생성된 파일');
+      expect(fileBox).not.toHaveTextContent('const second = three - 1;');
+
+      fireEvent.click(within(fileBox).getByRole('button', { name: '펼치기' }));
+
+      expect(fileBox).toHaveTextContent('const second = three - 1;');
+    });
+
+    it('highlights the box of the focused fixup file and opens it', () => {
+      const generated = box();
+      const file = { ...generated.file, isGenerated: true };
+      const shownBox = { ...generated, file };
+      const focusOn = (path: string) => ({
+        focusedFixupFile: { fixupSha: callerFixup.sha, path },
+      });
+      const { rerender } = renderBoxes(mode, [shownBox], focusOn('src/elsewhere.ts'));
+      expect(screen.getByTestId('fixup-file-box')).not.toHaveClass('border-github-accent');
+
+      rerender(boxesView(mode, [shownBox], focusOn('src/caller.ts')));
+
+      const fileBox = screen.getByTestId('fixup-file-box');
+      expect(fileBox).toHaveClass('border-github-accent');
+      expect(fileBox).toHaveTextContent('const second = three - 1;');
+    });
   });
 });
 

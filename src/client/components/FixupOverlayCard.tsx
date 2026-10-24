@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 import type { CommentThread, DiffChunk, DiffLine, ThreadFixup } from '../../types/diff';
 import {
   combineChangeKinds,
@@ -6,13 +8,23 @@ import {
   leavesCodeAlone,
 } from '../../utils/changeKind';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
-import { overlaidFixup, useFixupOverlay } from '../contexts/FixupOverlayContext';
+import { useFixupOverlay } from '../contexts/FixupOverlayContext';
+import { fixupFileElementId } from '../utils/domUtils';
+import {
+  type FixupBox,
+  type FixupFile,
+  fixupFileKey,
+  fixupFileLabels,
+  fixupFileName,
+  overlaidFixup,
+} from '../utils/fixupSpread';
 
 import { DiffCodeLine } from './DiffCodeLine';
 import type { AppearanceSettings } from './SettingsModal';
 
 interface FixupOverlayCardProps {
   fixup: ThreadFixup;
+  threadId: string;
   filePath: string;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
 }
@@ -22,7 +34,7 @@ const NO_PRECOMPUTED_TOKENS = { getOldTokens: null, getNewTokens: null };
 const getOverlayLineClass = (line: DiffLine) => {
   switch (line.type) {
     case 'add':
-      return 'bg-[#d2992226] border-l-2 border-github-warning';
+      return 'bg-fixup-addition-bg border-l-2 border-github-warning';
     case 'delete':
       return 'opacity-50 line-through border-l-2 border-transparent';
     default:
@@ -30,11 +42,62 @@ const getOverlayLineClass = (line: DiffLine) => {
   }
 };
 
-function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProps) {
-  const isThisFile = (file: ThreadFixup['files'][number]) =>
-    file.path === filePath || file.oldPath === filePath;
-  const chunks: DiffChunk[] = fixup.files.filter(isThisFile).flatMap((file) => file.chunks);
-  const otherPaths = fixup.files.filter((file) => !isThisFile(file)).map((file) => file.path);
+function FixupFileLabels({ file }: { file: FixupFile }) {
+  return fixupFileLabels(file).map((label) => (
+    <span key={label} className="ml-2 text-github-text-secondary">
+      {label}
+    </span>
+  ));
+}
+
+function FixupChunksTable({
+  chunks,
+  filePath,
+  syntaxTheme,
+}: {
+  chunks: DiffChunk[];
+  filePath: string;
+  syntaxTheme?: AppearanceSettings['syntaxTheme'];
+}) {
+  return (
+    <FileLevelTokensProvider value={NO_PRECOMPUTED_TOKENS}>
+      <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
+        <tbody>
+          {chunks.map((chunk, chunkIndex) =>
+            chunk.lines.map((line, lineIndex) => (
+              <tr key={`${chunkIndex}-${lineIndex}`} className={getOverlayLineClass(line)}>
+                <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted select-none align-top">
+                  {line.newLineNumber ?? line.oldLineNumber ?? ''}
+                </td>
+                <td className="p-0 w-full align-top [&_span:first-child]:!bg-transparent">
+                  <DiffCodeLine
+                    line={line}
+                    syntaxTheme={syntaxTheme}
+                    filename={filePath}
+                    showPrefixBorder={false}
+                  />
+                </td>
+              </tr>
+            )),
+          )}
+        </tbody>
+      </table>
+    </FileLevelTokensProvider>
+  );
+}
+
+function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverlayCardProps) {
+  const { revealFixupFile, fixupReviewPaths, fixupPlaces } = useFixupOverlay();
+  const keyOf = (file: FixupFile) => fixupFileKey({ fixupSha: fixup.sha, path: file.path });
+  const isThisFile = (file: FixupFile) =>
+    (fixupReviewPaths.get(keyOf(file)) ?? file.oldPath ?? file.path) === filePath;
+  const isHeldHere = (file: FixupFile) => {
+    const place = fixupPlaces.get(keyOf(file));
+    return place?.kind === 'card' && place.threadId === threadId;
+  };
+  const thisFiles = fixup.files.filter(isThisFile);
+  const heldFiles = fixup.files.filter((file) => !isThisFile(file) && isHeldHere(file));
+  const otherFiles = fixup.files.filter((file) => !isThisFile(file) && !isHeldHere(file));
   const changeKind = combineChangeKinds(
     fixup.files.flatMap((file) => file.chunks.map((chunk) => chunk.changeKind)),
   );
@@ -55,32 +118,139 @@ function FixupOverlayCard({ fixup, filePath, syntaxTheme }: FixupOverlayCardProp
             {LEAVES_CODE_ALONE_LABEL[changeKind]}
           </span>
         )}
-        {otherPaths.length > 0 && <span> · 다른 파일도 고침: {otherPaths.join(', ')}</span>}
       </div>
-      <FileLevelTokensProvider value={NO_PRECOMPUTED_TOKENS}>
-        <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
-          <tbody>
-            {chunks.map((chunk, chunkIndex) =>
-              chunk.lines.map((line, lineIndex) => (
-                <tr key={`${chunkIndex}-${lineIndex}`} className={getOverlayLineClass(line)}>
-                  <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted select-none align-top">
-                    {line.newLineNumber ?? line.oldLineNumber ?? ''}
-                  </td>
-                  <td className="p-0 w-full align-top [&_span:first-child]:!bg-transparent">
-                    <DiffCodeLine
-                      line={line}
-                      syntaxTheme={syntaxTheme}
-                      filename={filePath}
-                      showPrefixBorder={false}
-                    />
-                  </td>
-                </tr>
-              )),
-            )}
-          </tbody>
-        </table>
-      </FileLevelTokensProvider>
+      {thisFiles.map((file) => (
+        <FixupChunksTable
+          key={file.path}
+          chunks={file.chunks}
+          filePath={file.path}
+          syntaxTheme={syntaxTheme}
+        />
+      ))}
+      {heldFiles.map((file) => (
+        <div key={file.path} className="border-t border-github-border">
+          <div className="px-3 py-1 text-xs font-mono text-github-text-secondary">
+            {fixupFileName(file)}
+            <FixupFileLabels file={file} />
+          </div>
+          <FixupChunksTable chunks={file.chunks} filePath={file.path} syntaxTheme={syntaxTheme} />
+        </div>
+      ))}
+      {otherFiles.length > 0 && (
+        <div className="px-3 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs border-t border-github-border">
+          <span className="text-github-text-secondary">이 fixup에서 수정한 다른 파일:</span>
+          {otherFiles.map((file) => (
+            <span key={file.path}>
+              <button
+                type="button"
+                onClick={() => revealFixupFile(fixup.sha, file.path)}
+                className="font-mono text-github-accent hover:underline"
+              >
+                {fixupFileName(file)}
+              </button>
+              <FixupFileLabels file={file} />
+            </span>
+          ))}
+        </div>
+      )}
     </div>
+  );
+}
+
+const lineLabel = (line: CommentThread['line']) =>
+  Array.isArray(line) ? `${line[0]}-${line[1]}` : line;
+
+// Read aloud, a line number ending in 2, 4, 5 or 9 ends in a vowel.
+const objectParticle = (label: string) => (/[2459]$/.test(label) ? '를' : '을');
+
+function FixupFileBox({
+  box,
+  syntaxTheme,
+}: {
+  box: FixupBox;
+  syntaxTheme?: AppearanceSettings['syntaxTheme'];
+}) {
+  const { focusedFixupFile, pickThread } = useFixupOverlay();
+  const { fixup, threads, file, chunk, chunkIndex } = box;
+  const [isOpen, setIsOpen] = useState(!file.isGenerated);
+  const isFocused = focusedFixupFile?.fixupSha === fixup.sha && focusedFixupFile.path === file.path;
+  if (isFocused && !isOpen) setIsOpen(true);
+  const lastLabel = String(lineLabel(threads[threads.length - 1]?.line ?? 0));
+  return (
+    <div
+      id={chunkIndex === 0 ? fixupFileElementId(fixup.sha, file.path) : undefined}
+      data-testid="fixup-file-box"
+      className={`ml-6 mr-2 my-1 rounded-md bg-github-bg-secondary overflow-hidden ${
+        isFocused ? 'border-2 border-github-accent' : 'border border-github-warning/60'
+      }`}
+    >
+      <div className="px-3 py-1 text-xs text-github-text-secondary border-b border-github-border">
+        <span className="font-mono">{fixup.shortSha}</span> · 지적{' '}
+        {threads.map((thread, index) => (
+          <span key={thread.id}>
+            {index > 0 && ', '}
+            <button
+              type="button"
+              onClick={() => pickThread(thread.id)}
+              className="font-mono text-github-accent hover:underline"
+            >
+              {thread.file}:{lineLabel(thread.line)}
+            </button>
+          </span>
+        ))}
+        {objectParticle(lastLabel)} 고치며 함께 수정함 · 승인과 거절은 그 지적 카드에서
+        {file.isGenerated && <span className="ml-2">생성된 파일</span>}
+        {!isOpen && (
+          <button
+            type="button"
+            onClick={() => setIsOpen(true)}
+            className="ml-2 text-github-accent hover:underline"
+          >
+            펼치기
+          </button>
+        )}
+      </div>
+      {isOpen && (
+        <FixupChunksTable chunks={[chunk]} filePath={file.path} syntaxTheme={syntaxTheme} />
+      )}
+    </div>
+  );
+}
+
+function FixupBoxes({
+  boxes,
+  syntaxTheme,
+}: {
+  boxes: readonly FixupBox[];
+  syntaxTheme?: AppearanceSettings['syntaxTheme'];
+}) {
+  return boxes.map((box) => (
+    <FixupFileBox
+      key={`${box.fixup.sha}-${box.file.path}-${box.chunkIndex}`}
+      box={box}
+      syntaxTheme={syntaxTheme}
+    />
+  ));
+}
+
+interface FixupBoxRowsProps {
+  filePath: string | undefined;
+  lineNumber: number | undefined;
+  colSpan: number;
+  syntaxTheme?: AppearanceSettings['syntaxTheme'];
+}
+
+export function FixupBoxRows({ filePath, lineNumber, colSpan, syntaxTheme }: FixupBoxRowsProps) {
+  const { boxesByFile } = useFixupOverlay();
+  if (!filePath || lineNumber === undefined) return null;
+  const boxes = boxesByFile.get(filePath)?.get(lineNumber);
+  if (!boxes) return null;
+  return (
+    <tr>
+      <td colSpan={colSpan} className="p-0">
+        <FixupBoxes boxes={boxes} syntaxTheme={syntaxTheme} />
+      </td>
+    </tr>
   );
 }
 
@@ -97,7 +267,12 @@ export function FixupOverlayRow({ thread, filePath, colSpan, syntaxTheme }: Fixu
   return (
     <tr>
       <td colSpan={colSpan} className="p-0">
-        <FixupOverlayCard fixup={fixup} filePath={filePath} syntaxTheme={syntaxTheme} />
+        <FixupOverlayCard
+          fixup={fixup}
+          threadId={thread.id}
+          filePath={filePath}
+          syntaxTheme={syntaxTheme}
+        />
       </td>
     </tr>
   );
