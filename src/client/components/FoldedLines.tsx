@@ -1,3 +1,5 @@
+import { UnfoldVertical } from 'lucide-react';
+
 import type { DiffLine, DiffSide, LineNumber } from '../../types/diff';
 import { type EditRange, rangeOfLine } from '../utils/directEdit';
 
@@ -56,9 +58,26 @@ function FoldedLinesButton({ fold }: { fold: FoldedLines }) {
       disabled={fold.locked}
       title={fold.locked ? '입력창이 열려 있는 동안에는 접을 수 없습니다' : undefined}
       aria-expanded={!fold.folded}
-      className="w-full px-3 py-1.5 text-left text-xs font-mono bg-github-bg-secondary text-github-text-secondary enabled:hover:text-github-text-primary enabled:hover:bg-github-bg-tertiary border-y border-github-border enabled:cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+      aria-label={`${fold.summary} · ${fold.folded ? '펼치기' : '접기'}`}
+      className={`grid w-full grid-cols-[var(--line-number-width)_1fr] text-left font-mono enabled:cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed ${
+        fold.folded
+          ? 'border-y border-github-border bg-github-bg-tertiary text-sm text-github-text-muted enabled:hover:bg-github-bg-secondary enabled:hover:text-github-text-primary'
+          : 'text-xs text-github-text-muted enabled:hover:text-github-accent'
+      }`}
     >
-      {`${fold.summary} · ${fold.folded ? '펼치기' : '접기'}`}
+      {fold.folded ? (
+        <>
+          <span className="flex items-center justify-center border-r border-github-border text-github-text-primary">
+            <UnfoldVertical size={16} aria-hidden="true" />
+          </span>
+          <span className="px-3 py-1.5">{fold.summary}</span>
+        </>
+      ) : (
+        <>
+          <span />
+          <span className="px-3 py-0.5">{`▾ ${fold.summary} · 접기`}</span>
+        </>
+      )}
     </button>
   );
 }
