@@ -17,7 +17,11 @@ const sameFixups = (a: ThreadFixup[], b: ThreadFixup[]) =>
 const sameNewerTarget = (a?: NewerTarget, b?: NewerTarget) =>
   a?.ref === b?.ref && a?.commit === b?.commit && a?.commitCount === b?.commitCount;
 
+const NO_FIXUPS: ThreadFixup[] = [];
+
 interface ThreadFixups {
+  // Oldest first, as git log lists them.
+  fixups: ThreadFixup[];
   fixupsByThread: Map<string, ThreadFixup[]>;
   newerTarget: NewerTarget | undefined;
   // False until the list for the current URL has been read at least once.
@@ -102,5 +106,10 @@ export function useThreadFixups(fixupsApiUrl: string | null, refreshKey: number)
     return map;
   }, [fixups]);
 
-  return { fixupsByThread, newerTarget: loaded ? list?.newerTarget : undefined, loaded };
+  return {
+    fixups: fixups ?? NO_FIXUPS,
+    fixupsByThread,
+    newerTarget: loaded ? list?.newerTarget : undefined,
+    loaded,
+  };
 }

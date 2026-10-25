@@ -343,7 +343,17 @@ export interface ThreadFixup {
   authoredAt: string;
   subject: string;
   threadIds: string[];
-  files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks'>>;
+  files: Array<Pick<DiffFile, 'path' | 'oldPath' | 'status' | 'chunks' | 'isGenerated'>>;
+  // What the commits answering no thread changed since the fixup before this one, or since the
+  // review target for the first; left out when it was not read.
+  plainChangesBefore?: PlainFileChange[];
+}
+
+export interface PlainFileChange {
+  // On the parent of the fixup.
+  path: string;
+  oldPath?: string;
+  shifts: Array<Pick<DiffChunk, 'oldStart' | 'oldLines' | 'newStart' | 'newLines'>>;
 }
 
 export interface DirectEditRequest {
@@ -461,10 +471,10 @@ export interface FileExpandedState {
   newTotalLines?: number;
 }
 
-interface ExpandedRange {
-  chunkIndex: number;
-  direction: 'up' | 'down';
-  count: number;
+// Old-side line numbers, both ends included; `end` may be Infinity for "to the end of the file".
+export interface ExpandedRange {
+  start: number;
+  end: number;
 }
 
 export interface ExpandedLine extends DiffLine {

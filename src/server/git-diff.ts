@@ -15,6 +15,7 @@ import {
   type DiffResponse,
   type DiffSelection,
   type NewerTarget,
+  type PlainFileChange,
   type ReviewCommit,
   type ThreadFixup,
   AUTOSQUASH_PREFIX,
@@ -98,6 +99,8 @@ export class GitDiffParser {
   private static readonly CHANGE_KIND_BUDGET_MS = 2_000;
   private static readonly MERGED_COMMITS_LIMIT = 20;
   private readonly classifiedFixupFiles = new Map<string, ThreadFixup['files']>();
+  // Keyed by `<since>:<fixup sha>`.
+  private readonly plainChanges = new Map<string, PlainFileChange[]>();
 
   constructor(repoPath = process.cwd()) {
     this.repoPath = repoPath;
@@ -684,9 +687,27 @@ export class GitDiffParser {
   }
 
   async listThreadFixups(selection: DiffSelection): Promise<ThreadFixup[]> {
+    return (await this.readThreadFixups(selection)).fixups;
+  }
+
+  async listFixupsForScreen(selection: DiffSelection): Promise<ThreadFixup[]> {
+    const { targetHash, fixups } = await this.readThreadFixups(selection);
+    const [classified, plainChangesBySha] = await Promise.all([
+      this.classifyFixups(fixups),
+      this.readPlainChanges(targetHash, fixups),
+    ]);
+    return classified.map((fixup) => {
+      const plainChangesBefore = plainChangesBySha.get(fixup.sha);
+      return plainChangesBefore ? { ...fixup, plainChangesBefore } : fixup;
+    });
+  }
+
+  private async readThreadFixups(
+    selection: DiffSelection,
+  ): Promise<{ targetHash: string; fixups: ThreadFixup[] }> {
     const { targetCommitish } = selection;
     if (!isCommitTarget(targetCommitish) || !validateCommitish(targetCommitish)) {
-      return [];
+      return { targetHash: '', fixups: [] };
     }
 
     const targetHash = (
@@ -694,7 +715,7 @@ export class GitDiffParser {
     ).trim();
     const headHash = (await this.git.revparse(['HEAD'])).trim();
     if (targetHash === headHash) {
-      return [];
+      return { targetHash, fixups: [] };
     }
 
     const entries = parseFixupLog(
@@ -741,7 +762,7 @@ export class GitDiffParser {
       }
     }
 
-    return entries.map((entry) => this.toThreadFixup(entry));
+    return { targetHash, fixups: entries.map((entry) => this.toThreadFixup(entry)) };
   }
 
   // Oldest first along the first parent, so a merge stands as one commit against its first parent.
@@ -871,12 +892,15 @@ export class GitDiffParser {
   }
 
   private toThreadFixup({ sha, authoredAt, subject, threadIds, diff }: FixupLogEntry): ThreadFixup {
-    const files = this.parseUnifiedDiff(diff).map(({ path, oldPath, status, chunks }) => ({
-      path,
-      oldPath,
-      status,
-      chunks,
-    }));
+    const files = this.parseUnifiedDiff(diff).map(
+      ({ path, oldPath, status, chunks, isGenerated }) => ({
+        path,
+        oldPath,
+        status,
+        chunks,
+        isGenerated,
+      }),
+    );
     return {
       sha,
       shortSha: shortHash(sha),
@@ -896,6 +920,7 @@ export class GitDiffParser {
         oldRef: `${fixup.sha}^`,
         newRef: fixup.sha,
       })),
+      { judgeGenerated: true },
     );
     const markedBySha = new Map<string, ThreadFixup['files']>();
     for (const [index, fixup] of unclassified.entries()) {
@@ -908,6 +933,54 @@ export class GitDiffParser {
       const files = this.classifiedFixupFiles.get(fixup.sha) ?? markedBySha.get(fixup.sha);
       return files ? { ...fixup, files } : fixup;
     });
+  }
+
+  // Fixups in log order after the target hash; a fixup whose span could not be read has no entry.
+  private async readPlainChanges(
+    targetHash: string,
+    fixups: ThreadFixup[],
+  ): Promise<Map<string, PlainFileChange[]>> {
+    const bySha = new Map<string, PlainFileChange[]>();
+    await Promise.all(
+      fixups.map(async (fixup, index) => {
+        const since = fixups[index - 1]?.sha ?? targetHash;
+        const key = `${since}:${fixup.sha}`;
+        let changes = this.plainChanges.get(key);
+        if (!changes) {
+          try {
+            changes = this.parseUnifiedDiff(
+              await this.git.raw([
+                'diff',
+                '-M',
+                '-U0',
+                '--no-ext-diff',
+                '--color=never',
+                since,
+                `${fixup.sha}^`,
+                '--',
+              ]),
+            )
+              .filter((file) => file.status !== 'deleted')
+              .map(({ path, oldPath, chunks }) => ({
+                path,
+                ...(oldPath ? { oldPath } : {}),
+                shifts: chunks.map(({ oldStart, oldLines, newStart, newLines }) => ({
+                  oldStart,
+                  oldLines,
+                  newStart,
+                  newLines,
+                })),
+              }));
+          } catch (error) {
+            console.error('Error reading the commits before a fixup:', error);
+            return;
+          }
+          this.plainChanges.set(key, changes);
+        }
+        bySha.set(fixup.sha, changes);
+      }),
+    );
+    return bySha;
   }
 
   // Old side first. 'staged', 'working' and '.' stand for the index and the working tree.
@@ -976,6 +1049,7 @@ export class GitDiffParser {
   // unsettled when reading failed or the budget ran out before any of its files was started on.
   private async markChangeKinds<File extends ClassifiableFile>(
     groups: Array<{ files: File[]; oldRef: string; newRef: string }>,
+    { judgeGenerated = false }: { judgeGenerated?: boolean } = {},
   ): Promise<Array<{ files: File[]; settled: boolean }>> {
     const candidates = groups.flatMap(({ files, oldRef, newRef }, group) =>
       files
@@ -983,7 +1057,7 @@ export class GitDiffParser {
           (file) =>
             (file.status === 'modified' || file.status === 'renamed') &&
             file.chunks.length > 0 &&
-            !file.isGenerated &&
+            (judgeGenerated || !file.isGenerated) &&
             isClassifiablePath(file.path),
         )
         .map((file) => ({ group, file, oldRef, newRef })),

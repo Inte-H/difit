@@ -92,9 +92,13 @@ function diffAgainstFirstParent(parser: GitDiffParser, repo: string, sha: string
     cwd: repo,
     encoding: 'utf8',
   });
-  return parser
-    .parseStdinDiff(raw)
-    .files.map(({ path, oldPath, status, chunks }) => ({ path, oldPath, status, chunks }));
+  return parser.parseStdinDiff(raw).files.map(({ path, oldPath, status, chunks, isGenerated }) => ({
+    path,
+    oldPath,
+    status,
+    chunks,
+    isGenerated,
+  }));
 }
 
 function countGitCalls(parser: GitDiffParser): string[] {
@@ -229,6 +233,26 @@ describe('listThreadFixups against a real repository', () => {
     expect(bySubject.get('keep ours')?.files).toEqual([]);
   });
 
+  it('marks the generated files a fixup changed', async () => {
+    const repo = createRepo();
+    commit(repo, 'base', { 'f.txt': lines(3, 'f'), 'pnpm-lock.yaml': lines(3, 'lock') });
+    const target = git(repo, 'rev-parse', 'HEAD');
+    commit(repo, 'with lockfile\n\nReview-Thread: t-lock', {
+      'f.txt': lines(4, 'f'),
+      'pnpm-lock.yaml': lines(4, 'lock'),
+    });
+
+    const [fixup] = await new GitDiffParser(repo).listThreadFixups({
+      targetCommitish: target,
+      baseCommitish: target,
+    });
+
+    expect(fixup?.files.map((file) => [file.path, file.isGenerated])).toEqual([
+      ['f.txt', false],
+      ['pnpm-lock.yaml', true],
+    ]);
+  });
+
   it('spawns the same number of git processes however many fixups there are', async () => {
     const repo = createRepo();
     commit(repo, 'base', { 'f.txt': lines(40, 'f') });
@@ -304,6 +328,128 @@ describe('listThreadFixups against a real repository', () => {
 
     expect(fixups).toHaveLength(5);
     expect(calls).toEqual(['revparse', 'revparse', 'raw']);
+  });
+});
+
+describe('plain changes before each fixup against a real repository', () => {
+  it('reads how commits answering no thread moved lines since the target or the fixup before', async () => {
+    const repo = createRepo();
+    const original = lines(60, 'line ');
+    const target = commit(repo, 'target', { 'a.ts': original, 'old.ts': lines(5, 'o') });
+    const moved = lines(10, 'top ') + original;
+    commit(repo, 'plain', { 'a.ts': moved, 'old.ts': null, 'new.ts': lines(5, 'o') });
+    commit(repo, 'first\n\nReview-Thread: t1', {
+      'a.ts': moved.replace('line 40\n', 'line forty\n'),
+    });
+    commit(repo, 'second\n\nReview-Thread: t2', {
+      'new.ts': lines(5, 'o').replace('o2\n', 'two\n'),
+    });
+    const parser = new GitDiffParser(repo);
+    const selection = { targetCommitish: target, baseCommitish: target };
+
+    const screen = await parser.listFixupsForScreen(selection);
+
+    expect(screen.map((fixup) => fixup.plainChangesBefore)).toEqual([
+      [
+        { path: 'a.ts', shifts: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 10 }] },
+        { path: 'new.ts', oldPath: 'old.ts', shifts: [] },
+      ],
+      [],
+    ]);
+
+    const raw = vi.spyOn((parser as any).git, 'raw');
+    await parser.listFixupsForScreen(selection);
+    expect(raw.mock.calls.filter(([args]) => (args as string[])[0] === 'diff')).toEqual([]);
+    raw.mockRestore();
+  });
+});
+
+describe('listFixupsForScreen against a real repository', () => {
+  function screenRepo() {
+    const repo = createRepo();
+    const original = lines(60, 'line ');
+    const target = commit(repo, 'target', { 'a.ts': original });
+    const moved = lines(10, 'top ') + original;
+    commit(repo, 'plain', { 'a.ts': moved });
+    commit(repo, 'answer\n\nReview-Thread: t1', {
+      'a.ts': moved.replace('line 40\n', 'line forty\n'),
+    });
+    return { repo, target };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('resolves the target once for listing and for the commits before each fixup', async () => {
+    const { repo, target } = screenRepo();
+    const parser = new GitDiffParser(repo);
+    const calls = countGitCalls(parser);
+
+    const [fixup] = await parser.listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: target,
+    });
+
+    expect(fixup?.files[0]?.chunks[0]?.changeKind).toBeDefined();
+    expect(fixup?.plainChangesBefore).toEqual([
+      { path: 'a.ts', shifts: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 10 }] },
+    ]);
+    expect(calls.filter((call) => call === 'revparse')).toHaveLength(2);
+  });
+
+  it('gives each fixup its own commits before it whatever order the classified fixups come in', async () => {
+    const { repo, target } = screenRepo();
+    commit(repo, 'second\n\nReview-Thread: t2', {
+      'a.ts': (lines(10, 'top ') + lines(60, 'line '))
+        .replace('line 40\n', 'line forty\n')
+        .replace('line 50\n', 'line fifty\n'),
+    });
+    const parser = new GitDiffParser(repo);
+    vi.spyOn(parser, 'classifyFixups').mockImplementation(async (fixups) => [...fixups].reverse());
+
+    const screen = await parser.listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: target,
+    });
+
+    expect(screen.map((fixup) => [fixup.subject, fixup.plainChangesBefore])).toEqual([
+      ['second', []],
+      [
+        'answer',
+        [{ path: 'a.ts', shifts: [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 10 }] }],
+      ],
+    ]);
+  });
+
+  it('reads the commits before each fixup while the fixups are being classified', async () => {
+    const { repo, target } = screenRepo();
+    const parser = new GitDiffParser(repo);
+    const events: string[] = [];
+    let release = () => {};
+    const classification = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(parser, 'classifyFixups').mockImplementation(async (fixups) => {
+      events.push('classify started');
+      await classification;
+      events.push('classify finished');
+      return fixups;
+    });
+    const git = (parser as any).git;
+    const raw = git.raw.bind(git);
+    vi.spyOn(git, 'raw').mockImplementation(async (args) => {
+      const output = await raw(args);
+      if ((args as string[])[0] === 'diff') events.push('diff finished');
+      return output;
+    });
+
+    const screen = parser.listFixupsForScreen({ targetCommitish: target, baseCommitish: target });
+
+    await vi.waitFor(() => expect(events).toContain('diff finished'));
+    expect(events).toEqual(['classify started', 'diff finished']);
+    release();
+    expect((await screen)[0]?.plainChangesBefore).toHaveLength(1);
   });
 });
 
@@ -519,8 +665,16 @@ describe('change kinds against a real repository', () => {
 
   it('marks the chunks of each fixup by what they change', async () => {
     const repo = createRepo();
-    const target = commit(repo, 'base', { 'a.ts': source('old', 1), 'b.ts': source('old', 1) });
+    const target = commit(repo, 'base', {
+      'a.ts': source('old', 1),
+      'b.ts': source('old', 1),
+      'dist/a.js': source('old', 1),
+    });
     commit(repo, 'comment only\n\nReview-Thread: t-comment', { 'a.ts': source('new', 1) });
+    commit(repo, 'comment and its build\n\nReview-Thread: t-build', {
+      'a.ts': source('newer', 1),
+      'dist/a.js': source('newer', 1),
+    });
     commit(repo, 'code\n\nReview-Thread: t-code', { 'b.ts': source('old', 2) });
     commit(repo, 'renamed comment\n\nReview-Thread: t-rename', {
       'b.ts': null,
@@ -543,6 +697,15 @@ describe('change kinds against a real repository', () => {
     );
 
     expect(kinds.get('comment only')).toEqual([['comment']]);
+    expect(kinds.get('comment and its build')).toEqual([['comment'], ['comment']]);
+    expect(
+      fixups
+        .find((fixup) => fixup.subject === 'comment and its build')
+        ?.files.map((file) => [file.path, file.isGenerated]),
+    ).toEqual([
+      ['a.ts', false],
+      ['dist/a.js', true],
+    ]);
     expect(kinds.get('code')).toEqual([['code']]);
     expect(kinds.get('renamed comment')).toEqual([['comment']]);
     expect(kinds.get('plain text')).toEqual([[undefined]]);

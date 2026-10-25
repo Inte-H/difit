@@ -18,6 +18,7 @@ import {
   pendingFixupFor,
 } from '../../utils/reviewDecisions';
 import { type EditRange, rangeOfLine, rangesOverlap } from '../utils/directEdit';
+import type { FixupBox, FixupFilePlace, FixupFileRef } from '../utils/fixupSpread';
 
 export interface DirectEditFailure {
   message: string;
@@ -43,6 +44,17 @@ export interface FixupOverlayState {
   showView: (view: DiffSelection) => void;
   // Null when this review cannot take edits.
   directEdit: DirectEditControls | null;
+  // Keyed by the reviewed path, then by anchor; empty unless the whole review is shown.
+  boxesByFile: ReadonlyMap<string, ReadonlyMap<number, FixupBox[]>>;
+  // Keyed by fixupFileKey; empty unless the whole review is shown.
+  fixupPlaces: ReadonlyMap<string, FixupFilePlace>;
+  // Keyed by fixupFileKey; the path of the reviewed file each fixup file changes.
+  fixupReviewPaths: ReadonlyMap<string, string>;
+  // Keyed by the reviewed path; empty unless the whole review is shown.
+  fixupTouchedFiles: ReadonlyMap<string, FixupFileRef>;
+  focusedFixupFile: FixupFileRef | null;
+  revealFixupFile: (fixupSha: string, path: string) => void;
+  pickThread: (threadId: string) => void;
 }
 
 export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
@@ -55,6 +67,13 @@ export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
   openReviewAt: () => {},
   showView: () => {},
   directEdit: null,
+  boxesByFile: new Map(),
+  fixupPlaces: new Map(),
+  fixupReviewPaths: new Map(),
+  fixupTouchedFiles: new Map(),
+  focusedFixupFile: null,
+  revealFixupFile: () => {},
+  pickThread: () => {},
 };
 
 const FixupOverlayContext = createContext<FixupOverlayState>(EMPTY_FIXUP_OVERLAY);
@@ -131,16 +150,4 @@ export function threadAnsweredByEdit(
     (thread) => canAnswerByEdit(overlay, thread) && rangesOverlap(rangeOfLine(thread.line), range),
   );
   return answerable.length === 1 ? answerable[0]?.id : undefined;
-}
-
-// An outdated thread has no trustworthy line to draw under, so it gets no overlay.
-export function overlaidFixup(
-  overlay: FixupOverlayState,
-  thread: CommentThread,
-): ThreadFixup | null {
-  if (!overlay.enabled || thread.isOutdated) return null;
-  const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
-  const state = deriveThreadReviewState(thread.id, fixups, overlay.decisions);
-  if (state !== 'awaiting-approval' && state !== 'approved') return null;
-  return pendingFixupFor(thread.id, fixups, overlay.decisions) ?? null;
 }

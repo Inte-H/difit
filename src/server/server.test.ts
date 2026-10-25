@@ -99,7 +99,7 @@ vi.mock('./git-diff.js', () => {
       chunks: file.chunks.map((chunk) => ({ ...chunk, changeKind: 'comment' })),
     }));
     listThreadFixups = vi.fn().mockResolvedValue([]);
-    classifyFixups = vi.fn(async (fixups: unknown[]) => fixups);
+    listFixupsForScreen = vi.fn(async () => this.listThreadFixups());
     findNewerTarget = vi.fn().mockResolvedValue(null);
     listReviewCommits = vi.fn(async () => reviewCommits.list);
     readThreadFixup = vi.fn(
@@ -2080,10 +2080,13 @@ describe('Server Integration Tests', () => {
       await fetch(`http://localhost:${port}/api/diff`);
       await fetch(`http://localhost:${port}/api/comments-output`);
       expect(parser.listThreadFixups).toHaveBeenCalled();
-      expect(parser.classifyFixups).not.toHaveBeenCalled();
+      expect(parser.listFixupsForScreen).not.toHaveBeenCalled();
 
       await fetch(`http://localhost:${port}/api/fixups?base=def4567&target=abc1234`);
-      expect(parser.classifyFixups).toHaveBeenCalledTimes(1);
+      expect(parser.listFixupsForScreen).toHaveBeenCalledTimes(1);
+      expect(parser.listFixupsForScreen).toHaveBeenCalledWith(
+        expect.objectContaining({ targetCommitish: 'abc1234' }),
+      );
     });
 
     it('reports no newer target for a review opened by hash', async () => {

@@ -5,6 +5,7 @@ import {
   type DiffViewMode,
   type DiffSide,
   type CommentThread,
+  type ExpandedRange,
   type LineNumber,
 } from '../../types/diff';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
@@ -14,7 +15,7 @@ import {
   type FixupOverlayState,
 } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
-import { type MergedChunk } from '../hooks/useExpandedLines';
+import { gapBeforeChunk, type MergedChunk } from '../hooks/useExpandedLines';
 import { useFileLevelTokens } from '../hooks/useFileLevelTokens';
 import { isWholeFileHighlightExtension } from '../utils/languageDetection';
 import { getViewerForFile } from '../viewers/registry';
@@ -30,7 +31,8 @@ interface DiffViewerProps {
   diffMode: DiffViewMode;
   reviewedFiles: Set<string>;
   isChangedSinceViewed?: boolean;
-  onToggleReviewed: (path: string) => void;
+  onToggleReviewed?: (path: string) => void;
+  headerLabels?: readonly string[];
   collapsedFiles: Set<string>;
   onToggleCollapsed: (path: string) => void;
   onToggleAllCollapsed: (shouldCollapse: boolean) => void;
@@ -55,17 +57,7 @@ interface DiffViewerProps {
   fixupOverlay?: FixupOverlayState;
   foldCommentChanges?: boolean;
   mergedChunks: MergedChunk[];
-  expandLines: (
-    file: DiffFile,
-    chunkIndex: number,
-    direction: 'up' | 'down',
-    count?: number,
-  ) => Promise<void>;
-  expandAllBetweenChunks: (
-    file: DiffFile,
-    chunkIndex: number,
-    hiddenLines: number,
-  ) => Promise<void>;
+  openLines: (file: DiffFile, ranges: readonly ExpandedRange[]) => Promise<void>;
   prefetchFileContent: (file: DiffFile) => Promise<void>;
   isExpandLoading: boolean;
   onLineClick?: (
@@ -85,13 +77,11 @@ interface DiffViewerProps {
 
 type LineRange = { start: number; end: number };
 type ChunkRange = LineRange & { index: number };
-type Gap = {
-  type: 'before' | 'between' | 'after';
-  start: number;
-  end: number;
-  nextChunkIndex?: number;
-  prevChunkIndex?: number;
-};
+// Indices for gapBeforeChunk; a chunk with no lines on this side splits one gap into two.
+type Gap = LineRange & { chunkGapIndices: number[] };
+
+const indicesBetween = (first: number, last: number) =>
+  Array.from({ length: last - first + 1 }, (_, offset) => first + offset);
 
 const normalizeCommentRanges = (threads: CommentThread[]): Record<DiffSide, LineRange[]> => {
   const ranges: Record<DiffSide, LineRange[]> = { old: [], new: [] };
@@ -123,17 +113,16 @@ const buildChunkRanges = (file: DiffFile, side: DiffSide): ChunkRange[] =>
     })
     .filter((range): range is ChunkRange => !!range);
 
-const buildGaps = (ranges: ChunkRange[]): Gap[] => {
+const buildGaps = (ranges: ChunkRange[], chunkCount: number): Gap[] => {
   const gaps: Gap[] = [];
   const firstRange = ranges[0];
   if (!firstRange) return gaps;
 
   if (firstRange.start > 1) {
     gaps.push({
-      type: 'before',
       start: 1,
       end: firstRange.start - 1,
-      nextChunkIndex: firstRange.index,
+      chunkGapIndices: indicesBetween(0, firstRange.index),
     });
   }
 
@@ -143,11 +132,9 @@ const buildGaps = (ranges: ChunkRange[]): Gap[] => {
     if (!prev || !current) continue;
     if (current.start > prev.end + 1) {
       gaps.push({
-        type: 'between',
         start: prev.end + 1,
         end: current.start - 1,
-        prevChunkIndex: prev.index,
-        nextChunkIndex: current.index,
+        chunkGapIndices: indicesBetween(prev.index + 1, current.index),
       });
     }
   }
@@ -155,30 +142,12 @@ const buildGaps = (ranges: ChunkRange[]): Gap[] => {
   const last = ranges[ranges.length - 1];
   if (!last) return gaps;
   gaps.push({
-    type: 'after',
     start: last.end + 1,
     end: Number.POSITIVE_INFINITY,
-    prevChunkIndex: last.index,
+    chunkGapIndices: indicesBetween(last.index + 1, chunkCount),
   });
 
   return gaps;
-};
-
-const buildMergedChunkIndex = (mergedChunks: MergedChunk[]) => {
-  const mergedByFirstIndex = new Map<number, MergedChunk>();
-  mergedChunks.forEach((chunk) => {
-    const firstIndex = chunk.originalIndices[0];
-    if (firstIndex !== undefined) {
-      mergedByFirstIndex.set(firstIndex, chunk);
-    }
-  });
-  return mergedByFirstIndex;
-};
-
-const getLastChunkIndex = (mergedChunks: MergedChunk[]): number | null => {
-  const lastMerged = mergedChunks[mergedChunks.length - 1];
-  const lastIndex = lastMerged?.originalIndices[lastMerged.originalIndices.length - 1];
-  return lastIndex ?? null;
 };
 
 export const DiffViewer = memo(function DiffViewer({
@@ -189,6 +158,7 @@ export const DiffViewer = memo(function DiffViewer({
   reviewedFiles,
   isChangedSinceViewed = false,
   onToggleReviewed,
+  headerLabels,
   collapsedFiles,
   onToggleCollapsed,
   onToggleAllCollapsed,
@@ -208,8 +178,7 @@ export const DiffViewer = memo(function DiffViewer({
   commentTrigger,
   onCommentTriggerHandled,
   mergedChunks,
-  expandLines,
-  expandAllBetweenChunks,
+  openLines,
   prefetchFileContent,
   isExpandLoading,
   diffVersion,
@@ -273,65 +242,27 @@ export const DiffViewer = memo(function DiffViewer({
     }
 
     const commentRangesBySide = normalizeCommentRanges(threads);
-    const mergedByFirstIndex = buildMergedChunkIndex(mergedChunks);
-    const lastChunkIndex = getLastChunkIndex(mergedChunks);
-    const lastMerged = mergedChunks[mergedChunks.length - 1];
-
-    const queued = new Set<string>();
-    const queueExpand = (key: string, action: () => void) => {
-      if (queued.has(key)) return;
-      queued.add(key);
-      action();
-    };
+    const gapIndices = new Set<number>();
 
     (['old', 'new'] as const).forEach((side) => {
       const commentRanges = commentRangesBySide[side];
       if (commentRanges.length === 0) return;
 
       const ranges = buildChunkRanges(file, side);
-      const gaps = buildGaps(ranges);
+      const gaps = buildGaps(ranges, file.chunks.length);
 
       gaps.forEach((gap) => {
         const hasComment = commentRanges.some(
           (range) => range.start <= gap.end && range.end >= gap.start,
         );
         if (!hasComment) return;
-
-        if (gap.type === 'after' && lastMerged && lastChunkIndex !== null) {
-          if (lastMerged.hiddenLinesAfter > 0) {
-            queueExpand(`after-${lastChunkIndex}`, () => {
-              void expandLines(file, lastChunkIndex, 'down', lastMerged.hiddenLinesAfter);
-            });
-          }
-          return;
-        }
-
-        const nextChunkIndex = gap.nextChunkIndex;
-        if (nextChunkIndex === undefined) return;
-        const mergedChunk = mergedByFirstIndex.get(nextChunkIndex);
-        if (!mergedChunk || mergedChunk.hiddenLinesBefore <= 0) return;
-
-        if (gap.type === 'before') {
-          queueExpand(`before-${nextChunkIndex}`, () => {
-            void expandLines(file, nextChunkIndex, 'up', mergedChunk.hiddenLinesBefore);
-          });
-        } else if (gap.type === 'between') {
-          queueExpand(`between-${nextChunkIndex}`, () => {
-            void expandAllBetweenChunks(file, nextChunkIndex, mergedChunk.hiddenLinesBefore);
-          });
-        }
+        gap.chunkGapIndices.forEach((index) => gapIndices.add(index));
       });
     });
-  }, [
-    threads,
-    expandAllBetweenChunks,
-    expandLines,
-    file,
-    isCollapsed,
-    isExpandLoading,
-    mergedChunks,
-    canExpandHiddenLines,
-  ]);
+
+    const gapRanges = [...gapIndices].flatMap((index) => gapBeforeChunk(file, index) ?? []);
+    if (gapRanges.length > 0) void openLines(file, gapRanges);
+  }, [threads, openLines, file, isCollapsed, isExpandLoading, mergedChunks, canExpandHiddenLines]);
 
   const fileLevelTokens = useFileLevelTokens({
     file,
@@ -355,8 +286,7 @@ export const DiffViewer = memo(function DiffViewer({
     mergedChunks,
     foldCommentChanges,
     isExpandLoading,
-    expandHiddenLines: expandLines,
-    expandAllBetweenChunks,
+    openHiddenLines: openLines,
     onAddComment: handleAddComment,
     onResolveThread,
     onReplyToThread,
@@ -367,6 +297,9 @@ export const DiffViewer = memo(function DiffViewer({
     commentTrigger,
     onCommentTriggerHandled,
   };
+
+  const overlay = fixupOverlay ?? EMPTY_FIXUP_OVERLAY;
+  const fixupRef = overlay.fixupTouchedFiles.get(file.path);
 
   return (
     <div
@@ -382,11 +315,15 @@ export const DiffViewer = memo(function DiffViewer({
         onToggleCollapsed={onToggleCollapsed}
         onToggleAllCollapsed={onToggleAllCollapsed}
         onToggleReviewed={onToggleReviewed}
+        labels={headerLabels}
+        onRevealFixup={
+          fixupRef && (() => overlay.revealFixupFile(fixupRef.fixupSha, fixupRef.path))
+        }
       />
 
       {!isCollapsed && (
         <FileLevelTokensProvider value={fileLevelTokens}>
-          <FixupOverlayProvider value={fixupOverlay ?? EMPTY_FIXUP_OVERLAY}>
+          <FixupOverlayProvider value={overlay}>
             <div className="overflow-y-auto">
               <ViewerComponent {...viewerProps} />
             </div>

@@ -54,3 +54,39 @@ describe('global.css keyboard cursor highlight', () => {
     }
   });
 });
+
+describe('global.css files only a fixup changed', () => {
+  const declarationsFor = (selector: string) =>
+    Object.fromEntries(
+      declarationsOf(rulesMatching((candidate) => candidate === selector)).map(
+        ({ prop, value }) => [prop, value],
+      ),
+    );
+
+  it('draws their added lines in the yellow of the fixup lines under a thread', () => {
+    expect(
+      declarationsFor(':root:not([data-color-vision="deuteranopia"]) [data-fixup-only-file]'),
+    ).toMatchObject({
+      '--color-diff-addition-bg': 'var(--color-fixup-addition-bg)',
+      '--color-diff-addition-border': 'var(--color-github-warning)',
+    });
+  });
+
+  it("derives that yellow fill from the theme's warning colour", () => {
+    const theme: Record<string, string> = {};
+    stylesheet.walkAtRules('theme', (rule) => {
+      rule.walkDecls(({ prop, value }) => {
+        theme[prop] = value;
+      });
+    });
+    expect(theme['--color-fixup-addition-bg']).toBe(
+      'color-mix(in srgb, var(--color-github-warning) 15%, transparent)',
+    );
+  });
+
+  it('tints their file header with the fixup yellow', () => {
+    const header = declarationsFor('[data-fixup-only-file] [data-file-header]');
+    expect(header['background-color']).toContain('var(--color-github-warning)');
+    expect(header['border-top-color']).toBe('var(--color-github-warning)');
+  });
+});

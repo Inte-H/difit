@@ -26,7 +26,7 @@ import { CommentThreadCard } from './CommentThreadCard';
 import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
-import { FixupOverlayRow } from './FixupOverlayCard';
+import { FixupBoxRows, FixupOverlayRow } from './FixupOverlayCard';
 import {
   type FoldedLines,
   FoldedLinesRow,
@@ -885,6 +885,13 @@ export function SideBySideDiffChunk({
                     )}
                   </td>
                 </tr>
+
+                <FixupBoxRows
+                  filePath={filename}
+                  lineNumber={sideLine.newLine ? sideLine.newLineNumber : undefined}
+                  colSpan={4}
+                  syntaxTheme={syntaxTheme}
+                />
 
                 {allThreads.map((thread) => (
                   <FixupOverlayRow
