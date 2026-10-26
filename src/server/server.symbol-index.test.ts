@@ -1,0 +1,409 @@
+import { execFileSync } from 'child_process';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'fs';
+import { tmpdir } from 'os';
+import { delimiter, dirname, join } from 'path';
+
+import { fetch } from 'undici';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+
+import { startServer } from './server.js';
+import type { SymbolSearchResponse } from '../types/diff.js';
+import { createDiffSelection } from '../utils/diffSelection.js';
+
+// The repository under review holds the Java sources the fixture index.scip was made from, so a
+// fake scip-java that copies the fixture indexes it faithfully.
+const FIXTURE_DIR = join(__dirname, 'scip-index-fixture');
+const FIXTURE = join(FIXTURE_DIR, 'index.scip');
+const SERVICE = 'src/main/java/demo/Service.java';
+const PORT = 'src/main/java/demo/Port.java';
+const JAVA_SOURCES = ['Cache', 'MemberRepository', 'Port', 'Service'].map(
+  (name) => `src/main/java/demo/${name}.java`,
+);
+const posixOnly = process.platform === 'win32' ? it.skip : it;
+
+let home: string;
+let repo: string;
+let base: string;
+let head: string;
+const savedEnv = { ...process.env };
+const cleanups: Array<() => Promise<void> | void> = [];
+
+function git(...args: string[]): string {
+  return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+}
+
+function write(path: string, content: string): void {
+  mkdirSync(dirname(join(repo, path)), { recursive: true });
+  writeFileSync(join(repo, path), content);
+}
+
+function sourceLine(path: string, line: number): string {
+  return readFileSync(join(FIXTURE_DIR, path), 'utf8').split('\n')[line - 1] ?? '';
+}
+
+beforeAll(() => {
+  home = mkdtempSync(join(tmpdir(), 'difit-symbol-index-home-'));
+  // A test run started from a commit hook would otherwise point every git call at that commit.
+  process.env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')),
+  );
+  Object.assign(process.env, {
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+    DIFIT_CONFIG_DIR: join(home, 'difit'),
+    PATH: (process.env.PATH ?? '')
+      .split(delimiter)
+      .filter((dir) => dir !== '' && !existsSync(join(dir, 'scip-java')))
+      .join(delimiter),
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'difit',
+    GIT_AUTHOR_EMAIL: 'difit@example.com',
+    GIT_COMMITTER_NAME: 'difit',
+    GIT_COMMITTER_EMAIL: 'difit@example.com',
+  });
+
+  repo = mkdtempSync(join(tmpdir(), 'difit-symbol-index-repo-'));
+  git('init', '-q');
+  git('checkout', '-q', '-b', 'main');
+  write('build.gradle', "plugins { id 'java' }\n");
+  write('README.md', 'Call findById to look a member up.\n');
+  git('add', '-A');
+  git('commit', '-q', '-m', 'base');
+  base = git('rev-parse', 'HEAD');
+  for (const path of JAVA_SOURCES) write(path, readFileSync(join(FIXTURE_DIR, path), 'utf8'));
+  git('add', '-A');
+  git('commit', '-q', '-m', 'members');
+  head = git('rev-parse', 'HEAD');
+});
+
+afterAll(() => {
+  process.env = savedEnv;
+  rmSync(home, { recursive: true, force: true });
+  rmSync(repo, { recursive: true, force: true });
+});
+
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  rmSync(join(home, 'difit'), { recursive: true, force: true });
+});
+
+// A stand-in for `scip-java index --output <path>`.
+function fakeScipJava(gate?: string): { calls: string; pids: () => number[] } {
+  const dir = mkdtempSync(join(tmpdir(), 'difit-fake-scip-java-'));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  const tool = join(dir, 'scip-java');
+  const calls = join(dir, 'calls.log');
+  const wait = gate ? `while [ ! -f '${gate}' ]; do sleep 0.05; done\n` : '';
+  writeFileSync(tool, `#!/bin/sh\necho $$ >> '${calls}'\n${wait}cp '${FIXTURE}' "$3"\n`);
+  chmodSync(tool, 0o755);
+  process.env.DIFIT_SCIP_JAVA = tool;
+  return {
+    calls,
+    pids: () =>
+      existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map(Number) : [],
+  };
+}
+
+async function openReview(options: Parameters<typeof startServer>[0] = {}) {
+  const started = await startServer({
+    selection: createDiffSelection(base, head),
+    repoPath: repo,
+    preferredPort: 9330,
+    openBrowser: false,
+    ...options,
+  });
+  const { port, server, stopSymbolIndex, settleSymbolIndex } = started;
+  cleanups.push(async () => {
+    await stopSymbolIndex?.();
+    await new Promise<void>((resolve) => server?.close(() => resolve()));
+  });
+  const api = (path: string) => `http://localhost:${port}${path}`;
+  const peek = async (query: Record<string, string | number | undefined>) => {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (value !== undefined) params.set(key, String(value));
+    }
+    const response = await fetch(api(`/api/symbol?${params.toString()}`));
+    return { status: response.status, body: (await response.json()) as SymbolSearchResponse };
+  };
+  // Opening the diff is the other way a review asks for a build.
+  const settle = async () => {
+    expect((await fetch(api('/api/diff'))).ok).toBe(true);
+    await settleSymbolIndex?.();
+  };
+  return { api, peek, stopSymbolIndex, settle };
+}
+
+const FIND_BY_ID = {
+  name: 'findById',
+  from: SERVICE,
+  line: 17,
+  column: sourceLine(SERVICE, 17).indexOf('findById'),
+};
+
+async function waitFor<T>(probe: () => Promise<T | undefined>, timeoutMs = 10_000): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await probe();
+    if (value !== undefined) return value;
+    if (Date.now() > deadline) throw new Error('timed out');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+function isDead(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return true;
+  }
+  // A zombie awaits only its parent's wait.
+  try {
+    return readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[2] === 'Z';
+  } catch {
+    return true;
+  }
+}
+
+describe('symbol peek of a commit review', () => {
+  posixOnly('answers a click on a Java name from the commit index once it is built', async () => {
+    const tool = fakeScipJava();
+    const { peek } = await openReview();
+
+    const answer = await waitFor(async () => {
+      const { body } = await peek({ ...FIND_BY_ID, ref: head.slice(0, 7) });
+      return body.source === 'index' ? body : undefined;
+    });
+
+    expect(answer).toEqual({
+      name: 'findById',
+      ref: head.slice(0, 7),
+      definitions: [{ path: PORT, line: 6, text: sourceLine(PORT, 6) }],
+      references: [{ path: SERVICE, line: 17, text: sourceLine(SERVICE, 17) }],
+      truncated: false,
+      source: 'index',
+    });
+    expect((await peek({ ...FIND_BY_ID, ref: head })).body.source).toBe('index');
+    expect(tool.pids()).toHaveLength(1);
+  });
+
+  posixOnly('names the library of a declaration outside the repository', async () => {
+    fakeScipJava();
+    const { peek } = await openReview();
+    const orElse = { ...FIND_BY_ID, name: 'orElse', column: FIND_BY_ID.column + 13, ref: head };
+    expect(sourceLine(SERVICE, 17).slice(orElse.column).startsWith('orElse')).toBe(true);
+
+    const answer = await waitFor(async () => {
+      const { body } = await peek(orElse);
+      return body.source === 'index' ? body : undefined;
+    });
+
+    expect(answer.definitions).toEqual([]);
+    expect(answer.library).toBe('java.util.Optional#orElse()');
+    expect(answer.references.map((match) => match.line)).toEqual([17]);
+  });
+
+  posixOnly('searches by name where the index cannot answer', async () => {
+    fakeScipJava();
+    const { peek } = await openReview();
+    await waitFor(async () => {
+      const { body } = await peek({ ...FIND_BY_ID, ref: head });
+      return body.source === 'index' ? true : undefined;
+    });
+
+    const searches = [
+      { name: 'findById', ref: head, from: SERVICE },
+      { name: 'findById', ref: head, from: 'README.md', line: 1, column: 5 },
+      { ...FIND_BY_ID, ref: base },
+      { ...FIND_BY_ID, ref: 'working' },
+    ];
+    for (const query of searches) {
+      const { status, body } = await peek(query);
+      expect(status).toBe(200);
+      expect(body.source).toBe('name');
+      expect(body.indexing).toBeUndefined();
+    }
+    const byName = await peek({ name: 'findById', ref: head, from: SERVICE });
+    expect(byName.body.references.map((match) => match.path)).toContain('README.md');
+  });
+
+  posixOnly('says the index is being built, and announces when it is done', async () => {
+    const gate = join(home, 'gate');
+    cleanups.push(() => rmSync(gate, { force: true }));
+    fakeScipJava(gate);
+    const { api, peek } = await openReview();
+
+    const building = await waitFor(async () => {
+      const { body } = await peek({ ...FIND_BY_ID, ref: head });
+      return body.indexing ? body : undefined;
+    });
+    expect(building.source).toBe('name');
+    expect(building.indexing).toBe(head);
+    expect(building.definitions.map((match) => match.path)).toContain(PORT);
+    expect(
+      (await peek({ name: 'findById', ref: head, from: 'README.md', line: 1, column: 5 })).body
+        .indexing,
+    ).toBeUndefined();
+    expect(
+      (await peek({ name: 'findById', ref: head, from: SERVICE })).body.indexing,
+    ).toBeUndefined();
+
+    const started = Date.now();
+    const diff = await fetch(api('/api/diff?ignoreWhitespace=true'));
+    expect(diff.ok).toBe(true);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect((await peek({ ...FIND_BY_ID, ref: head })).body.indexing).toBe(head);
+
+    const watching = new AbortController();
+    cleanups.push(() => watching.abort());
+    const watch = await fetch(api('/api/watch'), { signal: watching.signal });
+    const events = (async () => {
+      const decoder = new TextDecoder();
+      let received = '';
+      for await (const chunk of watch.body!) {
+        received += decoder.decode(chunk as Uint8Array, { stream: true });
+        if (received.includes('"status":"ready"')) return received;
+      }
+      return received;
+    })();
+    writeFileSync(gate, '');
+
+    const received = await events;
+    expect(received).toContain(`"type":"symbolIndexChanged","commit":"${head}","status":"ready"`);
+    const done = await peek({ ...FIND_BY_ID, ref: head });
+    expect(done.body.source).toBe('index');
+    expect(done.body.indexing).toBeUndefined();
+  });
+
+  posixOnly('tells a page that connects later how the index stands', async () => {
+    fakeScipJava();
+    const { api, settle } = await openReview();
+    await settle();
+
+    const watching = new AbortController();
+    cleanups.push(() => watching.abort());
+    const watch = await fetch(api('/api/watch'), { signal: watching.signal });
+    const decoder = new TextDecoder();
+    let received = '';
+    for await (const chunk of watch.body!) {
+      received += decoder.decode(chunk as Uint8Array, { stream: true });
+      if (received.includes('symbolIndexChanged')) break;
+    }
+
+    expect(received).toContain(`"type":"symbolIndexChanged","commit":"${head}","status":"ready"`);
+  });
+
+  posixOnly('follows a branch named like a short hash when it moves', async () => {
+    fakeScipJava();
+    const { peek, settle } = await openReview();
+    await settle();
+    git('branch', 'cafe123', head);
+    cleanups.push(() => {
+      git('branch', '-D', 'cafe123');
+    });
+    expect((await peek({ ...FIND_BY_ID, ref: 'cafe123' })).body.source).toBe('index');
+
+    git('branch', '-f', 'cafe123', base);
+
+    expect((await peek({ ...FIND_BY_ID, ref: 'cafe123' })).body.source).toBe('name');
+  });
+
+  posixOnly('ends a running build when difit stops', async () => {
+    const tool = fakeScipJava(join(home, 'never'));
+    const { stopSymbolIndex } = await openReview();
+    const [pid] = await waitFor(async () => (tool.pids().length > 0 ? tool.pids() : undefined));
+    expect(isDead(pid!)).toBe(false);
+
+    await stopSymbolIndex?.();
+
+    expect(isDead(pid!)).toBe(true);
+  });
+
+  posixOnly('finds a Korean name in the index', async () => {
+    fakeScipJava();
+    const { peek, settle } = await openReview();
+    await settle();
+    const line = 21;
+
+    const { status, body } = await peek({
+      name: '이름찾기',
+      from: SERVICE,
+      line,
+      column: sourceLine(SERVICE, line).indexOf('이름찾기'),
+      ref: head,
+    });
+
+    expect(status).toBe(200);
+    expect(body).toMatchObject({
+      source: 'index',
+      definitions: [{ path: SERVICE, line: 14 }],
+      references: [{ path: SERVICE, line }],
+    });
+  });
+
+  posixOnly('waits for the build a review asked for before it settles', async () => {
+    const tool = fakeScipJava();
+    const { settle } = await openReview();
+
+    await settle();
+
+    expect(tool.pids()).toHaveLength(1);
+  });
+
+  it('builds nothing and searches by name without scip-java', async () => {
+    process.env.DIFIT_SCIP_JAVA = join(home, 'missing-scip-java');
+    const { peek, settle } = await openReview();
+
+    const { body } = await peek({ ...FIND_BY_ID, ref: head });
+    await settle();
+
+    expect(body.source).toBe('name');
+    expect(body.indexing).toBeUndefined();
+    expect(existsSync(join(home, 'difit', 'scip-index', head))).toBe(false);
+  });
+
+  posixOnly.each([
+    ['HEAD', '.'],
+    ['HEAD', 'staged'],
+    ['staged', 'working'],
+  ])('builds nothing for a review of %s against %s', async (from, target) => {
+    const tool = fakeScipJava();
+    const { peek, settle } = await openReview({ selection: createDiffSelection(from, target) });
+
+    const { body } = await peek({ ...FIND_BY_ID, ref: target });
+    await settle();
+
+    expect(body.source).toBe('name');
+    expect(body.indexing).toBeUndefined();
+    expect(tool.pids()).toEqual([]);
+  });
+
+  posixOnly('builds nothing for a review read from standard input', async () => {
+    const tool = fakeScipJava();
+    const { peek, settle } = await openReview({
+      selection: undefined,
+      stdinDiff: [
+        'diff --git a/src/A.java b/src/A.java',
+        '--- a/src/A.java',
+        '+++ b/src/A.java',
+        '@@ -1 +1 @@',
+        '-class A {}',
+        '+class B {}',
+        '',
+      ].join('\n'),
+    });
+
+    expect((await peek({ ...FIND_BY_ID, ref: head })).status).toBe(404);
+    await settle();
+    expect(tool.pids()).toEqual([]);
+    expect(existsSync(join(home, 'difit', 'scip-index'))).toBe(false);
+  });
+});

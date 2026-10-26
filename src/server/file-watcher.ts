@@ -235,7 +235,7 @@ export class FileWatcherService {
     this.clients = [];
   }
 
-  addClient(res: Response): void {
+  addClient(res: Response, backlog: WatchEvent[] = []): void {
     this.clients.push(res);
 
     // Send initial connection event
@@ -246,6 +246,7 @@ export class FileWatcherService {
       timestamp: new Date().toISOString(),
       message: `Connected to file watcher (${this.config?.diffMode} mode)`,
     });
+    for (const event of backlog) this.sendToClient(res, event);
   }
 
   removeClient(res: Response): void {

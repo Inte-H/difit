@@ -38,11 +38,20 @@ interface CommentsChangedWatchEvent {
   timestamp: string;
 }
 
+interface SymbolIndexChangedWatchEvent {
+  type: 'symbolIndexChanged';
+  // Full commit sha.
+  commit: string;
+  status: 'none' | 'building' | 'ready' | 'failed';
+  timestamp: string;
+}
+
 export type WatchEvent =
   | ConnectedWatchEvent
   | ReloadWatchEvent
   | ErrorWatchEvent
-  | CommentsChangedWatchEvent;
+  | CommentsChangedWatchEvent
+  | SymbolIndexChangedWatchEvent;
 
 export interface ClientWatchState {
   isWatchEnabled: boolean;

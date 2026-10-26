@@ -3,10 +3,14 @@ import { extname } from 'path';
 
 import { type SymbolMatch, type SymbolSearchResponse } from '../types/diff.js';
 
-const MAX_DEFINITIONS = 200;
-const MAX_REFERENCES = 500;
+export const MAX_DEFINITIONS = 200;
+export const MAX_REFERENCES = 500;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_LENGTH = 240;
+
+export function clipLine(text: string): string {
+  return text.length > MAX_TEXT_LENGTH ? `${text.slice(0, MAX_TEXT_LENGTH)}…` : text;
+}
 // Longer lines are minified code or data, and the patterns below get slow on them.
 const MAX_DECLARATION_LENGTH = 1000;
 // Prose and data files mention names without declaring them.
@@ -190,6 +194,15 @@ function grep(repoPath: string, args: string[], signal?: AbortSignal): Promise<G
   });
 }
 
+// `git grep -w` tells word characters apart only in ASCII, so `기본값` also matches inside
+// `기본값을`.
+function wholeNameMatcher(name: string): (text: string) => boolean {
+  if (/^\p{ASCII}*$/u.test(name)) return () => true;
+  const part = '[\\p{L}\\p{N}\\p{Mn}\\p{Mc}\\p{Pc}]';
+  const pattern = new RegExp(`(?<!${part})${escapeRegExp(name)}(?!${part})`, 'u');
+  return (text) => pattern.test(text);
+}
+
 export async function searchSymbol(
   repoPath: string,
   name: string,
@@ -223,6 +236,7 @@ export async function searchSymbol(
   if (output.truncated) records.pop();
 
   const declares = definitionMatcher(name);
+  const holdsName = wholeNameMatcher(name);
   const definitions: SymbolMatch[] = [];
   const references: SymbolMatch[] = [];
   let truncated = output.truncated;
@@ -231,10 +245,11 @@ export async function searchSymbol(
     const [location, lineNumber, ...rest] = record.split('\0');
     if (location === undefined || lineNumber === undefined) continue;
     const fullText = rest.join('\0');
+    if (!holdsName(fullText)) continue;
     const match: SymbolMatch = {
       path: location.startsWith(prefix) ? location.slice(prefix.length) : location,
       line: Number(lineNumber),
-      text: fullText.length > MAX_TEXT_LENGTH ? `${fullText.slice(0, MAX_TEXT_LENGTH)}…` : fullText,
+      text: clipLine(fullText),
     };
     const isDefinition =
       fullText.length <= MAX_DECLARATION_LENGTH &&
@@ -257,5 +272,6 @@ export async function searchSymbol(
     definitions: definitions.slice(0, MAX_DEFINITIONS),
     references,
     truncated,
+    source: 'name',
   };
 }

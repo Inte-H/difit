@@ -140,6 +140,15 @@ export interface SymbolSearchResponse {
   definitions: SymbolMatch[];
   references: SymbolMatch[];
   truncated: boolean;
+  // `index` when the commit's SCIP index answered: the declarations and uses of the symbol at
+  // the clicked spot. `name` when every line holding the name was searched.
+  source: 'index' | 'name';
+  // The declaration lives only in this library, outside the repository, e.g.
+  // `java.util.Optional#orElse()`.
+  library?: string;
+  // The full sha of the commit whose index is being built; name search answers until
+  // /api/watch announces a `symbolIndexChanged` event for it.
+  indexing?: string;
 }
 
 export type LineNumber = number | [number, number];

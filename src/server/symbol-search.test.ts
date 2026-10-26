@@ -186,7 +186,28 @@ describe('searchSymbol', () => {
       definitions: [],
       references: [],
       truncated: false,
+      source: 'name',
     });
+  });
+
+  it('matches a Korean name only where it stands as a whole name', async () => {
+    write(
+      'src/Ko.java',
+      [
+        'class Ko {',
+        '  int 기본값() { return 1; }',
+        '  int 기본값을() { return 기본값(); }',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    git('add', '.');
+    git('commit', '-q', '-m', 'korean');
+
+    const result = await searchSymbol(repo, '기본값', 'HEAD');
+
+    expect(result.definitions.map((match) => match.line)).toEqual([2]);
+    expect(result.references.map((match) => match.line)).toEqual([3]);
   });
 
   it('keeps every declaration when the uses pass the limit', async () => {

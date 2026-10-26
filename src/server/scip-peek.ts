@@ -1,0 +1,218 @@
+import { spawn } from 'child_process';
+
+import { type SymbolMatch, type SymbolSearchResponse } from '../types/diff.js';
+import { POSITION_ENCODING, type ScipIndex, externalSymbolDisplayName } from './scip-index.js';
+import { MAX_DEFINITIONS, MAX_REFERENCES, clipLine } from './symbol-search.js';
+
+// Answers a symbol peek from a commit's SCIP index.
+
+export interface SymbolPosition {
+  path: string;
+  // 1-based, as the diff shows it.
+  line: number;
+  // 0-based, in UTF-16 code units (JavaScript string indexes), the unit scip-java writes.
+  column: number;
+}
+
+export interface CommitFiles {
+  // The paths among `paths` that the commit holds as files.
+  existing: (paths: string[]) => Promise<Set<string>>;
+  // Source lines of each path, without line endings. Paths the commit does not hold as files
+  // are left out.
+  readLines: (paths: string[]) => Promise<Map<string, string[]>>;
+}
+
+const MAX_BATCH_BYTES = 64 * 1024 * 1024;
+const BATCH_TIMEOUT_MS = 30_000;
+const BATCH_HEADER = /^[0-9a-f]+ (\S+) (\d+)$/;
+
+export function isJavaPath(path: string): boolean {
+  return path.endsWith('.java');
+}
+
+export function commitFiles(repoPath: string, commit: string, signal?: AbortSignal): CommitFiles {
+  return {
+    existing: (paths) => existingAtCommit(repoPath, commit, paths, signal),
+    readLines: (paths) => readLinesAtCommit(repoPath, commit, paths, signal),
+  };
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths)].filter((path) => !path.includes('\n'));
+}
+
+function catFile(
+  repoPath: string,
+  mode: '--batch' | '--batch-check',
+  commit: string,
+  paths: string[],
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('git', ['cat-file', mode], {
+      signal,
+      cwd: repoPath,
+      stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    });
+    const chunks: Buffer[] = [];
+    let size = 0;
+    const stop = () => child.kill('SIGTERM');
+    const timer = setTimeout(stop, BATCH_TIMEOUT_MS);
+    child.stdout.on('data', (chunk: Buffer) => {
+      if (size >= MAX_BATCH_BYTES) return;
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size >= MAX_BATCH_BYTES) stop();
+    });
+    child.stdin.on('error', () => {});
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', () => {
+      clearTimeout(timer);
+      if (signal?.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      resolvePromise(Buffer.concat(chunks));
+    });
+    child.stdin.end(paths.map((path) => `${commit}:${path}\n`).join(''));
+  });
+}
+
+// Each answer is one line, `<oid> <type> <size>` or `<object> missing`, in request order.
+async function existingAtCommit(
+  repoPath: string,
+  commit: string,
+  paths: string[],
+  signal?: AbortSignal,
+): Promise<Set<string>> {
+  const requested = uniquePaths(paths);
+  if (requested.length === 0) return new Set();
+  const output = await catFile(repoPath, '--batch-check', commit, requested, signal);
+  const answers = output.toString('utf8').split('\n');
+  return new Set(requested.filter((_, i) => BATCH_HEADER.exec(answers[i] ?? '')?.[1] === 'blob'));
+}
+
+async function readLinesAtCommit(
+  repoPath: string,
+  commit: string,
+  paths: string[],
+  signal?: AbortSignal,
+): Promise<Map<string, string[]>> {
+  const requested = uniquePaths(paths);
+  if (requested.length === 0) return new Map<string, string[]>();
+  return parseBatch(await catFile(repoPath, '--batch', commit, requested, signal), requested);
+}
+
+// Each answer is `<oid> <type> <size>\n<content>\n`, or `<object> missing\n`, in request order.
+// Output cut short keeps the files read in full.
+function parseBatch(output: Buffer, paths: string[]): Map<string, string[]> {
+  const lines = new Map<string, string[]>();
+  let pos = 0;
+  for (const path of paths) {
+    const headerEnd = output.indexOf(0x0a, pos);
+    if (headerEnd < 0) break;
+    const header = BATCH_HEADER.exec(output.toString('utf8', pos, headerEnd));
+    pos = headerEnd + 1;
+    if (!header) continue;
+    const contentSize = Number(header[2]);
+    if (!Number.isSafeInteger(contentSize) || pos + contentSize > output.length) break;
+    if (header[1] === 'blob') {
+      const text = output.toString('utf8', pos, pos + contentSize);
+      lines.set(
+        path,
+        text.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line)),
+      );
+    }
+    pos += contentSize + 1;
+  }
+  return lines;
+}
+
+interface Site {
+  path: string;
+  line: number;
+  startCol: number;
+  endCol: number;
+}
+
+function oneSitePerLine(sites: Site[]): Site[] {
+  const seen = new Set<string>();
+  return sites.filter((site) => {
+    const key = `${site.path}\0${site.line}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Null when the index cannot answer for that spot: it counts columns in a unit other than
+// the click's UTF-16, the file is not in it, nothing is named there, or what is named there
+// is not `name`. Sites in files the commit does not hold, such as annotation processor
+// output, are left out.
+export async function answerFromScipIndex(
+  index: ScipIndex,
+  name: string,
+  ref: string,
+  at: SymbolPosition,
+  files: CommitFiles,
+): Promise<SymbolSearchResponse | null> {
+  if (
+    index.positionEncoding !== POSITION_ENCODING.unspecified &&
+    index.positionEncoding !== POSITION_ENCODING.utf16
+  ) {
+    return null;
+  }
+  if (!isJavaPath(at.path) || !index.hasDocument(at.path)) return null;
+  const found = index.lookup(at.path, at.line, at.column);
+  if (!found) return null;
+  const clicked = [...found.definitions, ...found.references].find(
+    (site) =>
+      site.path === at.path &&
+      site.line === at.line &&
+      site.startCol <= at.column &&
+      // An end equal to the start marks a range that runs onto later lines.
+      (at.column < site.endCol || site.endCol === site.startCol),
+  );
+  if (!clicked) return null;
+  if (clicked.endCol !== clicked.startCol && clicked.endCol - clicked.startCol !== name.length) {
+    return null;
+  }
+
+  const committed = await files.existing([
+    at.path,
+    ...found.definitions.map((site) => site.path),
+    ...found.references.map((site) => site.path),
+  ]);
+  if (!committed.has(at.path)) return null;
+  const definitions = oneSitePerLine(found.definitions).filter((site) => committed.has(site.path));
+  const references = oneSitePerLine(found.references).filter((site) => committed.has(site.path));
+  const shownDefinitions = definitions.slice(0, MAX_DEFINITIONS);
+  const shownReferences = references.slice(0, MAX_REFERENCES);
+  const lines = await files.readLines([
+    at.path,
+    ...shownDefinitions.map((site) => site.path),
+    ...shownReferences.map((site) => site.path),
+  ]);
+  const clickedText = lines.get(at.path)?.[at.line - 1] ?? '';
+  if (clickedText.slice(clicked.startCol, clicked.startCol + name.length) !== name) return null;
+
+  const toMatch = (site: Site): SymbolMatch => ({
+    path: site.path,
+    line: site.line,
+    text: clipLine(lines.get(site.path)?.[site.line - 1] ?? ''),
+  });
+  return {
+    name,
+    ref,
+    definitions: shownDefinitions.map(toMatch),
+    references: shownReferences.map(toMatch),
+    truncated: definitions.length > MAX_DEFINITIONS || references.length > MAX_REFERENCES,
+    source: 'index',
+    ...(found.external ? { library: externalSymbolDisplayName(found.symbol) } : {}),
+  };
+}

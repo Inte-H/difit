@@ -27,6 +27,7 @@ const found: SymbolSearchResponse = {
   definitions: [{ path: 'src/math.ts', line: 2, text: 'export function addOne(n) {' }],
   references: [{ path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' }],
   truncated: false,
+  source: 'name',
 };
 
 const files: Record<string, string> = {
