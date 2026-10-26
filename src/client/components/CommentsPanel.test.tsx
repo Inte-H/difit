@@ -116,6 +116,19 @@ describe('CommentsPanel', () => {
     expect(rows[2]).toHaveTextContent('On a twenty, later');
   });
 
+  it('names only the file of a comment on the whole file and lists it before the lines', () => {
+    const onFile = { ...thread('a-file', 'src/a.ts', undefined, 'On all of a'), line: undefined };
+    render(
+      <Harness
+        initialFilter="all"
+        threads={[...THREADS, onFile]}
+        statusById={new Map([...STATUSES, ['a-file', 'open']])}
+      />,
+    );
+
+    expect(rowLabels()).toEqual(['a.ts', 'a.ts:3-8', 'a.ts:20', 'a.ts:20', 'b.ts:5']);
+  });
+
   it('shows where each comment is, its first message and its status', () => {
     render(<Harness />);
 

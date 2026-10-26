@@ -20,6 +20,7 @@ import {
 } from '../../utils/commentFormatting';
 import { createId } from '../../utils/createId';
 import { mergeCommentImports } from '../../utils/commentImports';
+import { lineOfPosition } from '../../utils/commentPosition';
 import { isCommitTarget, type ViewBinding } from '../../utils/diffSelection';
 import { mergeReviewDecisions } from '../../utils/reviewDecisions';
 import { storageService } from '../services/StorageService';
@@ -29,7 +30,8 @@ interface AddThreadParams {
   filePath: string;
   body: string;
   side: DiffSide;
-  line: number | { start: number; end: number };
+  // Left out for a comment on the whole file.
+  line?: number | { start: number; end: number };
   codeSnapshot?: DiffCommentThread['codeSnapshot'];
   binding?: ViewBinding;
 }
@@ -77,13 +79,11 @@ interface UseDiffCommentsReturn {
 }
 
 function normalizeThread(thread: DiffCommentThread): CommentThread {
+  const line = lineOfPosition(thread.position);
   return {
     id: thread.id,
     file: thread.filePath,
-    line:
-      typeof thread.position.line === 'number'
-        ? thread.position.line
-        : ([thread.position.line.start, thread.position.line.end] as [number, number]),
+    ...(line === undefined ? {} : { line }),
     side: thread.position.side,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
@@ -306,10 +306,10 @@ export function useDiffComments(
         filePath: params.filePath,
         createdAt: now,
         updatedAt: now,
-        position: {
-          side: params.side,
-          line: params.line,
-        },
+        position:
+          params.line === undefined
+            ? { side: params.side, scope: 'file' }
+            : { side: params.side, line: params.line },
         codeSnapshot: {
           ...(params.codeSnapshot ?? {
             content: '',

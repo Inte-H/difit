@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -8,6 +8,8 @@ import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import type { MergedChunk } from '../hooks/useExpandedLines';
 
 import { DiffViewer } from './DiffViewer';
+
+type DiffViewerProps = Parameters<typeof DiffViewer>[0];
 
 const changed = (oldStart: number, newStart: number): DiffChunk => ({
   header: `@@ -${oldStart},1 +${newStart},1 @@`,
@@ -60,6 +62,7 @@ function renderViewer(
   chunks: DiffChunk[],
   threads: CommentThread[],
   fixupOverlay?: FixupOverlayState,
+  props: Partial<DiffViewerProps> = {},
 ) {
   const file: DiffFile = {
     path: 'a.ts',
@@ -92,6 +95,7 @@ function renderViewer(
         prefetchFileContent={async () => {}}
         isExpandLoading={false}
         fixupOverlay={fixupOverlay}
+        {...props}
       />
     </WordHighlightProvider>,
   );
@@ -147,5 +151,65 @@ describe('DiffViewer header of a file a fixup changed', () => {
     });
 
     expect(screen.queryByRole('button', { name: 'fixup 수정' })).toBeNull();
+  });
+});
+
+describe('DiffViewer comments on the whole file', () => {
+  const thread = (id: string, body: string, line?: number): CommentThread => ({
+    id,
+    file: 'a.ts',
+    ...(line === undefined ? {} : { line }),
+    side: 'new',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    messages: [{ id, body, author: 'User', createdAt: '2026-01-01T00:00:00Z', updatedAt: '' }],
+  });
+
+  it('shows a thread on the whole file above the code and leaves line threads at their lines', () => {
+    renderViewer(
+      [changed(10, 10)],
+      [thread('file', 'Split this file'), thread('line', 'Rename this', 10)],
+    );
+
+    const section = screen.getByRole('region', { name: '파일 전체 지적' });
+    expect(within(section).getByText('Split this file')).toBeInTheDocument();
+    expect(within(section).queryByText('Rename this')).toBeNull();
+    expect(within(section).getByText('a.ts')).toBeInTheDocument();
+    expect(within(section).queryByText(/a\.ts:/)).toBeNull();
+    expect(section.compareDocumentPosition(screen.getByText('Rename this'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('adds a comment on the whole file from the file header', async () => {
+    const onAddFileComment = vi.fn(async () => {});
+    renderViewer([changed(10, 10)], [], undefined, { onAddFileComment });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: '파일 전체에 지적 달기' }));
+    await user.type(screen.getByPlaceholderText(/comment/i), 'Split this file');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+    expect(onAddFileComment).toHaveBeenCalledWith('a.ts', 'Split this file');
+    expect(screen.queryByPlaceholderText(/comment/i)).toBeNull();
+  });
+
+  it('opens a folded file to take the comment', async () => {
+    const onToggleCollapsed = vi.fn();
+    renderViewer([changed(10, 10)], [], undefined, {
+      onAddFileComment: async () => {},
+      collapsedFiles: new Set(['a.ts']),
+      onToggleCollapsed,
+    });
+
+    await userEvent.setup().click(screen.getByRole('button', { name: '파일 전체에 지적 달기' }));
+
+    expect(onToggleCollapsed).toHaveBeenCalledWith('a.ts');
+  });
+
+  it('offers no header button where the diff takes no comments', () => {
+    renderViewer([changed(10, 10)], []);
+
+    expect(screen.queryByRole('button', { name: '파일 전체에 지적 달기' })).toBeNull();
   });
 });

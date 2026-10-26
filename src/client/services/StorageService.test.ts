@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
+import type { DiffCommentThread } from '../../types/diff';
+
 import { StorageService } from './StorageService';
 
 // Mock localStorage with proper Storage interface
@@ -282,6 +284,51 @@ describe('StorageService - Repository Isolation', () => {
       const raw = JSON.parse(localStorage.getItem(key) ?? '{}');
       expect(raw.version).toBe(2);
       expect(service.getDiffContextData('base', 'target')?.threads).toEqual([thread]);
+    });
+
+    it('keeps a thread on the whole file next to line threads saved by an older difit', () => {
+      const thread = (id: string, position: DiffCommentThread['position']) => ({
+        id,
+        filePath: 'src/a.ts',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+        position,
+        codeSnapshot: { content: '' },
+        messages: [
+          {
+            id,
+            body: 'b',
+            author: 'User',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ],
+      });
+      const olderThreads = [
+        thread('line', { side: 'new', line: 3 }),
+        thread('range', { side: 'old', line: { start: 4, end: 6 } }),
+      ];
+      service.saveDiffContextData('base', 'target', {
+        version: 2,
+        baseCommitish: 'base',
+        targetCommitish: 'target',
+        createdAt: '2024-01-01T00:00:00Z',
+        lastModifiedAt: '2024-01-01T00:00:00Z',
+        threads: olderThreads,
+        viewedFiles: [],
+        appliedCommentImportIds: [],
+      });
+      const key = localStorageMock._keys.find((k) => k.startsWith('difit-storage-v1')) ?? '';
+      const raw = JSON.parse(localStorage.getItem(key) ?? '{}');
+      expect(raw.threads.map((saved: DiffCommentThread) => saved.position)).toEqual([
+        { side: 'new', line: 3 },
+        { side: 'old', line: { start: 4, end: 6 } },
+      ]);
+
+      const threads = [...olderThreads, thread('file', { side: 'new', scope: 'file' })];
+      service.saveCommentThreads('base', 'target', threads);
+
+      expect(service.getDiffContextData('base', 'target')).toMatchObject({ version: 2, threads });
     });
 
     it('reads back a version 3 record with its decisions', () => {

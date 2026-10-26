@@ -263,9 +263,10 @@ export function CommentThreadCard({
     setWasPicked(isPicked);
     if (isPicked) setIsCollapsed(false);
   }
-  const lineLabel = Array.isArray(thread.line)
-    ? `${thread.line[0]}-${thread.line[1]}`
-    : thread.line;
+  const location =
+    thread.line === undefined
+      ? thread.file
+      : `${thread.file}:${Array.isArray(thread.line) ? `${thread.line[0]}-${thread.line[1]}` : thread.line}`;
 
   const toggleCollapsed = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -327,7 +328,7 @@ export function CommentThreadCard({
               color: 'var(--color-yellow-path-text)',
             }}
           >
-            {thread.file}:{lineLabel}
+            {location}
           </span>
           {isResolved && (
             <span

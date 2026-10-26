@@ -132,6 +132,7 @@ export function threadReviewControls(
 
 export function canAnswerByEdit(overlay: FixupOverlayState, thread: CommentThread): boolean {
   if (!overlay.directEdit || (thread.side ?? 'new') !== 'new' || thread.isOutdated) return false;
+  if (thread.line === undefined) return false;
   if (isOpenedByEdit(thread) || isThreadResolved(thread.id, overlay.decisions)) return false;
   const state = threadReviewControls(overlay, thread)?.state;
   return state !== undefined && isAnswerableByEdit(state);
@@ -143,7 +144,10 @@ export function threadAnsweredByEdit(
   range: EditRange,
 ): string | undefined {
   const answerable = threads.filter(
-    (thread) => canAnswerByEdit(overlay, thread) && rangesOverlap(rangeOfLine(thread.line), range),
+    (thread) =>
+      thread.line !== undefined &&
+      canAnswerByEdit(overlay, thread) &&
+      rangesOverlap(rangeOfLine(thread.line), range),
   );
   return answerable.length === 1 ? answerable[0]?.id : undefined;
 }

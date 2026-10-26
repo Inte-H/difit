@@ -2,20 +2,24 @@ import type { DiffSelection, DiffSide, LineNumber } from '../../types/diff';
 
 import { rangeOfLine } from './directEdit';
 
+const rangeParams = (line: LineNumber) => {
+  const { start, end } = rangeOfLine(line);
+  return { start: String(start), end: String(end) };
+};
+
 export async function fetchFixupTarget(
   view: DiffSelection,
   filePath: string,
-  line: LineNumber,
+  line: LineNumber | undefined,
   side: DiffSide,
 ): Promise<string | undefined> {
-  const { start, end } = rangeOfLine(line);
+  const lines = line === undefined ? { scope: 'file' } : rangeParams(line);
   const params = new URLSearchParams({
     base: view.baseCommitish,
     target: view.targetCommitish,
     path: filePath,
-    start: String(start),
-    end: String(end),
     side,
+    ...lines,
   });
   try {
     const response = await fetch(`/api/fixup-target?${params.toString()}`);

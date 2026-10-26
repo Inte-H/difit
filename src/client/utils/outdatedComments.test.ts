@@ -376,4 +376,32 @@ describe('placeThread', () => {
       line: 10,
     });
   });
+
+  describe('a thread on the whole file', () => {
+    const onFile = (overrides: Partial<DiffCommentThread> = {}) =>
+      madeOnPin({
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '', commit: PIN.sha },
+        ...overrides,
+      });
+
+    it('is drawn without a line wherever its file is in the diff, whatever the lines hold', () => {
+      expect(placeThread(onFile(), shownOn(PIN_VIEW), gone)).toEqual({ kind: 'stored' });
+      expect(placeThread(onFile(), shownOn(WHOLE), repeated)).toEqual({ kind: 'stored' });
+      expect(placeThread(onFile(), { view: WHOLE, targetCommit: null }, gone)).toEqual({
+        kind: 'stored',
+      });
+    });
+
+    it('is outdated where the diff does not hold its file', () => {
+      expect(placeThread(onFile(), shownOn(WHOLE), undefined)).toEqual({
+        kind: 'stale',
+        reason: 'missing',
+      });
+    });
+
+    it('is hidden on a commit view that does not hold its fixup target, like a line thread', () => {
+      expect(placeThread(onFile(), shownOn(FIX_VIEW), gone)).toEqual({ kind: 'hidden' });
+    });
+  });
 });

@@ -13,6 +13,7 @@ import {
   EMPTY_FIXUP_OVERLAY,
   FixupOverlayProvider,
   type FixupOverlayState,
+  threadReviewControls,
 } from '../contexts/FixupOverlayContext';
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import { gapBeforeChunk, type MergedChunk } from '../hooks/useExpandedLines';
@@ -21,7 +22,10 @@ import { isWholeFileHighlightExtension } from '../utils/languageDetection';
 import { getViewerForFile } from '../viewers/registry';
 import type { DiffViewerBodyProps } from '../viewers/types';
 
+import { CommentForm } from './CommentForm';
+import { CommentThreadCard } from './CommentThreadCard';
 import { DiffViewerHeader } from './DiffViewerHeader';
+import { FixupOverlayBlock } from './FixupOverlayCard';
 import type { AppearanceSettings } from './SettingsModal';
 
 interface DiffViewerProps {
@@ -43,6 +47,8 @@ interface DiffViewerProps {
     codeContent?: string,
     side?: DiffSide,
   ) => Promise<void>;
+  // Left out where the file takes no comment on the whole file.
+  onAddFileComment?: (file: string, body: string) => Promise<void>;
   onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
@@ -87,6 +93,7 @@ const normalizeCommentRanges = (threads: CommentThread[]): Record<DiffSide, Line
   const ranges: Record<DiffSide, LineRange[]> = { old: [], new: [] };
 
   threads.forEach((thread) => {
+    if (thread.line === undefined) return;
     const side = thread.side ?? 'new';
     const [start, end] = Array.isArray(thread.line)
       ? [thread.line[0], thread.line[1]]
@@ -163,6 +170,7 @@ export const DiffViewer = memo(function DiffViewer({
   onToggleCollapsed,
   onToggleAllCollapsed,
   onAddComment,
+  onAddFileComment,
   onResolveThread,
   onReplyToThread,
   onRemoveMessage,
@@ -188,6 +196,14 @@ export const DiffViewer = memo(function DiffViewer({
   const isCollapsed = collapsedFiles.has(file.path);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isVisible, setIsVisible] = useState(false);
+  const [isAddingFileComment, setIsAddingFileComment] = useState(false);
+  const [fileThreads, lineThreads] = useMemo(
+    () => [
+      threads.filter((thread) => thread.line === undefined),
+      threads.filter((thread) => thread.line !== undefined),
+    ],
+    [threads],
+  );
 
   const viewer = getViewerForFile(file);
   const hasBlobContent = baseCommitish !== 'stdin' && targetCommitish !== 'stdin';
@@ -233,7 +249,7 @@ export const DiffViewer = memo(function DiffViewer({
   );
 
   useEffect(() => {
-    if (isCollapsed || isExpandLoading || !canExpandHiddenLines || threads.length === 0) {
+    if (isCollapsed || isExpandLoading || !canExpandHiddenLines || lineThreads.length === 0) {
       return;
     }
 
@@ -241,7 +257,7 @@ export const DiffViewer = memo(function DiffViewer({
       return;
     }
 
-    const commentRangesBySide = normalizeCommentRanges(threads);
+    const commentRangesBySide = normalizeCommentRanges(lineThreads);
     const gapIndices = new Set<number>();
 
     (['old', 'new'] as const).forEach((side) => {
@@ -262,7 +278,15 @@ export const DiffViewer = memo(function DiffViewer({
 
     const gapRanges = [...gapIndices].flatMap((index) => gapBeforeChunk(file, index) ?? []);
     if (gapRanges.length > 0) void openLines(file, gapRanges);
-  }, [threads, openLines, file, isCollapsed, isExpandLoading, mergedChunks, canExpandHiddenLines]);
+  }, [
+    lineThreads,
+    openLines,
+    file,
+    isCollapsed,
+    isExpandLoading,
+    mergedChunks,
+    canExpandHiddenLines,
+  ]);
 
   const fileLevelTokens = useFileLevelTokens({
     file,
@@ -275,7 +299,7 @@ export const DiffViewer = memo(function DiffViewer({
   const ViewerComponent = viewer.Component;
   const viewerProps: DiffViewerBodyProps = {
     file,
-    threads,
+    threads: lineThreads,
     showAuthorBadges,
     diffMode,
     syntaxTheme,
@@ -319,11 +343,59 @@ export const DiffViewer = memo(function DiffViewer({
         onRevealFixup={
           fixupRef && (() => overlay.revealFixupFile(fixupRef.fixupSha, fixupRef.path))
         }
+        onAddFileComment={
+          onAddFileComment &&
+          (() => {
+            if (isCollapsed) onToggleCollapsed(file.path);
+            setIsAddingFileComment(true);
+          })
+        }
       />
 
       {!isCollapsed && (
         <FileLevelTokensProvider value={fileLevelTokens}>
           <FixupOverlayProvider value={overlay}>
+            {(fileThreads.length > 0 || (isAddingFileComment && onAddFileComment)) && (
+              <section
+                aria-label="파일 전체 지적"
+                className="space-y-2 border-b border-github-border bg-github-bg-secondary px-4 py-2"
+              >
+                {fileThreads.map((thread) => (
+                  <div key={thread.id} className="space-y-1">
+                    <FixupOverlayBlock
+                      thread={thread}
+                      filePath={file.path}
+                      syntaxTheme={syntaxTheme}
+                    />
+                    <CommentThreadCard
+                      thread={thread}
+                      review={threadReviewControls(overlay, thread)}
+                      showAuthorBadges={showAuthorBadges}
+                      onResolveThread={onResolveThread}
+                      onReplyToThread={onReplyToThread}
+                      onRemoveMessage={onRemoveMessage}
+                      onUpdateMessage={onUpdateMessage}
+                      syntaxTheme={syntaxTheme}
+                    />
+                  </div>
+                ))}
+                {isAddingFileComment && onAddFileComment && (
+                  <CommentForm
+                    onSubmit={async (body) => {
+                      try {
+                        await onAddFileComment(file.path, body);
+                      } catch (error) {
+                        console.error('Failed to add comment:', error);
+                      }
+                      setIsAddingFileComment(false);
+                    }}
+                    onCancel={() => setIsAddingFileComment(false)}
+                    syntaxTheme={syntaxTheme}
+                    filename={file.path}
+                  />
+                )}
+              </section>
+            )}
             <div className="overflow-y-auto">
               <ViewerComponent {...viewerProps} />
             </div>

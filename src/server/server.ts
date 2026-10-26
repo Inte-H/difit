@@ -12,6 +12,7 @@ const __dirname = dirname(__filename);
 import { REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
 import { type DiffMode, type WatchEvent } from '../types/watch.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
+import { lineOfPosition } from '../utils/commentPosition.js';
 import {
   mergeCommentImports,
   mergeCommentThreads,
@@ -58,6 +59,7 @@ import {
   type Comment,
   type CommentThread,
   type DiffCommentThread,
+  type DiffLineRange,
   type DiffResponse,
   type DiffSelection,
   type DirectEditRejection,
@@ -857,7 +859,8 @@ export async function startServer(options: ServerOptions): Promise<{
   });
 
   app.get('/api/fixup-target', async (req, res) => {
-    const { base, target, path, start, end, side } = req.query;
+    const { base, target, path, start, end, side, scope } = req.query;
+    const wholeFile = scope === 'file';
     const startLine = Number(start);
     const endLine = Number(end);
     const filepathResult = parseRepositoryRelativePath(path);
@@ -865,15 +868,14 @@ export async function startServer(options: ServerOptions): Promise<{
       typeof base === 'string' && typeof target === 'string'
         ? createDiffSelection(base, target)
         : undefined;
-    if (
-      !view ||
-      !filepathResult.ok ||
-      !Number.isInteger(startLine) ||
-      !Number.isInteger(endLine) ||
-      startLine < 1 ||
-      startLine > endLine ||
-      (side !== 'old' && side !== 'new')
-    ) {
+    const linesValid = wholeFile
+      ? start === undefined && end === undefined
+      : scope === undefined &&
+        Number.isInteger(startLine) &&
+        Number.isInteger(endLine) &&
+        startLine >= 1 &&
+        startLine <= endLine;
+    if (!view || !filepathResult.ok || !linesValid || (side !== 'old' && side !== 'new')) {
       res.status(400).json({ error: 'Invalid fixup target request' });
       return;
     }
@@ -887,8 +889,7 @@ export async function startServer(options: ServerOptions): Promise<{
       const fixupTarget = await chooseFixupTarget(repositoryPath, {
         view: { base: view.baseCommitish, target: view.targetCommitish },
         filePath: filepathResult.path,
-        startLine,
-        endLine,
+        ...(wholeFile ? {} : { startLine, endLine }),
         side,
         ...(commits.length > 0 ? { commits } : {}),
       });
@@ -899,7 +900,7 @@ export async function startServer(options: ServerOptions): Promise<{
     }
   });
 
-  function normalizeLineValue(line: unknown): DiffCommentThread['position']['line'] {
+  function normalizeLineValue(line: unknown): DiffLineRange {
     if (Array.isArray(line) && line.length === 2) {
       const start = line[0] as unknown;
       const end = line[1] as unknown;
@@ -964,13 +965,11 @@ export async function startServer(options: ServerOptions): Promise<{
     thread: DiffCommentThread,
     commits: readonly ReviewCommit[] = [],
   ): CommentThread {
+    const line = lineOfPosition(thread.position);
     return {
       id: thread.id,
       file: thread.filePath,
-      line:
-        typeof thread.position.line === 'number'
-          ? thread.position.line
-          : ([thread.position.line.start, thread.position.line.end] as [number, number]),
+      ...(line === undefined ? {} : { line }),
       side: thread.position.side,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,

@@ -9,9 +9,10 @@ import { runGit } from './run-git.js';
 export interface FixupTargetQuery {
   view: { base: string; target: string };
   filePath: string;
-  // 1-based and inclusive, counted on the given side of the view.
-  startLine: number;
-  endLine: number;
+  // 1-based and inclusive, counted on the given side of the view; both left out for a comment on
+  // the whole file.
+  startLine?: number;
+  endLine?: number;
   side: DiffSide;
   // Oldest first, full SHAs; every commit in the view's range when left out.
   commits?: readonly string[];
@@ -27,7 +28,8 @@ async function gitText(repoPath: string, args: string[]): Promise<string> {
 
 // The commit of the view that last changed the lines, the latest one when they came from several;
 // the view's last commit for lines the view left as they were and for lines on the old side. Lines a
-// commit outside `commits` changed count for the commit they came from before it.
+// commit outside `commits` changed count for the commit they came from before it. For the whole
+// file, on either side, the last of `commits` that changed the file, or the view's last commit.
 export async function chooseFixupTarget(
   repoPath: string,
   { view, filePath, startLine, endLine, side, commits }: FixupTargetQuery,
@@ -38,6 +40,13 @@ export async function chooseFixupTarget(
     ),
   );
   const last = commits?.at(-1) ?? target;
+  if (startLine === undefined || endLine === undefined) {
+    const touched = (
+      await gitText(repoPath, ['rev-list', `${base}..${target}`, '--', filePath])
+    ).split('\n');
+    if (!commits) return touched[0] || last;
+    return [...commits].reverse().find((sha) => touched.includes(sha)) ?? last;
+  }
   if (side === 'old') return last;
   const inRange = (await gitText(repoPath, ['rev-list', '--reverse', `${base}..${target}`])).split(
     '\n',

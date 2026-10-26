@@ -513,4 +513,61 @@ describe('commentImports', () => {
       ).toThrow(`Invalid comment import field: ${fieldName}`);
     });
   });
+
+  describe('a comment on the whole file', () => {
+    const FILE_POSITION = { side: 'new', scope: 'file' } as const;
+    const fileThreadImport = {
+      type: 'thread',
+      id: 'file-thread',
+      filePath: 'src/example.ts',
+      position: FILE_POSITION,
+      body: 'Split this class in two',
+    } as const;
+
+    it('reads a thread import that names no line', () => {
+      expect(parseCommentImportValue(JSON.stringify(fileThreadImport))[0]?.position).toEqual(
+        FILE_POSITION,
+      );
+    });
+
+    it.each([
+      ['a line next to the file scope', { side: 'new', scope: 'file', line: 3 }],
+      ['an unknown scope', { side: 'new', scope: 'folder' }],
+      ['neither a line nor a scope', { side: 'new' }],
+    ])('rejects %s', (_label, position) => {
+      expect(() => normalizeCommentImports({ ...fileThreadImport, position })).toThrow(
+        /Invalid comment import field: position/,
+      );
+    });
+
+    it('serializes the scope in place of the line', () => {
+      expect(JSON.parse(serializeCommentImports([fileThreadImport]))[0].position).toEqual(
+        FILE_POSITION,
+      );
+    });
+
+    it('takes a reply on the file thread and keeps it apart from a thread on line 1', () => {
+      const lineThread = createThread({ id: 'line-thread', line: 1, body: 'On line 1' });
+      const { threads: withFileThread } = mergeCommentImports([lineThread], [fileThreadImport]);
+
+      const { threads, warnings } = mergeCommentImports(withFileThread, [
+        { ...fileThreadImport, type: 'reply', id: 'reply-1', body: 'Done' },
+      ]);
+
+      expect(warnings).toEqual([]);
+      expect(threads.find(({ id }) => id === 'file-thread')).toMatchObject({
+        position: FILE_POSITION,
+        messages: [{ body: 'Split this class in two' }, { body: 'Done' }],
+      });
+      expect(threads.find(({ id }) => id === 'line-thread')?.messages).toHaveLength(1);
+    });
+
+    it('keeps the scope through a merge of thread lists', () => {
+      const {
+        threads: [fileThread],
+      } = mergeCommentImports([], [fileThreadImport]);
+
+      expect(mergeCommentThreads([fileThread!], [fileThread!]).threads).toEqual([fileThread]);
+    });
+  });
 });

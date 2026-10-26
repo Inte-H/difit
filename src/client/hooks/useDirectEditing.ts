@@ -55,6 +55,7 @@ export function useDirectEditing(
     editRange: controls ? (range: EditRange) => open(range) : undefined,
     editHunk: controls && hunk ? () => open(hunk) : undefined,
     editThread: (thread: CommentThread) => {
+      if (thread.line === undefined) return undefined;
       const range = rangeOfLine(thread.line);
       return canAnswerByEdit(overlay, thread) && rangeShown(lineNumbers, range)
         ? () => open(range, thread.id)

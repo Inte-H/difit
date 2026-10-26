@@ -74,10 +74,13 @@ function normalizePosition(value: unknown): DiffCommentPosition {
     throw new Error('Invalid comment import field: position.side');
   }
 
-  return {
-    side: value.side,
-    line: normalizeLineRange(value.line),
-  };
+  if (value.scope === undefined) {
+    return { side: value.side, line: normalizeLineRange(value.line) };
+  }
+  if (value.scope !== 'file' || value.line !== undefined) {
+    throw new Error('Invalid comment import field: position.scope');
+  }
+  return { side: value.side, scope: 'file' };
 }
 
 function normalizeCodeSnapshot(value: unknown): DiffCommentCodeSnapshot | undefined {
@@ -223,6 +226,10 @@ export function parseCommentImportValue(value: string): CommentImport[] {
 }
 
 function getPositionKey(position: DiffCommentPosition): string {
+  if (!('line' in position)) {
+    return `${position.side}:file`;
+  }
+
   if (typeof position.line === 'number') {
     return `${position.side}:${position.line}`;
   }
@@ -350,6 +357,10 @@ function cloneLineRange(line: DiffLineRange): DiffLineRange {
 }
 
 function clonePosition(position: DiffCommentPosition): DiffCommentPosition {
+  if (!('line' in position)) {
+    return { side: position.side, scope: 'file' };
+  }
+
   return {
     side: position.side,
     line: cloneLineRange(position.line),
@@ -506,24 +517,13 @@ export function mergeCommentThreads(
   return { threads, warnings: [] };
 }
 
-function serializeLineRange(line: DiffLineRange): number | { start: number; end: number } {
-  if (typeof line === 'number') {
-    return line;
-  }
-
-  return { start: line.start, end: line.end };
-}
-
 export function serializeCommentImports(commentImports: CommentImport[]): string {
   return JSON.stringify(
     commentImports.map((commentImport) => ({
       type: commentImport.type,
       id: commentImport.id,
       filePath: commentImport.filePath,
-      position: {
-        side: commentImport.position.side,
-        line: serializeLineRange(commentImport.position.line),
-      },
+      position: clonePosition(commentImport.position),
       body: commentImport.body,
       author: commentImport.author,
       createdAt: commentImport.createdAt,

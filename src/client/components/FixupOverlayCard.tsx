@@ -216,11 +216,12 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
   );
 }
 
-const lineLabel = (line: CommentThread['line']) =>
-  Array.isArray(line) ? `${line[0]}-${line[1]}` : line;
+const locationOf = ({ file, line }: Pick<CommentThread, 'file' | 'line'>) =>
+  line === undefined ? file : `${file}:${Array.isArray(line) ? `${line[0]}-${line[1]}` : line}`;
 
-// Read aloud, a line number ending in 2, 4, 5 or 9 ends in a vowel.
-const objectParticle = (label: string) => (/[2459]$/.test(label) ? '를' : '을');
+// Read aloud, a line number ending in 2, 4, 5 or 9 ends in a vowel, and so does a file name read
+// letter by letter, as most extensions are.
+const objectParticle = (label: string) => (/[2459]$|[^0-9]$/.test(label) ? '를' : '을');
 
 function FixupFileBox({
   box,
@@ -234,7 +235,8 @@ function FixupFileBox({
   const [isOpen, setIsOpen] = useState(!file.isGenerated);
   const isFocused = focusedFixupFile?.fixupSha === fixup.sha && focusedFixupFile.path === file.path;
   if (isFocused && !isOpen) setIsOpen(true);
-  const lastLabel = String(lineLabel(threads[threads.length - 1]?.line ?? 0));
+  const lastThread = threads[threads.length - 1];
+  const lastLabel = lastThread ? locationOf(lastThread) : '';
   return (
     <div
       id={chunkIndex === 0 ? fixupFileElementId(fixup.sha, file.path) : undefined}
@@ -253,7 +255,7 @@ function FixupFileBox({
               onClick={() => pickThread(thread.id)}
               className="font-mono text-github-accent hover:underline"
             >
-              {thread.file}:{lineLabel(thread.line)}
+              {locationOf(thread)}
             </button>
           </span>
         ))}
@@ -325,21 +327,30 @@ interface FixupOverlayRowProps {
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
 }
 
-export function FixupOverlayRow({ thread, filePath, colSpan, syntaxTheme }: FixupOverlayRowProps) {
+export function FixupOverlayBlock({
+  thread,
+  filePath,
+  syntaxTheme,
+}: Omit<FixupOverlayRowProps, 'colSpan'>) {
   const fixups = overlaidFixups(useFixupOverlay(), thread);
   if (fixups.length === 0 || !filePath) return null;
+  return fixups.map((fixup) => (
+    <FixupOverlayCard
+      key={fixup.sha}
+      fixup={fixup}
+      threadId={thread.id}
+      filePath={filePath}
+      syntaxTheme={syntaxTheme}
+    />
+  ));
+}
+
+export function FixupOverlayRow({ thread, filePath, colSpan, syntaxTheme }: FixupOverlayRowProps) {
+  if (overlaidFixups(useFixupOverlay(), thread).length === 0 || !filePath) return null;
   return (
     <tr>
       <td colSpan={colSpan} className="p-0">
-        {fixups.map((fixup) => (
-          <FixupOverlayCard
-            key={fixup.sha}
-            fixup={fixup}
-            threadId={thread.id}
-            filePath={filePath}
-            syntaxTheme={syntaxTheme}
-          />
-        ))}
+        <FixupOverlayBlock thread={thread} filePath={filePath} syntaxTheme={syntaxTheme} />
       </td>
     </tr>
   );

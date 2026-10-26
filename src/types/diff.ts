@@ -33,10 +33,10 @@ export type DiffViewMode = 'split' | 'unified';
 export type DiffSide = 'old' | 'new';
 export type DiffLineRange = number | { start: number; end: number };
 
-export interface DiffCommentPosition {
-  side: DiffSide;
-  line: DiffLineRange;
-}
+export type DiffCommentPosition =
+  | { side: DiffSide; line: DiffLineRange }
+  // On the whole file rather than on any of its lines; `old` for a file the diff deletes.
+  | { side: DiffSide; scope: 'file' };
 
 export interface DiffCommentCodeSnapshot {
   content: string;
@@ -439,7 +439,8 @@ export interface CommentThread {
   id: string;
   file: string;
   // Where the thread is drawn now, relocated by snapshot content; may differ from the stored position.
-  line: LineNumber;
+  // Absent on a thread about the whole file.
+  line?: LineNumber;
   side?: DiffSide;
   createdAt: string;
   updatedAt: string;

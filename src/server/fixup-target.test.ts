@@ -190,4 +190,50 @@ describe('chooseFixupTarget', () => {
       ),
     ).resolves.toBe(fix);
   });
+
+  describe('for a comment on the whole file', () => {
+    const wholeFile = (
+      view: FixupTargetQuery['view'],
+      filePath: string,
+      extra: Partial<FixupTargetQuery> = {},
+    ): FixupTargetQuery => ({ view, filePath, side: 'new', ...extra });
+
+    it('chooses the last commit of the range that changed the file', async () => {
+      const { repo, base, pin, fix } = pinThenFix();
+      const unchanged = commit(repo, 'docs: notes', { 'notes.md': lines('notes') });
+      const view = { base, target: unchanged };
+
+      await expect(chooseFixupTarget(repo, wholeFile(view, 'discount.test.js'))).resolves.toBe(fix);
+      await expect(
+        chooseFixupTarget(repo, wholeFile({ base, target: pin }, 'discount.test.js')),
+      ).resolves.toBe(pin);
+      await expect(
+        chooseFixupTarget(repo, wholeFile(view, 'discount.js', { side: 'old' })),
+      ).resolves.toBe(fix);
+    });
+
+    it('chooses the last commit of the range for a file the range did not change', async () => {
+      const { repo, base, pin } = pinThenFix();
+
+      await expect(
+        chooseFixupTarget(repo, wholeFile({ base, target: pin }, 'discount.js')),
+      ).resolves.toBe(pin);
+    });
+
+    it('passes over commits it is not given', async () => {
+      const { repo, base, pin, fix } = pinThenFix();
+      const unlisted = commit(repo, 'fixup! test: pin current discount', {
+        'discount.test.js': lines('test.todo("discount");'),
+        'notes.md': lines('notes'),
+      });
+      const view = { base, target: unlisted };
+
+      await expect(
+        chooseFixupTarget(repo, wholeFile(view, 'discount.test.js', { commits: [pin] })),
+      ).resolves.toBe(pin);
+      await expect(
+        chooseFixupTarget(repo, wholeFile(view, 'notes.md', { commits: [pin, fix] })),
+      ).resolves.toBe(fix);
+    });
+  });
 });

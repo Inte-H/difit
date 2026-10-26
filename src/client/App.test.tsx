@@ -3075,6 +3075,52 @@ describe('App Component - Commits of the review', () => {
     );
   });
 
+  it('binds a comment on the whole file to the run and the commit the server chose for the file', async () => {
+    chosenFixupTarget = COMMITS[0]!.sha;
+    await showFirstTwoOfThree();
+
+    fireEvent.click(await screen.findByRole('button', { name: '파일 전체에 지적 달기' }));
+    fireEvent.change(await screen.findByPlaceholderText(/comment/i), {
+      target: { value: 'Split this file' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    await waitFor(() =>
+      expect(addedThreads()).toEqual([
+        [
+          {
+            filePath: 'test.ts',
+            body: 'Split this file',
+            side: 'new',
+            binding: {
+              view: { baseCommitish: COMMITS[0]!.parentSha, targetCommitish: COMMITS[1]!.sha },
+              fixupTarget: COMMITS[0]!.sha,
+              snapshotCommit: COMMITS[1]!.sha,
+            },
+          },
+        ],
+      ]),
+    );
+    expect(fixupTargetQueries()).toEqual([
+      { base: 'def4567', target: 'abc1234', path: 'test.ts', side: 'new', scope: 'file' },
+    ]);
+  });
+
+  it('shows a comment on the whole file above the code and in the panel by its file name', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'f1', filePath: 'test.ts', line: 1, body: 'About this file' }),
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '' },
+      },
+    ];
+    renderApp();
+
+    const section = await screen.findByRole('region', { name: '파일 전체 지적' });
+    expect(within(section).getByText('About this file')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+  });
+
   it('draws a comment made on one commit there and leaves it off the other commit', async () => {
     mockComments = [pinnedThread('const a = 1;')];
     renderApp();

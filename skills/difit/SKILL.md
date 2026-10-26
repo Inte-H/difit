@@ -50,7 +50,8 @@ This is useful for review findings, explanations, and any context the user shoul
 ```bash
 <difit-command> <target> [compare-with] \
   --comment '{"type":"thread","filePath":"src/foobar.ts","position":{"side":"old","line":102},"body":"line 1\nline 2"}' \
-  --comment '{"type":"thread","filePath":"src/example.ts","position":{"side":"new","line":{"start":36,"end":39}},"body":"Range comment for L36-L39"}'
+  --comment '{"type":"thread","filePath":"src/example.ts","position":{"side":"new","line":{"start":36,"end":39}},"body":"Range comment for L36-L39"}' \
+  --comment '{"type":"thread","filePath":"src/example.ts","position":{"side":"new","scope":"file"},"body":"Comment on the whole file"}'
 ```
 
 - Use `type: "thread"` for each comment.
@@ -58,6 +59,7 @@ This is useful for review findings, explanations, and any context the user shoul
 - Use `position.side: "new"` for lines that exist on the target side of the diff.
 - Use `position.side: "old"` for lines that exist only on the deleted side.
 - Use range comments for issues that span multiple lines.
+- Use `"scope": "file"` in place of `line` for a remark about the whole file rather than any of its lines, with `side: "old"` only when the diff deletes the file.
 - Never copy secrets, tokens, passwords, API keys, private keys, or other credential-like material from the diff into `--comment` bodies or any command-line arguments.
 
 ## Including Untracked Files
@@ -122,6 +124,8 @@ The user can also edit code in the viewer. difit then commits a `fixup! <target 
    A comment the user made while viewing one commit or a run of commits has two more fields: `view` (the `baseCommitish` and `targetCommitish` of the diff it was made on) and `fixupTarget` (the SHA of the commit to fix into). A comment made on the whole review has `fixupTarget` only. The text output adds `고쳐 넣을 커밋: <short SHA> <subject>` right under that comment's location line. A comment without `view` was made on the whole review.
 
    On a run or the whole review, `fixupTarget` is the commit of that view that last changed the lines: the latest one when they came from several, and the view's last commit for removed lines or lines the view left unchanged. Lines rewritten by a commit the commit list leaves out, such as an earlier round's fixup, count for the commit that made them. A comment without `fixupTarget` predates this rule, or the server could not choose one when it was made.
+
+   A comment on the whole file has `"position": {"side": "new", "scope": "file"}` with no `line` (`"side": "old"` when the diff deletes the file), and its text output location is the bare path, without `:L<n>`. It is about the file as a whole, so read the whole file and fix wherever the remark applies, still in one fixup. Its `fixupTarget` is the last commit of the view that changed the file, or the view's last commit when none did; commits the commit list leaves out do not count. Reply to it with the same `position`.
 
    - Line numbers belong to the `view` tree: read new-side lines with `git show <view.targetCommitish>:<file>` and old-side lines with `git show <view.baseCommitish>:<file>`. Without `view`, they belong to the review target.
    - Fix the code in HEAD. Later commits may have moved or changed those lines, so find the place by `codeSnapshot.content` rather than by line number. Make one fixup even when a later commit changed those lines; resolve the fold as in "Folding into a commit in the middle of the range".
