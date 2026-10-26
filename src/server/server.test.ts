@@ -1954,9 +1954,34 @@ describe('Server Integration Tests', () => {
   describe('Keep-alive option', { timeout: 15_000 }, () => {
     const openHeartbeats = new Set<() => void>();
 
-    afterEach(() => {
+    afterEach(async () => {
       for (const close of openHeartbeats) close();
+      await Promise.all(
+        servers
+          .splice(0)
+          .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+      );
     });
+
+    async function openHeartbeat(port: number): Promise<() => void> {
+      const controller = new AbortController();
+      const response = await fetch(`http://localhost:${port}/api/heartbeat`, {
+        signal: controller.signal,
+      });
+      await response.body?.getReader().read();
+      const close = () => {
+        openHeartbeats.delete(close);
+        controller.abort();
+      };
+      openHeartbeats.add(close);
+      return close;
+    }
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const waitForShutdown = () =>
+      vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0), {
+        timeout: TEST_CLIENT_GONE_GRACE_MS * 3,
+      });
 
     it('accepts keepAlive option without error', async () => {
       const { port, server } = await startServer({
@@ -1985,50 +2010,14 @@ describe('Server Integration Tests', () => {
       });
       servers.push(server);
 
-      // Connect to heartbeat SSE endpoint and then abort
-      const controller = new AbortController();
-      const responsePromise = fetch(`http://localhost:${port}/api/heartbeat`, {
-        signal: controller.signal,
-      });
+      const closeOnly = await openHeartbeat(port);
 
-      // Wait for the connection to be established
-      const response = await responsePromise.catch(() => null);
-      if (response) {
-        // Start reading the stream to ensure connection is established
-        const reader = response.body?.getReader();
-        if (reader) {
-          await reader.read(); // Read the initial "connected" message
-        }
-      }
-
-      // Disconnect by aborting
-      controller.abort();
-
-      await new Promise((resolve) => setTimeout(resolve, TEST_CLIENT_GONE_GRACE_MS + 300));
+      closeOnly();
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
 
       // With keepAlive, process.exit should NOT have been called
       expect(process.exit).not.toHaveBeenCalled();
     });
-
-    async function openHeartbeat(port: number): Promise<() => void> {
-      const controller = new AbortController();
-      const response = await fetch(`http://localhost:${port}/api/heartbeat`, {
-        signal: controller.signal,
-      });
-      await response.body?.getReader().read();
-      const close = () => {
-        openHeartbeats.delete(close);
-        controller.abort();
-      };
-      openHeartbeats.add(close);
-      return close;
-    }
-
-    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-    const waitForShutdown = () =>
-      vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0), {
-        timeout: TEST_CLIENT_GONE_GRACE_MS * 3,
-      });
 
     it('keeps running when one of two tabs disconnects', async () => {
       const { port, server } = await startServer({
@@ -2068,6 +2057,7 @@ describe('Server Integration Tests', () => {
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
         preferredPort: 9080,
       });
+      servers.push(server);
       const closeOnly = await openHeartbeat(port);
 
       closeOnly();
@@ -2086,6 +2076,7 @@ describe('Server Integration Tests', () => {
       const closeBeforeReload = await openHeartbeat(port);
 
       closeBeforeReload();
+      await sleep(100);
       const closeAfterReload = await openHeartbeat(port);
       await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
       expect(process.exit).not.toHaveBeenCalled();
