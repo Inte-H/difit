@@ -217,9 +217,6 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
   );
 }
 
-const locationOf = ({ file, line }: Pick<CommentThread, 'file' | 'line'>) =>
-  locationLabel(file, line);
-
 // Read aloud, a line number ending in 2, 4, 5 or 9 ends in a vowel; a path read letter by letter
 // ends in a consonant only after l, m, n or r.
 const objectParticle = (label: string) => (/[2459]$|[^0-9lmnr]$/i.test(label) ? '를' : '을');
@@ -237,7 +234,7 @@ function FixupFileBox({
   const isFocused = focusedFixupFile?.fixupSha === fixup.sha && focusedFixupFile.path === file.path;
   if (isFocused && !isOpen) setIsOpen(true);
   const lastThread = threads[threads.length - 1];
-  const lastLabel = lastThread ? locationOf(lastThread) : '';
+  const lastLabel = lastThread ? locationLabel(lastThread.file, lastThread.line) : '';
   return (
     <div
       id={chunkIndex === 0 ? fixupFileElementId(fixup.sha, file.path) : undefined}
@@ -256,7 +253,7 @@ function FixupFileBox({
               onClick={() => pickThread(thread.id)}
               className="font-mono text-github-accent hover:underline"
             >
-              {locationOf(thread)}
+              {locationLabel(thread.file, thread.line)}
             </button>
           </span>
         ))}

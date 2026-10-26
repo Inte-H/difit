@@ -1892,8 +1892,6 @@ function App() {
     const thread = normalizedThreads.find(({ id }) => id === threadId);
     if (thread) pickComment(thread);
   };
-  const pendingFileThreadRef = useRef<CommentThread | null>(null);
-  const [fileThreadScrollRequest, setFileThreadScrollRequest] = useState(0);
   const jumpToThread = (thread: CommentThread, afterRender: boolean) => {
     if (!diffData) return;
     const placed = fixupSpread.outsidePlacements.get(thread.id);
@@ -1908,9 +1906,7 @@ function App() {
       return next;
     });
     if (thread.line === undefined) {
-      pendingFileThreadRef.current = thread;
-      ensureFileRendered(thread.file);
-      setFileThreadScrollRequest((count) => count + 1);
+      scrollFileIntoDiffContainer(thread.file, `comment-thread-${thread.id}`);
       return;
     }
     const moveCursor = () => {
@@ -1925,16 +1921,6 @@ function App() {
     if (afterRender) requestAnimationFrame(moveCursor);
     else moveCursor();
   };
-  useEffect(() => {
-    const thread = pendingFileThreadRef.current;
-    if (!thread || !renderedFilePaths.has(thread.file) || collapsedFiles.has(thread.file)) return;
-    pendingFileThreadRef.current = null;
-    requestAnimationFrame(() =>
-      document
-        .getElementById(`comment-thread-${thread.id}`)
-        ?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
-    );
-  }, [fileThreadScrollRequest, renderedFilePaths, collapsedFiles]);
   const jumpToThreadRef = useRef(jumpToThread);
   jumpToThreadRef.current = jumpToThread;
   useEffect(() => {

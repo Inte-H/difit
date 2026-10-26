@@ -3560,21 +3560,21 @@ describe('App Component - Commits of the review', () => {
         codeSnapshot: { content: '' },
       },
     ];
-    const scrolled: string[] = [];
-    const scrollIntoView = vi
-      .spyOn(Element.prototype, 'scrollIntoView')
-      .mockImplementation(function (this: Element) {
-        scrolled.push(this.id);
-      });
     renderApp();
     await screen.findByText('About this file');
+    const main = document.querySelector('main')!;
+    const scrollTo = vi.fn();
+    main.scrollTo = scrollTo;
+    document.getElementById('comment-thread-f1')!.getBoundingClientRect = () =>
+      ({ top: 900, bottom: 1000, left: 0, right: 0, width: 0, height: 100 }) as DOMRect;
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
     await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
-    await waitFor(() => expect(scrolled).toContain('comment-thread-f1'));
-    scrollIntoView.mockRestore();
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.toSatisfy((top: number) => top > 800) }),
+    );
   });
 
   it('names on the card the commit a fix for the comment goes into', async () => {
