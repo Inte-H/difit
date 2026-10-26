@@ -1617,17 +1617,19 @@ describe.each<ChunkMode>(['unified', 'split'])('names clicked in fixup code (%s)
     });
   });
 
-  it('keeps the position of a card inside a section whose diff lines have none', async () => {
+  it('keeps the commit of a card inside a section that names other commits', async () => {
     const { container } = renderCard(fixupOf([changed({ path: 'src/example.ts' })]), {}, (ui) => (
-      <div data-symbol-no-position>{ui}</div>
+      <div data-symbol-old-ref="sec1111^" data-symbol-new-ref="sec1111">
+        {ui}
+      </div>
     ));
 
     const card = screen.getByTestId('fixup-overlay-card');
     expect(await clicked(card, 'three')).toMatchObject({ ref: sha, line: 12, column: 6 });
     const diffLine = container.querySelector('[data-symbol-side="new"]')!;
-    expect(await clicked(diffLine, 'first')).toEqual({
+    expect(await clicked(diffLine, 'first')).toMatchObject({
       name: 'first',
-      ref: 'target2',
+      ref: 'sec1111',
       from: 'src/example.ts',
     });
   });

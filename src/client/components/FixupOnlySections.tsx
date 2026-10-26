@@ -115,8 +115,10 @@ function FixupOnlyGroup({
             key={file.path}
             id={fixupFileElementId(fixup.sha, file.path)}
             data-fixup-only-file={file.path}
-            // Line numbers here are the fixup commit's, while a click searches the review's refs.
-            data-symbol-no-position
+            // The lines are the fixup's own diff, so a deleted line is in the fixup's parent.
+            data-symbol-old-ref={`${fixup.sha}^`}
+            data-symbol-old-path={file.oldPath ?? file.path}
+            data-symbol-new-ref={fixup.sha}
             className={`mb-6 ${isFocused ? 'rounded-md border-2 border-github-accent' : ''}`}
           >
             <DiffViewer

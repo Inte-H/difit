@@ -78,37 +78,35 @@ describe('symbolRequestFromTarget', () => {
     ).toEqual({ name: 'helper', ref: 'ccc3333', from: 'src/A.java', line: 3, column: 2 });
   });
 
-  it('sends no position for a diff row whose line numbers belong to another commit', () => {
-    expect(
-      symbolRequestFromTarget(
-        wordIn(
-          '<div data-symbol-no-position><table><tbody><tr><td data-symbol-side="new" data-symbol-path="src/A.java" data-symbol-line="10"><span class="word-token" data-word="save">save</span></td></tr></tbody></table></div>',
-        ),
-        refs,
-      ),
-    ).toEqual({ name: 'save', ref: 'bbb2222', from: 'src/A.java' });
+  it('looks a diff line up in the ref its section names for that side', () => {
+    const section = (side: string, line: number) =>
+      `<div data-symbol-old-ref="ccc3333^" data-symbol-old-path="src/Old.java" data-symbol-new-ref="ccc3333"><table><tbody><tr><td data-symbol-side="${side}" data-symbol-path="src/A.java" data-symbol-line="${line}"><span class="word-token" data-word="save">save</span></td></tr></tbody></table></div>`;
+
+    expect(symbolRequestFromTarget(wordIn(section('new', 10)), refs)).toEqual({
+      name: 'save',
+      ref: 'ccc3333',
+      from: 'src/A.java',
+      line: 10,
+      column: 0,
+    });
+    expect(symbolRequestFromTarget(wordIn(section('old', 9)), refs)).toEqual({
+      name: 'save',
+      ref: 'ccc3333^',
+      from: 'src/Old.java',
+      line: 9,
+      column: 0,
+    });
   });
 
-  it('sends the position of code that names its own ref inside a section without positions', () => {
+  it('uses the ref written on code inside a section that names its own refs', () => {
     expect(
       symbolRequestFromTarget(
         wordIn(
-          '<div data-symbol-no-position><table><tbody><tr><td data-symbol-ref="ccc3333" data-symbol-path="src/A.java" data-symbol-line="4"><span class="word-token" data-word="save">save</span></td></tr></tbody></table></div>',
+          '<div data-symbol-old-ref="ccc3333^" data-symbol-new-ref="ccc3333"><table><tbody><tr><td data-symbol-ref="ddd4444" data-symbol-path="src/B.java" data-symbol-line="4"><span class="word-token" data-word="save">save</span></td></tr></tbody></table></div>',
         ),
         refs,
       ),
-    ).toEqual({ name: 'save', ref: 'ccc3333', from: 'src/A.java', line: 4, column: 0 });
-  });
-
-  it('sends no position when the code itself says it has none', () => {
-    expect(
-      symbolRequestFromTarget(
-        wordIn(
-          '<div data-symbol-ref="ccc3333" data-symbol-path="src/A.java"><div data-symbol-no-position data-symbol-line="4"><span class="word-token" data-word="save">save</span></div></div>',
-        ),
-        refs,
-      ),
-    ).toEqual({ name: 'save', ref: 'ccc3333', from: 'src/A.java' });
+    ).toEqual({ name: 'save', ref: 'ddd4444', from: 'src/B.java', line: 4, column: 0 });
   });
 
   it('sends no position for code that does not say which line it is', () => {
