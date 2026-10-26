@@ -28,6 +28,7 @@ import {
 } from '../utils/diffSelection.js';
 
 import { classifyChunks, isClassifiablePath } from './change-kind.js';
+import { autosquashGroups } from './autosquash.js';
 import { runGit } from './run-git.js';
 import { isGeneratedFile } from './generated-file-check.js';
 
@@ -692,14 +693,58 @@ export class GitDiffParser {
 
   async listFixupsForScreen(selection: DiffSelection): Promise<ThreadFixup[]> {
     const { targetHash, fixups } = await this.readThreadFixups(selection);
-    const [classified, plainChangesBySha] = await Promise.all([
+    const [classified, plainChangesBySha, foldTargetBySha] = await Promise.all([
       this.classifyFixups(fixups),
       this.readPlainChanges(targetHash, fixups),
+      this.readFoldTargets(selection, targetHash, fixups),
     ]);
     return classified.map((fixup) => {
       const plainChangesBefore = plainChangesBySha.get(fixup.sha);
-      return plainChangesBefore ? { ...fixup, plainChangesBefore } : fixup;
+      const foldTargetSha = foldTargetBySha.get(fixup.sha);
+      if (!plainChangesBefore && !foldTargetSha) return fixup;
+      return {
+        ...fixup,
+        ...(plainChangesBefore ? { plainChangesBefore } : {}),
+        ...(foldTargetSha ? { foldTargetSha } : {}),
+      };
     });
+  }
+
+  // Follows each fixup the way autosquash does, through fixups of fixups, to a reviewed commit.
+  private async readFoldTargets(
+    selection: DiffSelection,
+    targetHash: string,
+    fixups: ThreadFixup[],
+  ): Promise<Map<string, string>> {
+    const bySha = new Map<string, string>();
+    if (fixups.length === 0) return bySha;
+    try {
+      const base = await this.resolveBaseCommitish(selection);
+      const [log, reviewedList] = await Promise.all([
+        this.git.raw([
+          'log',
+          '--reverse',
+          '--no-merges',
+          '--no-show-signature',
+          FIXUP_LOG_FORMAT,
+          `${base}..HEAD`,
+          '--',
+        ]),
+        this.git.raw(['rev-list', '--first-parent', `${base}..${targetHash}`, '--']),
+      ]);
+      const reviewed = new Set(reviewedList.split('\n').filter((sha) => sha.length > 0));
+      const foldsInto = new Map<string, string>();
+      for (const [root, ...folded] of autosquashGroups(parseFixupLog(log))) {
+        if (root) for (const commit of folded) foldsInto.set(commit.sha, root.sha);
+      }
+      for (const fixup of fixups) {
+        const foldTarget = foldsInto.get(fixup.sha);
+        if (foldTarget && reviewed.has(foldTarget)) bySha.set(fixup.sha, foldTarget);
+      }
+    } catch (error) {
+      console.error('Error finding the commits fixups fold into:', error);
+    }
+    return bySha;
   }
 
   private async readThreadFixups(

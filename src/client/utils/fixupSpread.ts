@@ -6,7 +6,7 @@ import type {
   ThreadFixup,
 } from '../../types/diff';
 import { isSameCommit } from '../../utils/diffSelection';
-import { deriveThreadReviewState, pendingFixupFor } from '../../utils/reviewDecisions';
+import { deriveThreadReviewState, pendingFixupsFor } from '../../utils/reviewDecisions';
 
 import type { ThreadPlacement } from './outdatedComments';
 
@@ -103,15 +103,15 @@ interface ShownFixups {
 }
 
 // An outdated thread has no trustworthy line to draw under, so it gets no overlay.
-export function overlaidFixup(
+export function overlaidFixups(
   overlay: ShownFixups,
   thread: Pick<CommentThread, 'id' | 'isOutdated'>,
-): ThreadFixup | null {
-  if (!overlay.enabled || thread.isOutdated) return null;
+): ThreadFixup[] {
+  if (!overlay.enabled || thread.isOutdated) return [];
   const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
   const state = deriveThreadReviewState(thread.id, fixups, overlay.decisions);
-  if (state !== 'awaiting-approval' && state !== 'approved') return null;
-  return pendingFixupFor(thread.id, fixups, overlay.decisions);
+  if (state !== 'awaiting-approval' && state !== 'approved') return [];
+  return pendingFixupsFor(thread.id, fixups, overlay.decisions);
 }
 
 // The last line on the chunk's old side at or above its last change; 0 when that is above line 1.
@@ -237,8 +237,11 @@ export function spreadFixups<Thread extends OutsideThread>(
   reviewFiles: readonly Pick<DiffFile, 'path' | 'status'>[],
   outsideReview: ThreadsOutsideReview<Thread> = { threads: [], place: () => null },
 ): FixupSpread {
-  const answeredShaOf = new Map(
-    threads.map(({ id }) => [id, overlaidFixup(overlay, { id, isOutdated: false })?.sha]),
+  const answeredShasOf = new Map(
+    threads.map(({ id }) => [
+      id,
+      new Set(overlaidFixups(overlay, { id, isOutdated: false }).map(({ sha }) => sha)),
+    ]),
   );
   const reviewPaths = new Set(reviewFiles.map(({ path }) => path));
   const drawnPaths = new Set(
@@ -282,7 +285,7 @@ export function spreadFixups<Thread extends OutsideThread>(
   };
   const answeredBy = (sha: string) =>
     threads.flatMap((thread) => {
-      const shown = answeredShaOf.get(thread.id) === sha && answering(thread);
+      const shown = answeredShasOf.get(thread.id)?.has(sha) && answering(thread);
       return shown ? [shown] : [];
     });
 

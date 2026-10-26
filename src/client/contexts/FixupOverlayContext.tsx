@@ -4,6 +4,7 @@ import type {
   CommentThread,
   DiffSelection,
   DirectEditRequest,
+  FixupRef,
   ReviewDecision,
   ReviewDecisionKind,
   ThreadFixup,
@@ -15,7 +16,8 @@ import {
   isAnswerableByEdit,
   isOpenedByEdit,
   isThreadResolved,
-  pendingFixupFor,
+  pendingFixupsFor,
+  reviewerEditFixups,
 } from '../../utils/reviewDecisions';
 import { type EditRange, rangeOfLine, rangesOverlap } from '../utils/directEdit';
 import type { FixupBox, FixupFilePlace, FixupFileRef } from '../utils/fixupSpread';
@@ -39,6 +41,7 @@ export interface FixupOverlayState {
   // The commit being reviewed; null when the target is a working tree, the index or stdin.
   targetCommit: string | null;
   recordDecision: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
+  decideFixups: (threadId: string, kind: ReviewDecisionKind, fixups: readonly FixupRef[]) => void;
   undoApproval: (threadId: string) => void;
   openReviewAt: (commit: string) => void;
   showView: (view: DiffSelection) => void;
@@ -63,6 +66,7 @@ export const EMPTY_FIXUP_OVERLAY: FixupOverlayState = {
   decisions: [],
   targetCommit: null,
   recordDecision: () => {},
+  decideFixups: () => {},
   undoApproval: () => {},
   openReviewAt: () => {},
   showView: () => {},
@@ -94,26 +98,15 @@ export function useFixupOverlay(): FixupOverlayState {
 
 export interface ThreadReviewControls {
   state: ThreadReviewState;
-  fixupSha: string | null;
+  // The fixups under judgment, decided together.
+  pendingFixups: FixupRef[];
+  revertibleFixups: FixupRef[];
   targetCommit: string | null;
   responding: boolean;
-  onDecide: (threadId: string, kind: ReviewDecisionKind, fixupSha: string) => void;
+  onDecide: FixupOverlayState['decideFixups'];
   onUndoApproval: (threadId: string) => void;
   onOpenReviewAt: (commit: string) => void;
   onShowView: (view: DiffSelection) => void;
-}
-
-export function recordWithPatchId(
-  record: (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) => void,
-  fixupsByThread: ReadonlyMap<string, ThreadFixup[]>,
-): FixupOverlayState['recordDecision'] {
-  return (threadId, kind, fixupSha) =>
-    record(
-      threadId,
-      kind,
-      fixupSha,
-      fixupsByThread.get(threadId)?.find((fixup) => fixup.sha === fixupSha)?.patchId,
-    );
 }
 
 export function threadReviewControls(
@@ -122,12 +115,15 @@ export function threadReviewControls(
 ): ThreadReviewControls | undefined {
   if (overlay.targetCommit === null) return undefined;
   const fixups = overlay.fixupsByThread.get(thread.id) ?? [];
+  const pending = pendingFixupsFor(thread.id, fixups, overlay.decisions);
+  const toRef = ({ sha, patchId }: ThreadFixup): FixupRef => ({ fixupSha: sha, patchId });
   return {
     state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, thread),
-    fixupSha: pendingFixupFor(thread.id, fixups, overlay.decisions)?.sha ?? null,
+    pendingFixups: pending.map(toRef),
+    revertibleFixups: reviewerEditFixups(thread, pending).map(toRef),
     targetCommit: overlay.targetCommit,
     responding: isAgentResponding(thread, overlay.fixupsByThread, overlay.decisions),
-    onDecide: overlay.recordDecision,
+    onDecide: overlay.decideFixups,
     onUndoApproval: overlay.undoApproval,
     onOpenReviewAt: overlay.openReviewAt,
     onShowView: overlay.showView,

@@ -34,13 +34,14 @@ difit comment wait --port <port>
   "message": "빼기로 고쳐 주세요.",
   "state": "rejected",
   "label": "다시 수정 중",
+  "rejectedFixupShas": ["afdba2e…"],
   "rejectedFixupSha": "afdba2e…",
   "fixupTarget": "3f1c9e0…"
 }
 ```
 
 - `fixupTarget`은 그 지적에 답할 fixup을 걸 커밋이다. 없으면 리뷰 대상 커밋에 건다.
-- 알리는 경우는 여섯이다. 리뷰어가 마지막으로 말한 `[수정 중]`, fixup을 만든 뒤에 리뷰어가 답글을 단 `[승인 대기]`, 승인한 뒤에 리뷰어가 답글을 달았거나 fixup을 만든 뒤에 단 답글에 에이전트가 아직 답하지 않은 `[승인됨]`(뒤의 경우는 승인한 fixup이 아직 범위에 있을 때만), 새 fixup도 그 뒤의 답도 없는 `[다시 수정 중]`, 되돌린 fixup이 아직 남은 `[되돌림]`, 리뷰어가 지운 `[지움]`. `rejectedFixupSha`는 버려야 할 fixup이다. 고정할 커밋이 없는 리뷰에서는 리뷰어가 마지막으로 말한 지적을 모두 알린다.
+- 알리는 경우는 여섯이다. 리뷰어가 마지막으로 말한 `[수정 중]`, fixup을 만든 뒤에 리뷰어가 답글을 단 `[승인 대기]`, 승인한 뒤에 리뷰어가 답글을 달았거나 fixup을 만든 뒤에 단 답글에 에이전트가 아직 답하지 않은 `[승인됨]`(뒤의 경우는 승인한 fixup이 아직 범위에 있을 때만), 새 fixup도 그 뒤의 답도 없는 `[다시 수정 중]`, 되돌린 fixup이 아직 남은 `[되돌림]`, 리뷰어가 지운 `[지움]`. `rejectedFixupShas`는 버려야 할 fixup을 모두 담고, `rejectedFixupSha`는 그 가운데 첫째다. 고정할 커밋이 없는 리뷰에서는 리뷰어가 마지막으로 말한 지적을 모두 알린다.
 - `[승인 대기]`와 승인 전에 단 답글의 `[승인됨]`은 답글 시각을 fixup의 author date와 견준다. 리뷰어의 브라우저와 fixup을 만든 컴퓨터의 시계가 어긋나면 fixup 직후에 단 답글이 오지 않거나, fixup으로 이미 답한 지적이 다시 올 수 있다. 다시 온 지적에는 말로 답하면 더 오지 않는다.
 - 띄우자마자 지금 차례인 지적을 모두 찍으므로, 두 번 띄우는 사이에 생긴 지적도 놓치지 않는다. 답한 뒤 다시 띄운다. 답하지 않은 지적은 다시 띄우자마자 또 나온다.
 - 리뷰가 끝나면 아무것도 찍지 않고 0으로 끝난다. 연결이 끊기면 10초 동안 다시 붙고, 그래도 안 되면 오류를 찍고 1로 끝난다.
@@ -57,10 +58,10 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
    리뷰어가 커밋 하나나 커밋 범위를 보며 단 지적에는 필드가 둘 더 있다. `view`는 지적을 단 화면의 기준(`baseCommitish`)과 대상(`targetCommitish`)이고, `fixupTarget`은 fixup을 걸 커밋의 SHA다. 전체 화면에서 단 지적에는 `fixupTarget`만 있다. 텍스트 출력에도 그 지적의 위치 줄 바로 아래에 `고쳐 넣을 커밋: <짧은 SHA> <제목>`이 붙는다. `view`가 없는 지적은 전체 화면에서 단 지적이다.
 
-   범위나 전체 화면에서 단 지적의 `fixupTarget`은 그 화면의 커밋 가운데 그 줄을 마지막으로 바꾼 커밋이다. 줄들이 여러 커밋에서 왔으면 가장 최근 커밋이고, 지운 줄이나 그 화면의 커밋이 바꾸지 않은 줄이면 그 화면의 마지막 커밋이다. 앞 회차의 fixup 커밋처럼 커밋 목록에 없는 커밋이 고친 줄은, 그 줄을 원래 만든 커밋으로 친다. 리뷰 범위에는 없고 fixup에서만 수정한 파일에 단 지적의 `fixupTarget`은 그 fixup이 답한 지적의 `fixupTarget`이고, 답한 지적에 그 값이 없으면 리뷰 대상 커밋이다. `fixupTarget`이 없는 지적은 이 규칙이 생기기 전에 달았거나, 지적을 달 때 서버가 대상을 정하지 못한 지적이다.
+   범위나 전체 화면에서 단 지적의 `fixupTarget`은 그 화면의 커밋 가운데 그 줄을 마지막으로 바꾼 커밋이다. 줄들이 여러 커밋에서 왔으면 가장 최근 커밋이고, 지운 줄이나 그 화면의 커밋이 바꾸지 않은 줄이면 그 화면의 마지막 커밋이다. 앞 회차의 fixup 커밋처럼 커밋 목록에 없는 커밋이 고친 줄은, 그 줄을 원래 만든 커밋으로 친다. 리뷰 범위에는 없고 fixup에서만 수정한 파일에 단 지적의 `fixupTarget`은 그 fixup이 합쳐질 커밋이다. 그 커밋이 리뷰 범위에 없으면 그 fixup이 답한 지적의 `fixupTarget`이고, 답한 지적에도 그 값이 없으면 리뷰 대상 커밋이다. `fixupTarget`이 없는 지적은 이 규칙이 생기기 전에 달았거나, 지적을 달 때 서버가 대상을 정하지 못한 지적이다.
 
    - 줄 번호는 `view` 트리의 줄이다. 새 쪽(`"side": "new"`) 줄은 `git show <view.targetCommitish>:<파일>`, 옛 쪽 줄은 `git show <view.baseCommitish>:<파일>`로 읽는다. `view`가 없으면 리뷰 대상 커밋의 줄이다. fixup에서만 수정한 파일에 단 지적은 `codeSnapshot.commit`이 그 fixup 커밋이다. 새 쪽 줄은 `git show <codeSnapshot.commit>:<파일>`, 옛 쪽 줄은 그 fixup의 부모 커밋인 `git show <codeSnapshot.commit>^:<파일>`로 읽는다.
-   - 고치는 곳은 HEAD의 파일이다. 뒤 커밋이 그 줄을 옮기거나 바꿨을 수 있으니 줄 번호 대신 `codeSnapshot.content`(지적한 줄의 내용)로 자리를 찾는다. 뒤 커밋이 그 줄을 바꿨어도 fixup은 하나만 만든다([docs/adr/0002](adr/0002-one-fixup-per-thread.md)). 접을 때 생기는 충돌은 아래 「범위 중간 커밋에 접다가 충돌하면」대로 푼다.
+   - 고치는 곳은 HEAD의 파일이다. 뒤 커밋이 그 줄을 옮기거나 바꿨을 수 있으니 줄 번호 대신 `codeSnapshot.content`(지적한 줄의 내용)로 자리를 찾는다. 뒤 커밋이 그 줄을 바꿨어도 fixup은 하나만 만든다([docs/adr/0002](adr/0002-one-fixup-per-target-commit.md)). 접을 때 생기는 충돌은 아래 「범위 중간 커밋에 접다가 충돌하면」대로 푼다.
 
 2. 코드를 고친 뒤 fixup 커밋을 만들고 스레드 id를 트레일러로 붙인다. 대상은 지적의 `fixupTarget`이고, 없으면 리뷰 대상 SHA다.
 
@@ -86,9 +87,9 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
    git commit -a -m "fixup! <fixupTarget 전체 SHA>" --trailer "Review-Thread: <threadId>"
    ```
 
-   - 지적 하나에 fixup 커밋 하나만 둔다. 같은 지적에 fixup이 둘이면 화면이 어느 쪽을 판정할지 정하지 못한다.
-   - fixup을 만들기 직전에 `comment get`을 다시 읽어 그 지적이 아직 `[수정 중]`, `[답변 완료]`, `[다시 수정 중]` 가운데 하나인지 확인한다. 그사이 리뷰어가 화면에서 직접 고쳤다면 지적 하나에 fixup이 둘이 되어 카드의 승인·거절 단추가 모두 사라진다.
-   - 판정 전에 같은 지적을 또 고쳤다면 새 커밋을 만들지 말고 앞의 fixup 커밋에 합친다. 그 커밋이 맨 위면 `git commit -a --amend --no-edit`, 아니면 `git rebase -i`에서 그 커밋을 `edit`한다.
+   - 지적 하나에는 고쳐 넣을 커밋마다 fixup 커밋을 하나만 둔다. 한 지적을 고치느라 여러 커밋을 손대야 하면 커밋마다 fixup을 하나씩 만들고 모두 같은 `Review-Thread` 트레일러를 단다. 지적한 줄 밖의 수정을 고쳐 넣을 커밋은 리뷰 범위에서 그 줄을 마지막으로 바꾼 커밋이다(`git blame <리뷰 대상 커밋> -- <파일>`). 범위보다 오래된 커밋이 나오면 리뷰 대상 커밋으로 한다. 화면은 그 fixup들을 지적 밑에 모두 보이고, 리뷰어는 묶음 전체를 한 번에 승인하거나 거절한다.
+   - fixup을 만들기 직전에 `comment get`을 다시 읽어 그 지적이 아직 `[수정 중]`, `[답변 완료]`, `[다시 수정 중]` 가운데 하나인지 확인한다. 그사이 리뷰어가 화면에서 직접 고쳤다면 같은 곳을 두 번 고치게 된다.
+   - 판정 전에 같은 지적을 또 고쳤다면 새 커밋을 만들지 말고, 같은 커밋에 고쳐 넣는 앞의 fixup 커밋에 합친다. 그 커밋이 맨 위면 `git commit -a --amend --no-edit`, 아니면 `git rebase -i`에서 그 커밋을 `edit`한다.
    - 지적 여러 개를 고쳤으면 지적마다 fixup 커밋을 따로 만든다.
 
 3. 리뷰어가 거절하면 `comment get --format json`의 `decisions`에 `"kind": "rejected"`와 그 fixup의 SHA가 남는다. 거절된 fixup 커밋은 버리고(`git rebase -i`에서 `drop`) 새로 고쳐 다시 만든다. 버리기 전에 rebase로 그 fixup 바로 옆 줄이 바뀌면 거절 표시가 풀릴 수 있으니, 거절된 fixup부터 버린다.
@@ -99,7 +100,7 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
 브랜치를 마무리할 때 한 번에 접는다. `--autosquash`는 범위 안의 fixup을 모두 접으므로, 남은 fixup이 전부 승인되고 거절된 fixup을 모두 버린 뒤에 돌린다. 리뷰어가 지운 지적의 fixup도 먼저 버린다. 지운 지적은 텍스트 출력에 나오지 않으므로, JSON `decisions`에서 `"kind": "deleted"`인 지적을 찾아 그 지적을 `Review-Thread` 트레일러로 단 fixup을 버린다.
 
-승인 여부는 `difit comment get --port <port>` 텍스트 출력에서 지적마다 붙는 `[승인됨]`으로 확인한다. JSON의 `decisions`는 판정을 지우지 않고 쌓기만 한다. 리뷰어가 승인을 취소하면 `"kind": "unapproved"`가 더해지므로, 같은 지적의 `approved`와 `unapproved` 가운데 시각이 늦은 쪽이 지금의 판정이다. 다만 승인한 fixup에 그보다 늦은 `rejected`가 있으면 거절이 우선한다. 리뷰어가 직접 고친 수정을 `되돌리기`로 거절하면 이렇게 남는다.
+승인 여부는 `difit comment get --port <port>` 텍스트 출력에서 지적마다 붙는 `[승인됨]`으로 확인한다. JSON의 `decisions`는 판정을 지우지 않고 쌓기만 한다. fixup이 여럿인 지적을 승인하면 fixup마다 `approved`가 같은 시각으로 하나씩 쌓인다. 리뷰어가 승인을 취소하면 `"kind": "unapproved"`가 더해지므로, 같은 지적의 `approved`와 `unapproved` 가운데 시각이 늦은 쪽이 지금의 판정이다. 다만 승인한 fixup에 그보다 늦은 `rejected`가 있으면 거절이 우선한다. 리뷰어가 직접 고친 수정을 `되돌리기`로 거절하면 이렇게 남는다.
 
 ```sh
 git rev-parse HEAD   # 찍힌 SHA를 <접기 전 SHA>로 적어 둔다

@@ -16,7 +16,7 @@ import {
   fixupFileKey,
   fixupFileLabels,
   fixupFileName,
-  overlaidFixup,
+  overlaidFixups,
 } from '../utils/fixupSpread';
 
 import { DiffCodeLine } from './DiffCodeLine';
@@ -292,17 +292,20 @@ interface FixupOverlayRowProps {
 }
 
 export function FixupOverlayRow({ thread, filePath, colSpan, syntaxTheme }: FixupOverlayRowProps) {
-  const fixup = overlaidFixup(useFixupOverlay(), thread);
-  if (!fixup || !filePath) return null;
+  const fixups = overlaidFixups(useFixupOverlay(), thread);
+  if (fixups.length === 0 || !filePath) return null;
   return (
     <tr>
       <td colSpan={colSpan} className="p-0">
-        <FixupOverlayCard
-          fixup={fixup}
-          threadId={thread.id}
-          filePath={filePath}
-          syntaxTheme={syntaxTheme}
-        />
+        {fixups.map((fixup) => (
+          <FixupOverlayCard
+            key={fixup.sha}
+            fixup={fixup}
+            threadId={thread.id}
+            filePath={filePath}
+            syntaxTheme={syntaxTheme}
+          />
+        ))}
       </td>
     </tr>
   );

@@ -453,6 +453,42 @@ describe('listFixupsForScreen against a real repository', () => {
   });
 });
 
+describe('the commit each fixup folds into against a real repository', () => {
+  it('finds it by subject or id the way autosquash does, and leaves it out outside the range', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const first = commit(repo, 'add a', { 'a.txt': 'a\n' });
+    const target = commit(repo, 'add b', { 'b.txt': 'b\n' });
+    commit(repo, 'fixup! add a\n\nReview-Thread: t1', { 'a.txt': 'A\n' });
+    commit(repo, `fixup! ${target.slice(0, 10)}\n\nReview-Thread: t1`, { 'b.txt': 'B\n' });
+    commit(repo, 'fixup! base\n\nReview-Thread: t2', { 'f.txt': 'F\n' });
+
+    const fixups = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(fixups.map((fixup) => fixup.foldTargetSha)).toEqual([first, target, undefined]);
+  });
+
+  it('follows a fixup of a fixup to the reviewed commit, and leaves out a commit after the review', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const target = commit(repo, 'add a', { 'a.txt': 'a\n' });
+    const answer = commit(repo, 'fixup! add a\n\nReview-Thread: t1', { 'a.txt': 'A\n' });
+    commit(repo, `fixup! ${answer}\n\nReview-Thread: t1`, { 'a.txt': 'AA\n' });
+    const later = commit(repo, 'later', { 'l.txt': 'l\n' });
+    commit(repo, `fixup! ${later}\n\nReview-Thread: t2`, { 'l.txt': 'L\n' });
+
+    const fixups = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(fixups.map((fixup) => fixup.foldTargetSha)).toEqual([target, target, undefined]);
+  });
+});
+
 describe('findNewerTarget against a real repository', () => {
   it('stays quiet while only fixups follow the target', async () => {
     const repo = createRepo();

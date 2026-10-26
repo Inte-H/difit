@@ -83,10 +83,12 @@ export function normalizeReviewDecisions(value: unknown): ReviewDecision[] {
   return value.flatMap((item) => toReviewDecision(item) ?? []);
 }
 
-function matcherFor(decisions: ReviewDecision[]): (fixup: ThreadFixup) => boolean {
+type FixupIdentity = { sha: string; patchId?: string };
+
+function matcherFor(decisions: ReviewDecision[]): (fixup: FixupIdentity) => boolean {
   const shas = new Set(decisions.map((decision) => decision.fixupSha));
   const patchIds = new Set(decisions.flatMap((decision) => decision.patchId ?? []));
-  return (fixup) => shas.has(fixup.sha) || patchIds.has(fixup.patchId);
+  return ({ sha, patchId }) => shas.has(sha) || (patchId !== undefined && patchIds.has(patchId));
 }
 
 function rejectionCheckFor(
@@ -130,6 +132,24 @@ export function isOpenedByEdit(thread: ThreadMessages): boolean {
 const isAgentMessage = (message: { author?: string }) =>
   message.author !== REVIEWER_AUTHOR && message.author !== REVIEWER_EDIT_AUTHOR;
 
+// The fixups under judgment are approved together, so the latest approval and those recorded at
+// the same instant form one approval, undone by a later undo or a later rejection of any of them.
+function standingApproval(own: ReviewDecision[]): ReviewDecision[] {
+  const latest = latestOf(own, ['approved', 'unapproved']);
+  if (latest?.kind !== 'approved') return [];
+  const approved = own.filter(
+    (decision) => decision.kind === 'approved' && decidedAt(decision) === decidedAt(latest),
+  );
+  const isApproved = matcherFor(approved);
+  const rejectedSince = own.some(
+    (decision) =>
+      decision.kind === 'rejected' &&
+      decidedAt(decision) >= decidedAt(latest) &&
+      isApproved({ sha: decision.fixupSha, patchId: decision.patchId }),
+  );
+  return rejectedSince ? [] : approved;
+}
+
 export function deriveThreadReviewState(
   threadId: string,
   fixups: ThreadFixup[],
@@ -142,18 +162,9 @@ export function deriveThreadReviewState(
 
   const isRejected = rejectionCheckFor(threadId, decisions);
   const unrejected = fixups.filter((fixup) => !isRejected(fixup));
-  const approval = latestOf(own, ['approved', 'unapproved']);
-  const approvalStands =
-    approval?.kind === 'approved' &&
-    !own.some(
-      (decision) =>
-        decision.kind === 'rejected' &&
-        decidedAt(decision) >= decidedAt(approval) &&
-        (decision.fixupSha === approval.fixupSha ||
-          (decision.patchId !== undefined && decision.patchId === approval.patchId)),
-    );
-  // With no fixup left, the approved one is being folded and the fold record has not landed yet.
-  if (approvalStands && unrejected.every(matcherFor([approval]))) return 'approved';
+  const approved = standingApproval(own);
+  // With no fixup left, the approved ones are being folded and the fold record has not landed yet.
+  if (approved.length > 0 && unrejected.every(matcherFor(approved))) return 'approved';
   if (unrejected.length > 0) return 'awaiting-approval';
   if (!own.some((decision) => decision.kind === 'rejected')) {
     const messages = thread.messages ?? [];
@@ -228,7 +239,7 @@ function rejectionAwaitingAgent(
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
   state: 'rejected' | 'withdrawn',
-): string | undefined | null {
+): string[] | null {
   const rejections = decisions.filter(
     (decision) => decision.threadId === thread.id && decision.kind === 'rejected',
   );
@@ -237,10 +248,15 @@ function rejectionAwaitingAgent(
   if (last && isAgentMessage(last) && (Date.parse(last.createdAt) || 0) >= decidedAt(latest)) {
     return null;
   }
-  const leftInRange = fixups.find(matcherFor(rejections))?.sha;
-  if (state === 'withdrawn' && leftInRange === undefined) return null;
+  const leftInRange = fixups.filter(matcherFor(rejections)).map(({ sha }) => sha);
+  if (state === 'withdrawn' && leftInRange.length === 0) return null;
   return leftInRange;
 }
+
+type FixupsToDrop = Pick<ThreadAwaitingAgent, 'rejectedFixupSha' | 'rejectedFixupShas'>;
+
+const fixupsToDrop = (shas: string[]): FixupsToDrop =>
+  shas[0] === undefined ? {} : { rejectedFixupSha: shas[0], rejectedFixupShas: shas };
 
 // When the agent's current turn on the thread began: its last message, latest rejection or deletion.
 function turnStartOf(thread: ThreadTurn, decisions: ReviewDecision[]): number {
@@ -259,10 +275,10 @@ function deletionTurnOn(
   fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
   decisions: ReviewDecision[],
   deletion: ReviewDecision,
-): Pick<ThreadAwaitingAgent, 'state' | 'label' | 'rejectedFixupSha'> | null {
+): (Pick<ThreadAwaitingAgent, 'state' | 'label'> & FixupsToDrop) | null {
   const turn = { state: 'deleted' as const, label: reviewStateLabel('deleted') };
-  const leftInRange = fixupsByThread?.get(thread.id)?.[0]?.sha;
-  if (leftInRange !== undefined) return { ...turn, rejectedFixupSha: leftInRange };
+  const leftInRange = (fixupsByThread?.get(thread.id) ?? []).map(({ sha }) => sha);
+  if (leftInRange.length > 0) return { ...turn, ...fixupsToDrop(leftInRange) };
   const own = decisions.filter((decision) => decision.threadId === thread.id);
   const handover = latestOf(own, ['handed']);
   if (!handover || decidedAt(handover) >= decidedAt(deletion)) return null;
@@ -316,7 +332,7 @@ function agentTurnOn(
   thread: ThreadTurn,
   fixupsByThread: ReadonlyMap<string, ThreadFixup[]> | undefined,
   decisions: ReviewDecision[],
-): Pick<ThreadAwaitingAgent, 'state' | 'label' | 'rejectedFixupSha'> | null {
+): (Pick<ThreadAwaitingAgent, 'state' | 'label'> & FixupsToDrop) | null {
   const deletion = latestOf(
     decisions.filter((decision) => decision.threadId === thread.id),
     ['deleted'],
@@ -340,13 +356,9 @@ function agentTurnOn(
     return replied ? { state, label: reviewStateLabel(state) } : null;
   }
   if (state !== 'rejected' && state !== 'withdrawn') return null;
-  const rejectedFixupSha = rejectionAwaitingAgent(thread, fixups, decisions, state);
-  if (rejectedFixupSha === null) return null;
-  return {
-    state,
-    label: reviewStateLabel(state),
-    ...(rejectedFixupSha === undefined ? {} : { rejectedFixupSha }),
-  };
+  const rejectedFixupShas = rejectionAwaitingAgent(thread, fixups, decisions, state);
+  if (rejectedFixupShas === null) return null;
+  return { state, label: reviewStateLabel(state), ...fixupsToDrop(rejectedFixupShas) };
 }
 
 export function selectThreadsAwaitingAgent(
@@ -370,15 +382,19 @@ export function selectThreadsAwaitingAgent(
   });
 }
 
-// The fixup under judgment: the one not yet rejected, when there is exactly one.
-export function pendingFixupFor(
+// A lone pending fixup on a thread a reviewer edit answered is taken as that edit.
+export function reviewerEditFixups<T>(thread: ThreadMessages, pending: readonly T[]): T[] {
+  const edited = (thread.messages ?? []).some(({ author }) => author === REVIEWER_EDIT_AUTHOR);
+  return edited && pending.length === 1 ? [...pending] : [];
+}
+
+export function pendingFixupsFor(
   threadId: string,
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
-): ThreadFixup | null {
+): ThreadFixup[] {
   const isRejected = rejectionCheckFor(threadId, decisions);
-  const pending = fixups.filter((fixup) => !isRejected(fixup));
-  return pending.length === 1 ? (pending[0] ?? null) : null;
+  return fixups.filter((fixup) => !isRejected(fixup));
 }
 
 // Handed over since the agent's turn began, by the last message or rejection, and not answered yet.

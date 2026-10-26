@@ -516,7 +516,8 @@ describe('CommentThreadCard', () => {
             thread={mockThread}
             review={{
               state: 'awaiting-approval',
-              fixupSha: 'abc1234',
+              pendingFixups: [{ fixupSha: 'abc1234' }],
+              revertibleFixups: [],
               targetCommit: 'b7c2e10',
               responding: false,
               onDecide: vi.fn(),
@@ -753,7 +754,8 @@ describe('CommentThreadCard', () => {
 
   const awaitingReview = {
     state: 'awaiting-approval' as const,
-    fixupSha: 'abc1234',
+    pendingFixups: [{ fixupSha: 'abc1234' }],
+    revertibleFixups: [] as Array<{ fixupSha: string }>,
     targetCommit: 'b7c2e10',
     responding: false,
     onDecide: vi.fn(),
@@ -762,12 +764,66 @@ describe('CommentThreadCard', () => {
     onShowView: vi.fn(),
   };
 
+  it('approves and rejects every fixup under judgment at once', async () => {
+    const user = userEvent.setup();
+    const onDecide = vi.fn();
+    const bundle = [{ fixupSha: 'aaaa', patchId: 'patch-a' }, { fixupSha: 'bbbb' }];
+    render(
+      <CommentThreadCard
+        thread={mockThread}
+        review={{ ...awaitingReview, pendingFixups: bundle, onDecide }}
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '승인' }));
+    await user.click(screen.getByRole('button', { name: '거절' }));
+
+    expect(onDecide.mock.calls).toEqual([
+      [mockThread.id, 'approved', bundle],
+      [mockThread.id, 'rejected', bundle],
+    ]);
+  });
+
+  it('reverts the fixup a reviewer edit made', async () => {
+    const user = userEvent.setup();
+    const onDecide = vi.fn();
+    const renderCard = (revertibleFixups: Array<{ fixupSha: string }>) =>
+      render(
+        <CommentThreadCard
+          thread={mockThread}
+          review={{
+            ...awaitingReview,
+            state: 'approved',
+            pendingFixups: [{ fixupSha: 'eeee' }],
+            revertibleFixups,
+            onDecide,
+          }}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />,
+      );
+
+    const { unmount } = renderCard([{ fixupSha: 'eeee' }]);
+    await user.click(screen.getByRole('button', { name: '되돌리기' }));
+    expect(onDecide).toHaveBeenCalledWith(mockThread.id, 'rejected', [{ fixupSha: 'eeee' }]);
+    unmount();
+    renderCard([]);
+    expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
+  });
+
   it('shows that the agent is responding in place of the state chip', () => {
     const renderCard = (responding: boolean) =>
       render(
         <CommentThreadCard
           thread={mockThread}
-          review={{ ...awaitingReview, state: 'awaiting-fix', fixupSha: null, responding }}
+          review={{ ...awaitingReview, state: 'awaiting-fix', pendingFixups: [], responding }}
           onResolveThread={vi.fn()}
           onReplyToThread={vi.fn().mockResolvedValue(undefined)}
           onRemoveMessage={vi.fn()}
@@ -788,7 +844,7 @@ describe('CommentThreadCard', () => {
     render(
       <CommentThreadCard
         thread={mockThread}
-        review={{ ...awaitingReview, state: 'awaiting-fix', fixupSha: null, responding: true }}
+        review={{ ...awaitingReview, state: 'awaiting-fix', pendingFixups: [], responding: true }}
         onResolveThread={vi.fn()}
         onReplyToThread={vi.fn().mockResolvedValue(undefined)}
         onRemoveMessage={vi.fn()}

@@ -306,6 +306,30 @@ const next = true;
       expect(result.current.decisions).toEqual([]);
     });
 
+    it('records a decision on several fixups at one instant, so they count as one approval', () => {
+      let tick = 0;
+      const stamp = vi
+        .spyOn(Date.prototype, 'toISOString')
+        .mockImplementation(() => new Date(Date.UTC(2026, 0, 1, 0, 0, tick++)).toUTCString());
+      try {
+        const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
+
+        act(() => {
+          result.current.recordFixupDecisions('t1', 'approved', [
+            { fixupSha: 'a'.repeat(40), patchId: 'change-a' },
+            { fixupSha: 'b'.repeat(40) },
+          ]);
+        });
+
+        const [first, second] = result.current.decisions;
+        expect(first).toMatchObject({ fixupSha: 'a'.repeat(40), patchId: 'change-a' });
+        expect(second?.fixupSha).toBe('b'.repeat(40));
+        expect(second?.at).toBe(first?.at);
+      } finally {
+        stamp.mockRestore();
+      }
+    });
+
     it('records an undo instead of deleting the approval', () => {
       const { result } = renderHook(() => useDiffComments('main', 'feature-branch', 'abc123'));
 

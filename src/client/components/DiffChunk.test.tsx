@@ -355,13 +355,22 @@ describe('SideBySideDiffChunk fixup overlay', () => {
     expect(screen.queryByTestId('fixup-overlay-card')).toBeNull();
   });
 
-  it('hides the overlay card when the thread has more than one fixup', () => {
+  it('draws a card for each fixup of the thread in order and approves them together', () => {
+    const decideFixups = vi.fn();
     renderSplit({
       enabled: true,
       fixupsByThread: new Map([['t1', [fixup('a'.repeat(40)), fixup('b'.repeat(40))]]]),
+      decideFixups,
     });
 
-    expect(screen.queryByTestId('fixup-overlay-card')).toBeNull();
+    const cards = screen.getAllByTestId('fixup-overlay-card');
+    expect(cards.map((card) => card.textContent?.slice(0, 7))).toEqual(['aaaaaaa', 'bbbbbbb']);
+
+    fireEvent.click(screen.getByRole('button', { name: '승인' }));
+    expect(decideFixups).toHaveBeenCalledWith('t1', 'approved', [
+      { fixupSha: 'a'.repeat(40), patchId: `patch-${'a'.repeat(40)}` },
+      { fixupSha: 'b'.repeat(40), patchId: `patch-${'b'.repeat(40)}` },
+    ]);
   });
 
   it('draws no overlay card under an outdated thread but still shows its review controls', () => {
@@ -969,7 +978,7 @@ describe('editing the reviewed code directly', () => {
   });
 
   it('reverts an approved edit, replied to or not, by rejecting it', () => {
-    const recordDecision = vi.fn();
+    const decideFixups = vi.fn();
     const answered = comment({
       messages: [
         ...comment().messages,
@@ -1001,7 +1010,7 @@ describe('editing the reviewed code directly', () => {
     renderEditable({
       threads: [answered],
       overlay: {
-        recordDecision,
+        decideFixups,
         fixupsByThread: new Map([['c1', [fixup]]]),
         decisions: [
           { threadId: 'c1', kind: 'approved', fixupSha: fixup.sha, at: '2026-01-02T00:00:00Z' },
@@ -1012,7 +1021,9 @@ describe('editing the reviewed code directly', () => {
     expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '되돌리기' }));
 
-    expect(recordDecision).toHaveBeenCalledWith('c1', 'rejected', fixup.sha);
+    expect(decideFixups).toHaveBeenCalledWith('c1', 'rejected', [
+      { fixupSha: fixup.sha, patchId: 'patch-e' },
+    ]);
   });
 
   it('shows no pencil when the review cannot take edits', () => {

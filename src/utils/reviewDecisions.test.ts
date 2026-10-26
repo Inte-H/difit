@@ -16,7 +16,8 @@ import {
   isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
-  pendingFixupFor,
+  pendingFixupsFor,
+  reviewerEditFixups,
   reviewStateLabel,
   selectOpenThreads,
   selectThreadsAwaitingAgent,
@@ -102,7 +103,7 @@ describe('deriveThreadReviewState', () => {
 
     const answer = fixup('c'.repeat(40));
     expect(deriveThreadReviewState('t1', [rewritten, answer], decisions)).toBe('awaiting-approval');
-    expect(pendingFixupFor('t1', [rewritten, answer], decisions)).toBe(answer);
+    expect(pendingFixupsFor('t1', [rewritten, answer], decisions)).toEqual([answer]);
   });
 
   it('is awaiting-fix with no fixup and no decision', () => {
@@ -139,10 +140,54 @@ describe('deriveThreadReviewState', () => {
     const approved = [decision('approved', 'aaaa')];
 
     expect(deriveThreadReviewState('t1', [fixup('bbbb')], approved)).toBe('awaiting-approval');
-    expect(pendingFixupFor('t1', [fixup('bbbb')], approved)?.sha).toBe('bbbb');
+    expect(pendingFixupsFor('t1', [fixup('bbbb')], approved).map(({ sha }) => sha)).toEqual([
+      'bbbb',
+    ]);
     expect(deriveThreadReviewState('t1', [fixup('aaaa'), fixup('bbbb')], approved)).toBe(
       'awaiting-approval',
     );
+  });
+
+  it('is approved once every fixup still standing was approved together', () => {
+    const fixups = [fixup('aaaa'), fixup('bbbb'), fixup('cccc')];
+    const bundle = [
+      decision('rejected', 'cccc', '2026-01-01T00:00:00Z'),
+      decision('approved', 'aaaa', '2026-01-02T00:00:00Z'),
+      decision('approved', 'bbbb', '2026-01-02T00:00:00Z'),
+    ];
+
+    expect(deriveThreadReviewState('t1', fixups, bundle)).toBe('approved');
+  });
+
+  it('asks again when only an earlier approval covers some of the fixups', () => {
+    const fixups = [fixup('aaaa'), fixup('bbbb')];
+    const earlier = decision('approved', 'aaaa', '2026-01-01T00:00:00Z');
+    const later = decision('approved', 'bbbb', '2026-01-02T00:00:00Z');
+
+    expect(deriveThreadReviewState('t1', fixups, [earlier])).toBe('awaiting-approval');
+    expect(deriveThreadReviewState('t1', fixups, [earlier, later])).toBe('awaiting-approval');
+  });
+
+  it('drops the whole approval when one fixup of it is rejected later', () => {
+    const fixups = [fixup('aaaa'), fixup('bbbb')];
+    const decisions = [
+      decision('approved', 'aaaa', '2026-01-01T00:00:00Z'),
+      decision('approved', 'bbbb', '2026-01-01T00:00:00Z'),
+      decision('rejected', 'aaaa', '2026-01-02T00:00:00Z'),
+    ];
+
+    expect(deriveThreadReviewState('t1', fixups, decisions)).toBe('awaiting-approval');
+  });
+
+  it('undoes the whole approval with one undo record', () => {
+    const fixups = [fixup('aaaa'), fixup('bbbb')];
+    const decisions = [
+      decision('approved', 'aaaa', '2026-01-01T00:00:00Z'),
+      decision('approved', 'bbbb', '2026-01-01T00:00:00Z'),
+      decision('unapproved', 'bbbb', '2026-01-02T00:00:00Z'),
+    ];
+
+    expect(deriveThreadReviewState('t1', fixups, decisions)).toBe('awaiting-approval');
   });
 
   it('keeps an approval after a rebase rewrites the approved fixup’s sha', () => {
@@ -389,14 +434,32 @@ describe('commentPanelStatus', () => {
   });
 });
 
-describe('pendingFixupFor', () => {
-  it('returns the single fixup not yet rejected, and null when there are several or none', () => {
-    expect(pendingFixupFor('t1', [fixup('aaaa')], [])?.sha).toBe('aaaa');
+describe('reviewerEditFixups', () => {
+  it('takes a lone pending fixup on a thread a reviewer edit answered', () => {
+    const edited = {
+      messages: [{ author: REVIEWER_AUTHOR }, { author: REVIEWER_EDIT_AUTHOR }],
+    };
+
+    expect(reviewerEditFixups(edited, ['eeee'])).toEqual(['eeee']);
+    expect(reviewerEditFixups(edited, ['eeee', 'cccc'])).toEqual([]);
+    expect(reviewerEditFixups({ messages: [{ author: REVIEWER_AUTHOR }] }, ['eeee'])).toEqual([]);
+  });
+});
+
+describe('pendingFixupsFor', () => {
+  it('returns the fixups not yet rejected, oldest first', () => {
+    const shas = (fixups: ThreadFixup[]) => fixups.map(({ sha }) => sha);
+    expect(shas(pendingFixupsFor('t1', [fixup('aaaa')], []))).toEqual(['aaaa']);
     expect(
-      pendingFixupFor('t1', [fixup('aaaa'), fixup('bbbb')], [decision('rejected', 'aaaa')])?.sha,
-    ).toBe('bbbb');
-    expect(pendingFixupFor('t1', [fixup('aaaa'), fixup('bbbb')], [])).toBeNull();
-    expect(pendingFixupFor('t1', [], [])).toBeNull();
+      shas(
+        pendingFixupsFor(
+          't1',
+          [fixup('aaaa'), fixup('bbbb'), fixup('cccc')],
+          [decision('rejected', 'bbbb')],
+        ),
+      ),
+    ).toEqual(['aaaa', 'cccc']);
+    expect(pendingFixupsFor('t1', [], [])).toEqual([]);
   });
 });
 
@@ -625,6 +688,22 @@ describe('selectThreadsAwaitingAgent', () => {
     const dropped = selectThreadsAwaitingAgent([thread('t1', ['User'])], new Map(), rejected);
     expect(dropped).toMatchObject([{ threadId: 't1', state: 'rejected' }]);
     expect(dropped[0]).not.toHaveProperty('rejectedFixupSha');
+  });
+
+  it('names every rejected fixup still in the range, and every fixup of a deleted thread', () => {
+    const fixups = new Map([['t1', [fixup('aaaa'), fixup('bbbb')]]]);
+    const rejected = [
+      decision('rejected', 'aaaa', '2026-01-02T00:00:00Z'),
+      decision('rejected', 'bbbb', '2026-01-02T00:00:00Z'),
+    ];
+    const deleted = [decision('deleted', '', '2026-01-02T00:00:00Z')];
+
+    expect(selectThreadsAwaitingAgent([thread('t1', ['User'])], fixups, rejected)).toMatchObject([
+      { state: 'rejected', rejectedFixupSha: 'aaaa', rejectedFixupShas: ['aaaa', 'bbbb'] },
+    ]);
+    expect(selectThreadsAwaitingAgent([thread('t1', ['User'])], fixups, deleted)).toMatchObject([
+      { state: 'deleted', rejectedFixupSha: 'aaaa', rejectedFixupShas: ['aaaa', 'bbbb'] },
+    ]);
   });
 
   it('gives a rejection back to the reviewer once the agent has answered after it', () => {

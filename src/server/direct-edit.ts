@@ -3,12 +3,9 @@ import { existsSync, promises as fs } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 
-import {
-  AUTOSQUASH_PREFIX,
-  type DirectEditRejection,
-  REVIEW_THREAD_TRAILER,
-} from '../types/diff.js';
+import { type DirectEditRejection, REVIEW_THREAD_TRAILER } from '../types/diff.js';
 
+import { autosquashGroups } from './autosquash.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { type GitOptions, runGit } from './run-git.js';
 
@@ -220,44 +217,6 @@ async function mergeFile(
 interface Change {
   before: Buffer;
   after: Buffer;
-}
-
-interface TodoCommit {
-  sha: string;
-  subject: string;
-}
-
-// Resolves a fixup, squash or amend subject the way `rebase --autosquash` does: an exact subject
-// first, then a commit id, then a subject prefix.
-function squashTarget(earlier: TodoCommit[], subject: string): TodoCommit | undefined {
-  if (!AUTOSQUASH_PREFIX.test(subject)) return undefined;
-  let named = subject;
-  while (AUTOSQUASH_PREFIX.test(named)) named = named.replace(AUTOSQUASH_PREFIX, '');
-  return (
-    earlier.find((commit) => commit.subject === named) ??
-    (/^[0-9a-f]{4,64}$/.test(named)
-      ? earlier.find((commit) => commit.sha.startsWith(named))
-      : undefined) ??
-    earlier.find((commit) => commit.subject.startsWith(named))
-  );
-}
-
-// The commits in the order `rebase --autosquash` picks them: each commit that names another moves
-// behind that commit and the ones already moved there.
-function autosquashGroups(commits: TodoCommit[]): TodoCommit[][] {
-  const groupOf = new Map<string, TodoCommit[]>();
-  const groups: TodoCommit[][] = [];
-  commits.forEach((commit, index) => {
-    const target = squashTarget(commits.slice(0, index), commit.subject);
-    let group = target && groupOf.get(target.sha);
-    if (!group) {
-      group = [];
-      groups.push(group);
-    }
-    group.push(commit);
-    groupOf.set(commit.sha, group);
-  });
-  return groups;
 }
 
 // Replays, for this one file, what autosquash will do from the start of the review: the earliest

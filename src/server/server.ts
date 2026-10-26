@@ -1196,7 +1196,7 @@ export async function startServer(options: ServerOptions): Promise<{
           waiting.threadId,
           waiting.state,
           lastMessageId,
-          waiting.rejectedFixupSha,
+          waiting.rejectedFixupShas,
         ]);
       };
       const known = new Set(
