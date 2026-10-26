@@ -408,8 +408,9 @@ export function selectThreadsAwaitingAgent(
   });
 }
 
-// The fixups standing on the thread when each is the one a reviewer edit wrote: the last authored
-// by the time of that edit's message. Empty when any other fixup stands beside them.
+// An edit is accepted only while no fixup on the thread is under judgment, so its fixup is the last
+// one authored by the time of its message. None is offered beside another standing fixup, which
+// may build on the edit.
 export function reviewerEditFixups(
   thread: { id: string } & ThreadMessages,
   fixups: ThreadFixup[],

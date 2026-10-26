@@ -573,6 +573,9 @@ describe('reviewerEditFixups', () => {
     const decisions = [decision('approved', 'eeee', at(6)), decision('approved', 'aaaa', at(6))];
 
     expect(reviewerEditFixups(thread, fixups, decisions)).toEqual([]);
+    expect(
+      shas(reviewerEditFixups(thread, fixups, [...decisions, decision('rejected', 'aaaa', at(7))])),
+    ).toEqual(['eeee']);
   });
 
   it('pairs a second edit with its own fixup, not the agent fixup rejected before it', () => {
