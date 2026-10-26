@@ -2052,6 +2052,20 @@ describe('Server Integration Tests', () => {
       await waitForShutdown();
     });
 
+    it('drops the pending shutdown once the server is closed', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9080,
+      });
+      const closeOnly = await openHeartbeat(port);
+
+      closeOnly();
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
+
+      expect(process.exit).not.toHaveBeenCalled();
+    });
+
     it('keeps running when a tab reconnects within the grace period, as on reload', async () => {
       const { port, server } = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },

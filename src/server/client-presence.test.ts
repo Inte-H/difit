@@ -69,6 +69,31 @@ describe('createClientPresence', () => {
     expect(onAllGone).not.toHaveBeenCalled();
   });
 
+  it('reports all clients gone at most once', () => {
+    const onAllGone = vi.fn();
+    const presence = createClientPresence(onAllGone, GRACE_MS);
+    presence.join()();
+    vi.advanceTimersByTime(GRACE_MS);
+
+    presence.join()();
+    vi.advanceTimersByTime(GRACE_MS);
+
+    expect(onAllGone).toHaveBeenCalledTimes(1);
+  });
+
+  it('never reports once stopped, even with a report already pending', () => {
+    const onAllGone = vi.fn();
+    const presence = createClientPresence(onAllGone, GRACE_MS);
+    presence.join()();
+
+    presence.stop();
+    vi.advanceTimersByTime(GRACE_MS);
+    presence.join()();
+    vi.advanceTimersByTime(GRACE_MS);
+
+    expect(onAllGone).not.toHaveBeenCalled();
+  });
+
   it('does not report anything before any client has joined', () => {
     const onAllGone = vi.fn();
     createClientPresence(onAllGone, GRACE_MS);

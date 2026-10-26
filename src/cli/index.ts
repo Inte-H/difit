@@ -290,20 +290,27 @@ program
       }
 
       const pinned = pinSelection(selection, repoPath);
-      const { url, port, isEmpty, settleDirectEdits, endCommentWaits, stopSymbolIndex } =
-        await startServer({
-          selection: pinned.selection,
-          preferredPort: options.port,
-          host: options.host,
-          openBrowser: options.open,
-          clearComments: options.clean,
-          keepAlive: options.keepAlive,
-          contextLines: options.context,
-          diffMode: determineDiffMode(selection, compareWith),
-          repoPath,
-          ...(pinned.followedRef ? { followedRef: pinned.followedRef } : {}),
-          ...(commentImports.length > 0 ? { commentImports } : {}),
-        });
+      const {
+        url,
+        port,
+        isEmpty,
+        settleDirectEdits,
+        stopClientPresence,
+        endCommentWaits,
+        stopSymbolIndex,
+      } = await startServer({
+        selection: pinned.selection,
+        preferredPort: options.port,
+        host: options.host,
+        openBrowser: options.open,
+        clearComments: options.clean,
+        keepAlive: options.keepAlive,
+        contextLines: options.context,
+        diffMode: determineDiffMode(selection, compareWith),
+        repoPath,
+        ...(pinned.followedRef ? { followedRef: pinned.followedRef } : {}),
+        ...(commentImports.length > 0 ? { commentImports } : {}),
+      });
 
       if (backgroundMode) {
         emitBackgroundHandshake({ port, url, pid: process.pid });
@@ -345,6 +352,7 @@ program
         if (shuttingDown) process.exit(130);
         shuttingDown = true;
         console.log('\n👋 Shutting down difit server...');
+        stopClientPresence?.();
         await settleDirectEdits?.();
         await endCommentWaits?.();
         await stopSymbolIndex?.();

@@ -1,13 +1,20 @@
-// Long enough for a reloaded tab to load the page again and reconnect.
 export const CLIENT_GONE_GRACE_MS = 3000;
 
 export interface ClientPresence {
   join(): () => void;
+  stop(): void;
 }
 
 export function createClientPresence(onAllGone: () => void, graceMs: number): ClientPresence {
   let connected = 0;
   let pending: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  const stop = () => {
+    stopped = true;
+    clearTimeout(pending);
+    pending = undefined;
+  };
 
   return {
     join() {
@@ -20,10 +27,14 @@ export function createClientPresence(onAllGone: () => void, graceMs: number): Cl
         if (left) return;
         left = true;
         connected -= 1;
-        if (connected === 0) {
-          pending = setTimeout(onAllGone, graceMs);
+        if (connected === 0 && !stopped) {
+          pending = setTimeout(() => {
+            stop();
+            onAllGone();
+          }, graceMs);
         }
       };
     },
+    stop,
   };
 }

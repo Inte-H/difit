@@ -191,6 +191,7 @@ export async function startServer(options: ServerOptions): Promise<{
   isEmpty?: boolean;
   server?: Server;
   settleDirectEdits?: () => Promise<unknown>;
+  stopClientPresence?: () => void;
   endCommentWaits?: () => Promise<void>;
   stopSymbolIndex?: () => Promise<void>;
   // Settles once every index build that the opened reviews asked for has ended.
@@ -2056,6 +2057,7 @@ export async function startServer(options: ServerOptions): Promise<{
     options.preferredPort || 4966,
     options.host || 'localhost',
   );
+  server.on('close', () => clientPresence.stop());
 
   // Security warning for non-localhost binding
   if (options.host && !LOOPBACK_ADDRESSES.has(options.host)) {
@@ -2091,6 +2093,7 @@ export async function startServer(options: ServerOptions): Promise<{
     isEmpty: initialDiffData.isEmpty || false,
     server,
     settleDirectEdits: () => directEditQueue,
+    stopClientPresence: () => clientPresence.stop(),
     endCommentWaits,
     stopSymbolIndex: async () => {
       await symbolIndex?.stop();
