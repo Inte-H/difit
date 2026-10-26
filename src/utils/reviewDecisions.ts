@@ -408,10 +408,34 @@ export function selectThreadsAwaitingAgent(
   });
 }
 
-// A lone pending fixup on a thread a reviewer edit answered is taken as that edit.
-export function reviewerEditFixups<T>(thread: ThreadMessages, pending: readonly T[]): T[] {
-  const edited = (thread.messages ?? []).some(({ author }) => author === REVIEWER_EDIT_AUTHOR);
-  return edited && pending.length === 1 ? [...pending] : [];
+type EditedThread = {
+  id: string;
+  messages?: ReadonlyArray<{ author?: string; createdAt?: string }>;
+};
+
+// An edit is taken only while no fixup on the thread is under judgment, and the server writes its
+// fixup just before the message on the same clock: its fixup is the last one authored by then.
+export function reviewerEditFixups(
+  thread: EditedThread,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): ThreadFixup[] {
+  const authoredAt = (fixup: ThreadFixup) => Date.parse(fixup.authoredAt) || 0;
+  const written = new Set(
+    (thread.messages ?? [])
+      .filter(({ author }) => author === REVIEWER_EDIT_AUTHOR)
+      .flatMap(({ createdAt }) => {
+        const editedAt = Date.parse(createdAt ?? '') || 0;
+        const latest = fixups
+          .filter((fixup) => authoredAt(fixup) <= editedAt)
+          .reduce<ThreadFixup | undefined>(
+            (last, fixup) => (last && authoredAt(last) > authoredAt(fixup) ? last : fixup),
+            undefined,
+          );
+        return latest ? [latest] : [];
+      }),
+  );
+  return pendingFixupsFor(thread.id, fixups, decisions).filter((fixup) => written.has(fixup));
 }
 
 export function pendingFixupsFor(
