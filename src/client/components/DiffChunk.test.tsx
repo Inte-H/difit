@@ -1189,14 +1189,18 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
     ],
   };
 
+  const DRAGGED = '.drag-selected, [class*="after:bg-blue-100"]';
+  const contentOf = (row: Element) =>
+    renumbered.lines.map((line) => line.content).find((text) => row.textContent?.includes(text));
+  const pickRows = (rows: Element[]) => ({
+    rowOf: (content: string) => rows.find((row) => contentOf(row) === content)!,
+    dragged: () =>
+      rows.filter((row) => row.matches(DRAGGED) || row.querySelector(DRAGGED)).map(contentOf),
+  });
+
   it('keeps a drag from a deleted line to the old side', async () => {
     const { onAddComment, rows } = renderChunk(mode, { chunk: renumbered });
-    const DRAGGED = '.drag-selected, [class*="after:bg-blue-100"]';
-    const contentOf = (row: Element) =>
-      renumbered.lines.map((line) => line.content).find((text) => row.textContent?.includes(text));
-    const rowOf = (content: string) => rows.find((row) => contentOf(row) === content)!;
-    const dragged = () =>
-      rows.filter((row) => row.matches(DRAGGED) || row.querySelector(DRAGGED)).map(contentOf);
+    const { rowOf, dragged } = pickRows(rows);
 
     // Both layouts start a row with the old line number.
     fireEvent.mouseDown(rowOf('// first note').children[0]!);
@@ -1237,9 +1241,6 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
       },
     ],
   });
-  const textOf = (row: Element) =>
-    renumbered.lines.map((line) => line.content).find((text) => row.textContent?.includes(text));
-
   it('shows an old-side comment under the unchanged line it ends on', () => {
     const { rows } = renderChunk(mode, {
       chunk: renumbered,
@@ -1248,8 +1249,8 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
 
     const shown = screen.getAllByText('Why drop these notes?');
     expect(shown).toHaveLength(1);
-    const guard = rows.find((row) => textOf(row) === 'guard();')!;
-    const after = rows.find((row) => textOf(row) === 'after();')!;
+    const guard = rows.find((row) => contentOf(row) === 'guard();')!;
+    const after = rows.find((row) => contentOf(row) === 'after();')!;
     expect(
       guard.compareDocumentPosition(shown[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1266,8 +1267,8 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
 
     const shown = screen.getAllByText('Saved before sides existed');
     expect(shown).toHaveLength(1);
-    const added = rows.find((row) => textOf(row) === 'added();')!;
-    const alsoAdded = rows.find((row) => textOf(row) === 'alsoAdded();')!;
+    const added = rows.find((row) => contentOf(row) === 'added();')!;
+    const alsoAdded = rows.find((row) => contentOf(row) === 'alsoAdded();')!;
     expect(
       added.compareDocumentPosition(shown[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1280,10 +1281,12 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
     'takes the old side when a drag from an unchanged line reaches deleted lines',
     async () => {
       const { onAddComment, rows } = renderChunk(mode, { chunk: renumbered });
-      const rowOf = (content: string) => rows.find((row) => textOf(row) === content)!;
+      const { rowOf, dragged } = pickRows(rows);
 
       fireEvent.mouseDown(rowOf('kept();').children[0]!);
       fireEvent.mouseMove(codeCell(mode, rowOf('// second note')));
+
+      expect(dragged()).toEqual(['kept();', '// first note', '// second note']);
       fireEvent.mouseUp(document);
       fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'These go' } });
       fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
