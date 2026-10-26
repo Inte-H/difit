@@ -62,6 +62,7 @@ function FixupOnlyGroup({
   ...viewerProps
 }: FixupOnlyGroupProps) {
   const { fixup, files } = group;
+  const parentSha = `${fixup.sha}^`;
   const addComment = useMemo<DiffViewerProps['onAddComment']>(
     () => onAddComment && ((...comment) => onAddComment(fixup.sha, ...comment)),
     [onAddComment, fixup.sha],
@@ -71,7 +72,7 @@ function FixupOnlyGroup({
     [files],
   );
   const { isLoading, openLines, prefetchFileContent, getMergedChunks } = useExpandedLines({
-    baseCommitish: `${fixup.sha}^`,
+    baseCommitish: parentSha,
     targetCommitish: fixup.sha,
     diffIdentity: fixup.sha,
   });
@@ -116,7 +117,7 @@ function FixupOnlyGroup({
             id={fixupFileElementId(fixup.sha, file.path)}
             data-fixup-only-file={file.path}
             // The lines are the fixup's own diff, so a deleted line is in the fixup's parent.
-            data-symbol-old-ref={`${fixup.sha}^`}
+            data-symbol-old-ref={parentSha}
             data-symbol-old-path={file.oldPath ?? file.path}
             data-symbol-new-ref={fixup.sha}
             className={`mb-6 ${isFocused ? 'rounded-md border-2 border-github-accent' : ''}`}
@@ -134,7 +135,7 @@ function FixupOnlyGroup({
               collapsedFiles={collapsed}
               onToggleCollapsed={toggleCollapsed}
               onToggleAllCollapsed={toggleAllCollapsed}
-              baseCommitish={`${fixup.sha}^`}
+              baseCommitish={parentSha}
               targetCommitish={fixup.sha}
               fileIndex={firstFileIndex + index}
               fixupOverlay={fixupOverlay}

@@ -1627,10 +1627,12 @@ describe.each<ChunkMode>(['unified', 'split'])('names clicked in fixup code (%s)
     const card = screen.getByTestId('fixup-overlay-card');
     expect(await clicked(card, 'three')).toMatchObject({ ref: sha, line: 12, column: 6 });
     const diffLine = container.querySelector('[data-symbol-side="new"]')!;
-    expect(await clicked(diffLine, 'first')).toMatchObject({
+    expect(await clicked(diffLine, 'first')).toEqual({
       name: 'first',
       ref: 'sec1111',
       from: 'src/example.ts',
+      line: 10,
+      column: 6,
     });
   });
 
