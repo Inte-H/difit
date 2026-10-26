@@ -433,6 +433,7 @@ export type RewordRejection =
   | 'target-not-in-head'
   | 'detached-head'
   | 'operation-in-progress'
+  | 'merge-commit'
   | 'empty-message'
   | 'no-change'
   | 'head-moved'

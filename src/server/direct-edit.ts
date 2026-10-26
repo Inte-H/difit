@@ -527,13 +527,15 @@ export type DirectRewordResult =
 // `--fixup=reword:`, but naming its target by SHA as fixups from the viewer do.
 export async function commitDirectReword(
   repoPath: string,
-  requested: ReviewedRange,
+  reviewTarget: string,
   reword: DirectReword,
 ): Promise<DirectRewordResult> {
   const resolve = (commitish: string) =>
     gitText(repoPath, ['rev-parse', '--verify', `${commitish}^{commit}`]);
-  const target = await resolve(requested.target);
+  const target = await resolve(reviewTarget);
   const amended = await resolve(reword.commit);
+  const parents = await gitText(repoPath, ['rev-list', '--parents', '-n', '1', amended]);
+  if (parents.split(' ').length > 2) return { ok: false, reason: 'merge-commit' };
   const message = withoutThreadTrailers(reword.message);
   if (message.length === 0) return { ok: false, reason: 'empty-message' };
   const written = `amend! ${amended}\n\n${withThreadTrailer(message, reword.threadId)}\n`;

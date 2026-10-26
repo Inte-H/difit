@@ -2722,15 +2722,11 @@ describe('Server Integration Tests', () => {
         const data = (await response.json()) as any;
 
         expect(response.status).toBe(200);
-        expect(commitDirectReword).toHaveBeenCalledWith(
-          expect.any(String),
-          { base: 'def4567', target: 'abc1234' },
-          {
-            commit: SECOND_SHA,
-            message: 'second, better\n\nExplains it.',
-            threadId: data.threadId,
-          },
-        );
+        expect(commitDirectReword).toHaveBeenCalledWith(expect.any(String), 'abc1234', {
+          commit: SECOND_SHA,
+          message: 'second, better\n\nExplains it.',
+          threadId: data.threadId,
+        });
         const { threads, decisions } = (await (
           await fetch(`http://localhost:${port}/api/comments-json${REVIEW}`)
         ).json()) as any;

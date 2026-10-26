@@ -1647,11 +1647,11 @@ export async function startServer(options: ServerOptions): Promise<{
     if (withoutThreadTrailers(request.message) === current) return refuseReword('no-change');
 
     const threadId = createId();
-    const result = await commitDirectReword(
-      repositoryPath,
-      { base: selection.baseCommitish, target: selection.targetCommitish },
-      { commit: commit.sha, message: request.message, threadId },
-    );
+    const result = await commitDirectReword(repositoryPath, selection.targetCommitish, {
+      commit: commit.sha,
+      message: request.message,
+      threadId,
+    });
     if (!result.ok) return refuseReword(result.reason, result.output);
     const binding = bindingForView(
       review,

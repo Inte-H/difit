@@ -452,9 +452,7 @@ export function CommitList({
                         aria-label="메시지 고치기"
                         title="메시지 고치기"
                         aria-expanded={rewording === commit.sha}
-                        onClick={() =>
-                          setRewording((current) => (current === commit.sha ? null : commit.sha))
-                        }
+                        onClick={() => setRewording(commit.sha)}
                         className={`shrink-0 px-2 text-github-text-muted hover:text-github-text-primary hover:bg-github-bg-tertiary focus:opacity-100 ${inDrawer || rewording === commit.sha ? '' : 'opacity-0 group-hover:opacity-100'}`}
                       >
                         <Pencil size={12} />

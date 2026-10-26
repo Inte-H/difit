@@ -68,7 +68,7 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       void save();
-    } else if (e.key === 'Escape') {
+    } else if (e.key === 'Escape' && !isSaving) {
       onClose();
     }
   };

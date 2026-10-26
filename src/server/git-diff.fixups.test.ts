@@ -580,15 +580,11 @@ describe('amend! commits made by commitDirectReword', () => {
     const repo = createRepo();
     const base = commit(repo, 'base', { 'f.txt': 'a\n' });
     const target = commit(repo, 'add feture', { 'g.txt': 'g\n' });
-    const result = await commitDirectReword(
-      repo,
-      { base, target },
-      {
-        commit: target,
-        message: 'add feature\n\nCo-Authored-By: someone <s@example.com>',
-        threadId: 't1',
-      },
-    );
+    const result = await commitDirectReword(repo, target, {
+      commit: target,
+      message: 'add feature\n\nCo-Authored-By: someone <s@example.com>',
+      threadId: 't1',
+    });
 
     const [amend] = await new GitDiffParser(repo).listFixupsForScreen({
       targetCommitish: target,

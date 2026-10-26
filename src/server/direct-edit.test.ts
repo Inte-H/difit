@@ -917,16 +917,16 @@ describe('commitDirectReword', () => {
   }
 
   it('commits an amend! with the tree of HEAD, leaving the working tree and index alone', async () => {
-    const { repo, base, target, later } = repoWithTarget();
+    const { repo, target, later } = repoWithTarget();
     write(repo, { 'f.ts': 'in progress\n', 'staged.ts': 'staged\n' });
     git(repo, 'add', 'staged.ts');
     const status = git(repo, 'status', '--porcelain');
 
-    const result = await commitDirectReword(
-      repo,
-      { base, target: later },
-      { commit: target, message: 'add feature\n\nExplains it.', threadId: 'thread-1' },
-    );
+    const result = await commitDirectReword(repo, later, {
+      commit: target,
+      message: 'add feature\n\nExplains it.',
+      threadId: 'thread-1',
+    });
 
     expect(result).toEqual({ ok: true, sha: git(repo, 'rev-parse', 'HEAD') });
     expect(git(repo, 'rev-parse', 'HEAD^')).toBe(later);
@@ -942,17 +942,13 @@ describe('commitDirectReword', () => {
   });
 
   it('adds the thread to a trailer block the message already ends with', async () => {
-    const { repo, base, target, later } = repoWithTarget();
+    const { repo, target, later } = repoWithTarget();
 
-    await commitDirectReword(
-      repo,
-      { base, target: later },
-      {
-        commit: target,
-        message: 'add feature\n\nCo-Authored-By: someone <s@example.com>',
-        threadId: 'thread-1',
-      },
-    );
+    await commitDirectReword(repo, later, {
+      commit: target,
+      message: 'add feature\n\nCo-Authored-By: someone <s@example.com>',
+      threadId: 'thread-1',
+    });
 
     expect(git(repo, 'log', '-1', '--format=%B')).toBe(
       `amend! ${target}\n\nadd feature\n\nCo-Authored-By: someone <s@example.com>\nReview-Thread: thread-1`,
@@ -960,31 +956,46 @@ describe('commitDirectReword', () => {
   });
 
   it('cleans the message as git commit does and drops thread trailers it carries', async () => {
-    const { repo, base, target, later } = repoWithTarget();
+    const { repo, target, later } = repoWithTarget();
 
-    await commitDirectReword(
-      repo,
-      { base, target: later },
-      {
-        commit: target,
-        message: '\r\n add feature  \r\n\r\n\r\n# kept\nReview-Thread: old\n\n',
-        threadId: 'thread-1',
-      },
-    );
+    await commitDirectReword(repo, later, {
+      commit: target,
+      message: '\r\n add feature  \r\n\r\n\r\n# kept\nReview-Thread: old\n\n',
+      threadId: 'thread-1',
+    });
 
     expect(git(repo, 'log', '-1', '--format=%B')).toBe(
       `amend! ${target}\n\n add feature\n\n# kept\n\nReview-Thread: thread-1`,
     );
   });
 
-  it('refuses a message left empty', async () => {
-    const { repo, base, target, later } = repoWithTarget();
+  it('refuses a merge, which folding flattens away', async () => {
+    const { repo, base, later } = repoWithTarget();
+    git(repo, 'checkout', '-q', '-b', 'side', base);
+    commit(repo, 'side', { 's.ts': 's\n' });
+    git(repo, 'checkout', '-q', 'main');
+    git(repo, 'merge', '-q', '--no-ff', '-m', 'merge side', 'side');
+    const merge = git(repo, 'rev-parse', 'HEAD');
 
-    const result = await commitDirectReword(
-      repo,
-      { base, target: later },
-      { commit: target, message: ' \n\nReview-Thread: old\n', threadId: 'thread-1' },
-    );
+    const result = await commitDirectReword(repo, merge, {
+      commit: merge,
+      message: 'merge the side branch',
+      threadId: 'thread-1',
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'merge-commit' });
+    expect(git(repo, 'rev-parse', 'HEAD')).toBe(merge);
+    expect(later).not.toBe(merge);
+  });
+
+  it('refuses a message left empty', async () => {
+    const { repo, target, later } = repoWithTarget();
+
+    const result = await commitDirectReword(repo, later, {
+      commit: target,
+      message: ' \n\nReview-Thread: old\n',
+      threadId: 'thread-1',
+    });
 
     expect(result).toEqual({ ok: false, reason: 'empty-message' });
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(later);
@@ -995,25 +1006,25 @@ describe('commitDirectReword', () => {
     git(repo, 'checkout', '-q', '-b', 'elsewhere', base);
     const head = commit(repo, 'other');
 
-    const result = await commitDirectReword(
-      repo,
-      { base, target: later },
-      { commit: target, message: 'add feature', threadId: 'thread-1' },
-    );
+    const result = await commitDirectReword(repo, later, {
+      commit: target,
+      message: 'add feature',
+      threadId: 'thread-1',
+    });
 
     expect(result).toEqual({ ok: false, reason: 'target-not-in-head' });
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(head);
   });
 
   it('refuses while HEAD is not on a branch', async () => {
-    const { repo, base, target, later } = repoWithTarget();
+    const { repo, target, later } = repoWithTarget();
     git(repo, 'checkout', '-q', '--detach');
 
-    const result = await commitDirectReword(
-      repo,
-      { base, target: later },
-      { commit: target, message: 'add feature', threadId: 'thread-1' },
-    );
+    const result = await commitDirectReword(repo, later, {
+      commit: target,
+      message: 'add feature',
+      threadId: 'thread-1',
+    });
 
     expect(result).toEqual({ ok: false, reason: 'detached-head' });
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(later);
@@ -1026,25 +1037,25 @@ describe('commitDirectReword', () => {
     git(repo, 'checkout', '-q', 'main');
     expect(() => git(repo, 'cherry-pick', side)).toThrow();
 
-    const result = await commitDirectReword(
-      repo,
-      { base, target: later },
-      { commit: target, message: 'add feature', threadId: 'thread-1' },
-    );
+    const result = await commitDirectReword(repo, later, {
+      commit: target,
+      message: 'add feature',
+      threadId: 'thread-1',
+    });
 
     expect(result).toEqual({ ok: false, reason: 'operation-in-progress' });
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(later);
   });
 
   it('does not run commit hooks', async () => {
-    const { repo, base, target, later } = repoWithTarget();
+    const { repo, target, later } = repoWithTarget();
     installPreCommitHook(repo, 'exit 1');
 
-    const result = await commitDirectReword(
-      repo,
-      { base, target: later },
-      { commit: target, message: 'add feature', threadId: 'thread-1' },
-    );
+    const result = await commitDirectReword(repo, later, {
+      commit: target,
+      message: 'add feature',
+      threadId: 'thread-1',
+    });
 
     expect(result.ok).toBe(true);
     expect(git(repo, 'log', '-1', '--format=%s')).toBe(`amend! ${target}`);
@@ -1052,15 +1063,15 @@ describe('commitDirectReword', () => {
 
   describe.skipIf(process.platform === 'win32')('a commit landing while the amend! is made', () => {
     it('stacks the amend! on that commit', async () => {
-      const { repo, base, target, later } = repoWithTarget();
+      const { repo, target, later } = repoWithTarget();
       process.env.BEFORE_UPDATE_REF =
         '[ -e .git/landed ] || { touch .git/landed; echo agent > agent.txt && git add -A && git commit -qm agent; } >/dev/null 2>&1';
 
-      const result = await commitDirectReword(
-        repo,
-        { base, target: later },
-        { commit: target, message: 'add feature', threadId: 'thread-1' },
-      );
+      const result = await commitDirectReword(repo, later, {
+        commit: target,
+        message: 'add feature',
+        threadId: 'thread-1',
+      });
 
       expect(result.ok).toBe(true);
       expect(git(repo, 'log', '--format=%s', '-3')).toBe(
@@ -1071,14 +1082,14 @@ describe('commitDirectReword', () => {
     });
 
     it('gives up when HEAD keeps moving', async () => {
-      const { repo, base, target, later } = repoWithTarget();
+      const { repo, target, later } = repoWithTarget();
       process.env.BEFORE_UPDATE_REF = 'git commit -q --allow-empty -m busy';
 
-      const result = await commitDirectReword(
-        repo,
-        { base, target: later },
-        { commit: target, message: 'add feature', threadId: 'thread-1' },
-      );
+      const result = await commitDirectReword(repo, later, {
+        commit: target,
+        message: 'add feature',
+        threadId: 'thread-1',
+      });
 
       expect(result).toMatchObject({ ok: false, reason: 'head-moved' });
       expect(git(repo, 'log', '--format=%s', '-4')).toBe(

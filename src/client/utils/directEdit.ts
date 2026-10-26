@@ -105,6 +105,8 @@ const REWORD_FAILURE_MESSAGES: Record<RewordRejection, string> = {
   'target-not-in-head': FAILURE_MESSAGES['target-not-in-head'],
   'detached-head': FAILURE_MESSAGES['detached-head'],
   'operation-in-progress': FAILURE_MESSAGES['operation-in-progress'],
+  'merge-commit':
+    '머지 커밋의 메시지는 고칠 수 없습니다. 접을 때 rebase가 머지 커밋을 펴서 고친 메시지가 들어갈 자리가 없습니다.',
   'empty-message': '메시지를 비울 수는 없습니다.',
   'no-change': '메시지가 바뀌지 않았습니다.',
   'head-moved': FAILURE_MESSAGES['head-moved'],

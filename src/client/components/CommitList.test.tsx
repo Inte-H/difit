@@ -364,6 +364,23 @@ describe('CommitList', () => {
       expect(save).not.toHaveBeenCalled();
     });
 
+    it('stays open while saving, so a refusal still shows', async () => {
+      let refuse: (failure: { message: string }) => void = () => {};
+      renderRewordable({
+        save: vi.fn(() => new Promise<{ message: string }>((resolve) => (refuse = resolve))),
+      });
+      fireEvent.click(editButtonOf(/2222222/));
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
+      fireEvent.change(editor, { target: { value: 'better' } });
+      fireEvent.click(screen.getByRole('button', { name: '저장' }));
+
+      fireEvent.keyDown(editor, { key: 'Escape' });
+      fireEvent.click(editButtonOf(/2222222/));
+      await act(async () => refuse({ message: 'refused' }));
+
+      expect(screen.getByRole('alert')).toHaveTextContent('refused');
+    });
+
     it('says so when the message cannot be read', async () => {
       renderRewordable({ load: vi.fn(async () => null) });
 
