@@ -261,6 +261,125 @@ describe('CommitList', () => {
     });
   });
 
+  describe('rewording a message', () => {
+    const MESSAGE = 'change the behavior\n\nBecause the old one was wrong.';
+
+    function renderRewordable({
+      load = vi.fn(async () => MESSAGE),
+      save = vi.fn(async () => null),
+      inDrawer = false,
+    }: {
+      load?: (sha: string) => Promise<string | null>;
+      save?: (request: { commit: string; original: string; message: string }) => Promise<{
+        message: string;
+        output?: string;
+      } | null>;
+      inDrawer?: boolean;
+    } = {}) {
+      const onSelect = vi.fn();
+      render(
+        <CommitList
+          review={REVIEW}
+          shown={{ kind: 'all' }}
+          onSelect={onSelect}
+          inDrawer={inDrawer}
+          reword={{ load, save }}
+        />,
+      );
+      return { onSelect, load, save };
+    }
+
+    const itemOf = (name: RegExp) => row(name).closest('li')!;
+    const editButtonOf = (name: RegExp) =>
+      within(itemOf(name)).getByRole('button', { name: '메시지 고치기' });
+
+    it('offers no editing without a way to save', () => {
+      renderList();
+
+      expect(screen.queryByRole('button', { name: '메시지 고치기' })).not.toBeInTheDocument();
+    });
+
+    it('opens an editor holding the whole message without choosing the commit', async () => {
+      const { onSelect, load } = renderRewordable();
+
+      fireEvent.click(editButtonOf(/2222222/));
+
+      const editor = await within(itemOf(/2222222/)).findByRole('textbox', {
+        name: '커밋 메시지',
+      });
+      expect(editor).toHaveValue(MESSAGE);
+      expect(load).toHaveBeenCalledWith(COMMITS[1]!.sha);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+    });
+
+    it('saves the new message against the one it started from and closes', async () => {
+      const { save } = renderRewordable();
+      fireEvent.click(editButtonOf(/2222222/));
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
+
+      fireEvent.change(editor, { target: { value: 'change the behavior on purpose' } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '저장' }));
+      });
+
+      expect(save).toHaveBeenCalledWith({
+        commit: COMMITS[1]!.sha,
+        original: MESSAGE,
+        message: 'change the behavior on purpose',
+      });
+      expect(screen.queryByRole('textbox', { name: '커밋 메시지' })).not.toBeInTheDocument();
+    });
+
+    it('keeps the editor open with the reason when saving fails', async () => {
+      renderRewordable({
+        save: vi.fn(async () => ({ message: 'refused', output: 'git said no' })),
+      });
+      fireEvent.click(editButtonOf(/2222222/));
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
+
+      fireEvent.change(editor, { target: { value: 'better' } });
+      await act(async () => {
+        fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+      });
+
+      expect(screen.getByRole('alert')).toHaveTextContent('refused');
+      expect(screen.getByRole('alert')).toHaveTextContent('git said no');
+      expect(screen.getByRole('textbox', { name: '커밋 메시지' })).toHaveValue('better');
+    });
+
+    it('closes without saving on cancel and on Escape', async () => {
+      const { save } = renderRewordable();
+      fireEvent.click(editButtonOf(/2222222/));
+      fireEvent.click(await screen.findByRole('button', { name: '취소' }));
+
+      expect(screen.queryByRole('textbox', { name: '커밋 메시지' })).not.toBeInTheDocument();
+
+      fireEvent.click(editButtonOf(/3333333/));
+      fireEvent.keyDown(await screen.findByRole('textbox', { name: '커밋 메시지' }), {
+        key: 'Escape',
+      });
+
+      expect(screen.queryByRole('textbox', { name: '커밋 메시지' })).not.toBeInTheDocument();
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it('says so when the message cannot be read', async () => {
+      renderRewordable({ load: vi.fn(async () => null) });
+
+      fireEvent.click(editButtonOf(/2222222/));
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('메시지를 읽지 못했습니다');
+      expect(screen.queryByRole('textbox', { name: '커밋 메시지' })).not.toBeInTheDocument();
+    });
+
+    it('offers editing in the phone drawer too', () => {
+      renderRewordable({ inDrawer: true });
+
+      expect(editButtonOf(/2222222/)).toBeInTheDocument();
+    });
+  });
+
   it('folds the list away and keeps naming what is shown', () => {
     renderList({ kind: 'commit', sha: COMMITS[0]!.sha });
 

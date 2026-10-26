@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 
 import {
+  type CommitMessageResponse,
   type DiffCommentThread,
   type DiffResponse,
   type DiffSelection,
@@ -28,6 +29,8 @@ import {
   type ReviewScope,
   type ReviewView,
   type ReviewViewAction,
+  type RewordRequest,
+  type RewordResponse,
 } from '../types/diff';
 import { amendedMessagesByCommit } from '../utils/amendedMessages';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
@@ -68,6 +71,7 @@ import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
 import { CommitList, ShownCommits } from './components/CommitList';
+import { type RewordControls } from './components/CommitMessageForm';
 import { FileList, type FileListHandle } from './components/FileList';
 import { FixupOnlySections } from './components/FixupOnlySections';
 import { GitHubIcon } from './components/GitHubIcon';
@@ -115,7 +119,7 @@ import {
   buildMergedChunksState,
   getMergedChunksForVersion,
 } from './utils/mergedChunks';
-import { directEditFailureMessage } from './utils/directEdit';
+import { directEditFailureMessage, rewordFailureMessage } from './utils/directEdit';
 import {
   type AnsweredThread,
   fixupFileKey,
@@ -1520,6 +1524,63 @@ function App() {
     },
     [getCommentApiUrl, mergeDecisions, replaceThreads],
   );
+  const loadCommitMessage = useCallback(
+    async (sha: string): Promise<string | null> => {
+      const url = getCommentApiUrl('/api/commit-message');
+      try {
+        const response = await fetch(`${url}${url.includes('?') ? '&' : '?'}commit=${sha}`);
+        if (!response.ok) return null;
+        const { message } = (await response.json()) as Partial<CommitMessageResponse>;
+        return typeof message === 'string' ? message : null;
+      } catch {
+        return null;
+      }
+    },
+    [getCommentApiUrl],
+  );
+  const submitReword = useCallback(
+    async (request: RewordRequest): Promise<DirectEditFailure | null> => {
+      let response: Response;
+      try {
+        response = await fetch(getCommentApiUrl('/api/reword'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+        });
+      } catch {
+        return { message: 'difit 서버에 연결하지 못했습니다.' };
+      }
+      const payload = (await response.json().catch(() => ({}))) as Partial<
+        Extract<RewordResponse, { error: string }>
+      > &
+        Partial<Extract<RewordResponse, { success: true }>>;
+      if (!response.ok || !payload.success) {
+        return {
+          message: rewordFailureMessage(
+            payload.reason,
+            payload.error ?? `${response.status} ${response.statusText}`,
+          ),
+          ...(payload.output ? { output: payload.output } : {}),
+        };
+      }
+      if (typeof payload.version === 'number') {
+        serverCommentVersionRef.current = payload.version;
+      }
+      skipNextCommentSyncRef.current = true;
+      replaceThreads(payload.threads ?? []);
+      mergeDecisions(payload.decisions ?? []);
+      setDirectEditCount((count) => count + 1);
+      return null;
+    },
+    [getCommentApiUrl, mergeDecisions, replaceThreads],
+  );
+  const reword = useMemo<RewordControls | undefined>(
+    () =>
+      diffData?.directEditAvailable && targetCommit
+        ? { load: loadCommitMessage, save: submitReword }
+        : undefined,
+    [diffData?.directEditAvailable, targetCommit, loadCommitMessage, submitReword],
+  );
   const directEdit = useMemo<DirectEditControls | null>(() => {
     if (!diffData?.directEditAvailable || !targetCommit) return null;
     if (!showsPartOfReview) return { commit: targetCommit, submit: submitDirectEdit };
@@ -2401,6 +2462,7 @@ function App() {
                 inDrawer
                 openCounts={openCountsByCommit}
                 amendedMessages={amendedMessages}
+                reword={reword}
               />
             </aside>
           </>
@@ -2484,6 +2546,7 @@ function App() {
                   rangeStart={rangeStart}
                   openCounts={openCountsByCommit}
                   amendedMessages={amendedMessages}
+                  reword={reword}
                   height={commitListHeight}
                   onResize={handleCommitListResize}
                 />

@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 import {
   Fragment,
   useEffect,
@@ -14,6 +14,7 @@ import { isSameCommit, selectReviewView } from '../../utils/diffSelection';
 
 import { CommentCount } from './CommentCount';
 import { CommitGraph } from './CommitGraph';
+import { CommitMessageForm, type RewordControls } from './CommitMessageForm';
 
 interface CommitListProps {
   review: Pick<ReviewScope, 'requested' | 'commits'>;
@@ -24,6 +25,7 @@ interface CommitListProps {
   openCounts?: ReadonlyMap<string, number> | undefined;
   // Keyed by commit sha: the whole message an amend! will leave on that commit.
   amendedMessages?: ReadonlyMap<string, string> | undefined;
+  reword?: RewordControls | undefined;
   height?: number | null | undefined;
   onResize?: ((height: number) => void) | undefined;
 }
@@ -134,11 +136,13 @@ export function CommitList({
   inDrawer = false,
   openCounts,
   amendedMessages,
+  reword,
   height,
   onResize,
 }: CommitListProps) {
   const { commits } = review;
   const [isOpen, setIsOpen] = useState(true);
+  const [rewording, setRewording] = useState<string | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   const isDragging = drag !== null;
   const listRef = useRef<HTMLUListElement>(null);
@@ -191,7 +195,12 @@ export function CommitList({
       pressRef.current = null;
       return;
     }
-    const press: Press = { sha, x: touch.clientX, y: touch.clientY, timer: null };
+    const press: Press = {
+      sha,
+      x: touch.clientX,
+      y: touch.clientY,
+      timer: null,
+    };
     press.timer = setTimeout(() => {
       press.timer = null;
       setDrag({ fromSha: sha, overSha: null });
@@ -387,48 +396,78 @@ export function CommitList({
                     )}
                   </li>
                 ))}
-                <li>
-                  <button
-                    type="button"
-                    data-commit-sha={commit.sha}
-                    onMouseDown={(event) => {
-                      if (event.button === 0 && !event.shiftKey) {
-                        setDrag({ fromSha: commit.sha, overSha: null });
+                <li className="group">
+                  <div className="flex items-stretch">
+                    <button
+                      type="button"
+                      data-commit-sha={commit.sha}
+                      onMouseDown={(event) => {
+                        if (event.button === 0 && !event.shiftKey) {
+                          setDrag({ fromSha: commit.sha, overSha: null });
+                        }
+                      }}
+                      onMouseEnter={() =>
+                        setDrag((current) => current && { ...current, overSha: commit.sha })
                       }
-                    }}
-                    onMouseEnter={() =>
-                      setDrag((current) => current && { ...current, overSha: commit.sha })
-                    }
-                    onMouseUp={() => {
-                      if (drag && drag.fromSha !== commit.sha) {
-                        onSelect({ kind: 'drop', fromSha: drag.fromSha, toSha: commit.sha });
+                      onMouseUp={() => {
+                        if (drag && drag.fromSha !== commit.sha) {
+                          onSelect({
+                            kind: 'drop',
+                            fromSha: drag.fromSha,
+                            toSha: commit.sha,
+                          });
+                        }
+                        setDrag(null);
+                      }}
+                      onTouchStart={(event) => startPress(commit.sha, event)}
+                      onTouchEnd={endPress}
+                      onTouchCancel={cancelPress}
+                      onClick={(event) =>
+                        onSelect({
+                          kind: event.shiftKey ? 'shift-click' : 'click',
+                          sha: commit.sha,
+                        })
                       }
-                      setDrag(null);
-                    }}
-                    onTouchStart={(event) => startPress(commit.sha, event)}
-                    onTouchEnd={endPress}
-                    onTouchCancel={cancelPress}
-                    onClick={(event) =>
-                      onSelect({ kind: event.shiftKey ? 'shift-click' : 'click', sha: commit.sha })
-                    }
-                    aria-current={isCurrent ? true : undefined}
-                    data-drag-preview={isPreviewed ? '' : undefined}
-                    title={
-                      amendedMessage === undefined
-                        ? commit.subject
-                        : `${commit.subject}\n\n바뀔 메시지:\n${amendedMessage}`
-                    }
-                    className={`${itemClass} ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
-                  >
-                    <CommitGraph cell={cell} bleed={graphBleed} />
-                    <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
-                    {amendedMessage === undefined ? (
-                      <span className="min-w-0 truncate">{commit.subject}</span>
-                    ) : (
-                      <AmendedSubject subject={commit.subject} message={amendedMessage} />
+                      aria-current={isCurrent ? true : undefined}
+                      data-drag-preview={isPreviewed ? '' : undefined}
+                      title={
+                        amendedMessage === undefined
+                          ? commit.subject
+                          : `${commit.subject}\n\n바뀔 메시지:\n${amendedMessage}`
+                      }
+                      className={`${itemClass} min-w-0 flex-1 ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
+                    >
+                      <CommitGraph cell={cell} bleed={graphBleed} />
+                      <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
+                      {amendedMessage === undefined ? (
+                        <span className="min-w-0 truncate">{commit.subject}</span>
+                      ) : (
+                        <AmendedSubject subject={commit.subject} message={amendedMessage} />
+                      )}
+                      {openCountOf(commit.sha)}
+                    </button>
+                    {reword && (
+                      <button
+                        type="button"
+                        aria-label="메시지 고치기"
+                        title="메시지 고치기"
+                        aria-expanded={rewording === commit.sha}
+                        onClick={() =>
+                          setRewording((current) => (current === commit.sha ? null : commit.sha))
+                        }
+                        className={`shrink-0 px-2 text-github-text-muted hover:text-github-text-primary hover:bg-github-bg-tertiary focus:opacity-100 ${inDrawer || rewording === commit.sha ? '' : 'opacity-0 group-hover:opacity-100'}`}
+                      >
+                        <Pencil size={12} />
+                      </button>
                     )}
-                    {openCountOf(commit.sha)}
-                  </button>
+                  </div>
+                  {reword && rewording === commit.sha && (
+                    <CommitMessageForm
+                      sha={commit.sha}
+                      controls={reword}
+                      onClose={() => setRewording(null)}
+                    />
+                  )}
                 </li>
               </Fragment>
             );

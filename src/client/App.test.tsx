@@ -2850,6 +2850,77 @@ describe('App Component - Commits of the review', () => {
     expect(within(commitButton(/1111111/)).queryByText('first step, renamed')).toBeNull();
   });
 
+  it('rewords a commit from the commit list and shows the amend! it made on that commit', async () => {
+    directEditAvailable = true;
+    const amend = {
+      sha: 'e'.repeat(40),
+      shortSha: 'eeeeeee',
+      patchId: 'patch-e',
+      authoredAt: '2026-01-01T00:00:00Z',
+      subject: `amend! ${COMMITS[0]!.sha}`,
+      threadIds: ['r1'],
+      files: [],
+      foldTargetSha: COMMITS[0]!.sha,
+      amendedMessage: { before: 'first step', after: 'first step, renamed' },
+    };
+    const answer = vi.mocked(global.fetch).getMockImplementation()!;
+    vi.mocked(global.fetch).mockImplementation((input, init) => {
+      const url = String(input);
+      if (url.startsWith('/api/commit-message')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ message: 'first step' }),
+        } as Response);
+      }
+      if (url.startsWith('/api/reword')) {
+        fixupsFor.current = [amend];
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            success: true,
+            sha: amend.sha,
+            threadId: 'r1',
+            version: 1,
+            threads: [],
+            decisions: [
+              { threadId: 'r1', kind: 'approved', fixupSha: amend.sha, at: '2026-01-01T00:00:00Z' },
+            ],
+          }),
+        } as Response);
+      }
+      return answer(input, init);
+    });
+
+    renderApp();
+    const row = (await waitFor(() => commitButton(/1111111/))).closest('li')!;
+    fireEvent.click(within(row).getByRole('button', { name: '메시지 고치기' }));
+    const editor = await within(row).findByRole('textbox', { name: '커밋 메시지' });
+    expect(editor).toHaveValue('first step');
+    fireEvent.change(editor, { target: { value: 'first step, renamed' } });
+    fireEvent.click(within(row).getByRole('button', { name: '저장' }));
+
+    await waitFor(() =>
+      expect(within(commitButton(/1111111/)).getByText('first step, renamed')).toBeInTheDocument(),
+    );
+    const posted = vi
+      .mocked(global.fetch)
+      .mock.calls.find(([url]) => String(url).startsWith('/api/reword'))!;
+    expect(String(posted[0])).toContain(`target=${REVIEW.selection.targetCommitish}`);
+    expect(JSON.parse(String(posted[1]?.body))).toEqual({
+      commit: COMMITS[0]!.sha,
+      original: 'first step',
+      message: 'first step, renamed',
+    });
+    expect(within(row).queryByRole('textbox', { name: '커밋 메시지' })).toBeNull();
+  });
+
+  it('offers no rewording where direct edits are off', async () => {
+    renderApp();
+
+    await waitFor(() => commitButton(/1111111/));
+    expect(screen.queryByRole('button', { name: '메시지 고치기' })).toBeNull();
+  });
+
   it('lists no commits for a review of one commit or one that is not pinned', async () => {
     review = { ...REVIEW, commits: COMMITS.slice(1) };
     const { unmount } = renderApp();
