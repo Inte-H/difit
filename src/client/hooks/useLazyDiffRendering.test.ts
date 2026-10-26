@@ -186,7 +186,13 @@ describe('useLazyDiffRendering', () => {
         stubRect(box, top);
         section.appendChild(box);
       };
-      return { scroll: result.current.scrollFileIntoDiffContainer, scrollTo, drawBox, container };
+      return {
+        scroll: result.current.scrollFileIntoDiffContainer,
+        scrollTo,
+        drawBox,
+        container,
+        section,
+      };
     }
 
     it("lands an element inside a reviewed file below that file's sticky header", async () => {
@@ -201,13 +207,14 @@ describe('useLazyDiffRendering', () => {
     });
 
     it("keeps the line above the element below that file's sticky header", async () => {
-      const { scroll, scrollTo, drawBox, container } = setupWithHeaders(1000);
+      const { scroll, scrollTo, drawBox, container, section } = setupWithHeaders(1000);
       Object.defineProperty(container, 'scrollTop', { value: 500 });
-      drawBox(100);
+      stubRect(section, -300, 1200);
       const line = document.createElement('div');
       line.id = 'line';
       stubRect(line, 30);
-      document.body.appendChild(line);
+      section.appendChild(line);
+      drawBox(100);
 
       scroll('b.ts', 'box', 'line');
 

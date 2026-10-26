@@ -1663,6 +1663,29 @@ describe('App Component - Comments panel', () => {
     expect(row('Second note')).toHaveAttribute('aria-current', 'true');
   });
 
+  it('goes to the line of a picked comment in a chunk drawn joined to the one above', async () => {
+    const [chunk] = linedFile('test.ts', 30).chunks;
+    const split = (from: number, to: number) => ({
+      ...chunk!,
+      header: `@@ -${from},${to - from + 1} +${from},${to - from + 1} @@`,
+      oldStart: from,
+      oldLines: to - from + 1,
+      newStart: from,
+      newLines: to - from + 1,
+      lines: chunk!.lines.slice(from - 1, to),
+    });
+    mockFetch({
+      ...mockDiffResponse,
+      files: [{ ...linedFile('test.ts', 30), chunks: [split(1, 15), split(16, 30)] }],
+    });
+    renderApp();
+    fireEvent.click(await toggle());
+
+    await userEvent.click(row('Second note'));
+
+    await waitFor(() => expect(cursorRow()).toHaveTextContent('line 20'));
+  });
+
   it('opens with the keys in the list from 「View All Comments」', async () => {
     renderApp();
 
