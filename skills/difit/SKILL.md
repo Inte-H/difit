@@ -166,14 +166,14 @@ Fold once, when the branch is wrapped up: every remaining fixup is `[승인됨]`
 
 The JSON `decisions` only accumulate. Approving a comment with several fixups adds one `approved` per fixup, all at the same time. When the user unapproves, `"kind": "unapproved"` is added; the later of `approved` and `unapproved` for a thread wins, and a `rejected` later than the approval wins over both. Read the current state from the text output labels.
 
-On a git older than 2.32 (`git --version`), add `--keep-empty` to the fold command below, or the user's commit message edits are lost; see the git 2.32 paragraph after it.
+On a git older than 2.32 (`git --version`), add `--keep-empty` to the fold command below and do not run the `Review-Thread` line-removal command after it. Without `--keep-empty` the user's commit message edits are lost, and the line-removal command rebases without it too, so it drops the `amend!` commits the fold kept. What to do instead is in the git 2.32 paragraph after it.
 
 ```bash
 git rev-parse HEAD   # note this SHA as <pre-fold SHA>
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <review base>
 ```
 
-An `amend!` commit replaces its target's message with everything below its first paragraph, `Review-Thread` trailer included. Right after folding, before recording where the fixups went, remove those lines; a commit left with one reads as a fixup in a later review and drops out of its commit list. This rewrites only the commits that carry the line:
+An `amend!` commit replaces its target's message with everything below its first paragraph, `Review-Thread` trailer included. On git 2.32 or later, right after folding and before recording where the fixups went, remove those lines; a commit left with one reads as a fixup in a later review and drops out of its commit list. This rewrites only the commits that carry the line:
 
 ```bash
 git rebase <review base> --exec 'git log -1 --format=%B | grep -q "^Review-Thread: " || exit 0; git log -1 --format=%B | sed "/^Review-Thread: /d" | git commit -q --amend --allow-empty --no-verify --cleanup=whitespace -F -'

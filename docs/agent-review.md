@@ -105,7 +105,7 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
 승인 여부는 `difit comment get --port <port>` 텍스트 출력에서 지적마다 붙는 `[승인됨]`으로 확인한다. JSON의 `decisions`는 판정을 지우지 않고 쌓기만 한다. fixup이 여럿인 지적을 승인하면 fixup마다 `approved`가 같은 시각으로 하나씩 쌓인다. 리뷰어가 승인을 취소하면 `"kind": "unapproved"`가 더해지므로, 같은 지적의 `approved`와 `unapproved` 가운데 시각이 늦은 쪽이 지금의 판정이다. 다만 승인한 fixup에 그보다 늦은 `rejected`가 있으면 거절이 우선한다. 리뷰어가 직접 고친 수정을 `되돌리기`로 거절하면 이렇게 남는다.
 
-git이 2.32보다 오래되었으면(`git --version`) 아래 접기 명령에 `--keep-empty`를 붙인다. 붙이지 않으면 리뷰어가 고친 커밋 메시지가 사라진다. 까닭과 그 뒤에 할 일은 아래 git 2.32 문단에 있다.
+git이 2.32보다 오래되었으면(`git --version`) 아래 접기 명령에 `--keep-empty`를 붙이고, 접은 뒤의 `Review-Thread` 줄 지우기 명령은 돌리지 않는다. `--keep-empty`를 빼면 리뷰어가 고친 커밋 메시지가 사라지고, 줄 지우기 명령도 `--keep-empty` 없이 rebase하므로 남겨 둔 `amend!` 커밋을 다시 버린다. 그 대신 할 일은 아래 git 2.32 문단에 있다.
 
 ```sh
 git rev-parse HEAD   # 찍힌 SHA를 <접기 전 SHA>로 적어 둔다
@@ -114,7 +114,7 @@ GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 범위의 시작 커밋
 
 접기 전 SHA는 셸 변수에 담지 말고 적어 둔다. 명령을 한 번씩 따로 돌리는 에이전트에게는 앞 명령의 셸 변수가 남지 않는다. 접기는 커밋을 다시 나눌 뿐 마지막 파일 내용은 바꾸지 않으므로, 접은 뒤 `git diff --exit-code <접기 전 SHA> HEAD`가 아무것도 찍지 않아야 한다.
 
-`amend!` 커밋은 첫 문단 아래를 트레일러까지 그대로 대상 커밋의 메시지로 쓴다. 그래서 접은 뒤의 메시지에 `Review-Thread` 줄이 남는다. 이 줄이 남은 커밋은 나중 리뷰에서 fixup으로 읽혀 커밋 목록에서 빠지므로, 접은 직후 기록을 올리기 전에 지운다. 아래 명령은 그 줄이 있는 커밋만 고쳐 쓴다([docs/adr/0009](adr/0009-reviewer-rewords-become-amend-commits.md)).
+`amend!` 커밋은 첫 문단 아래를 트레일러까지 그대로 대상 커밋의 메시지로 쓴다. 그래서 접은 뒤의 메시지에 `Review-Thread` 줄이 남는다. 이 줄이 남은 커밋은 나중 리뷰에서 fixup으로 읽혀 커밋 목록에서 빠지므로, git 2.32 이상에서는 접은 직후 기록을 올리기 전에 지운다. 아래 명령은 그 줄이 있는 커밋만 고쳐 쓴다([docs/adr/0009](adr/0009-reviewer-rewords-become-amend-commits.md)).
 
 ```sh
 git rebase <리뷰 범위의 시작 커밋> --exec 'git log -1 --format=%B | grep -q "^Review-Thread: " || exit 0; git log -1 --format=%B | sed "/^Review-Thread: /d" | git commit -q --amend --allow-empty --no-verify --cleanup=whitespace -F -'
