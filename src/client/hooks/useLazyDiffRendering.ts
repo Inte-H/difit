@@ -42,7 +42,8 @@ interface UseLazyDiffRenderingReturn {
   ensureFilesRenderedUpTo: (filePath: string) => void;
   registerLazyFileContainer: (filePath: string, node: HTMLDivElement | null) => void;
   // With elementId, scrolls to that element, or to a reviewed file's header while it is not drawn.
-  scrollFileIntoDiffContainer: (filePath: string, elementId?: string) => void;
+  // The element above it named by alsoShowId stays in sight when both fit on screen.
+  scrollFileIntoDiffContainer: (filePath: string, elementId?: string, alsoShowId?: string) => void;
   isFileScrolledPastContainerTop: (filePath: string) => boolean;
 }
 
@@ -285,7 +286,7 @@ export function useLazyDiffRendering({
   );
 
   const scrollFileIntoDiffContainer = useCallback(
-    (filePath: string, elementId?: string) => {
+    (filePath: string, elementId?: string, alsoShowId?: string) => {
       const files = diffData?.files ?? [];
       const targetIndex = files.findIndex((file) => file.path === filePath);
       // An element outside the reviewed files sits below all of them.
@@ -327,13 +328,22 @@ export function useLazyDiffRendering({
 
         const containerRect = scrollContainer.getBoundingClientRect();
         const targetRect = target.getBoundingClientRect();
-        const targetScrollTop =
-          scrollContainer.scrollTop +
-          (targetRect.top - containerRect.top) -
-          stickyHeaderCover(target);
+        const cover = stickyHeaderCover(target);
+        let offset = targetRect.top - containerRect.top - cover;
+        const alsoShown = element && alsoShowId ? document.getElementById(alsoShowId) : null;
+        if (alsoShown) {
+          const alsoShownTop = alsoShown.getBoundingClientRect().top - containerRect.top;
+          const targetBottom = targetRect.bottom - containerRect.top;
+          if (targetBottom - alsoShownTop <= containerRect.height - cover) {
+            offset = Math.min(
+              Math.max(0, targetBottom - containerRect.height),
+              alsoShownTop - cover,
+            );
+          }
+        }
 
         scrollContainer.scrollTo({
-          top: Math.max(0, targetScrollTop),
+          top: Math.max(0, scrollContainer.scrollTop + offset),
         });
         return element ? 'element' : 'file';
       };

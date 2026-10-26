@@ -16,15 +16,15 @@ function renderLazyDiffRendering(container: HTMLElement | null) {
   );
 }
 
-function stubRect(element: HTMLElement, top: number) {
+function stubRect(element: HTMLElement, top: number, height = 100) {
   element.getBoundingClientRect = () =>
     ({
       top,
-      bottom: top + 100,
+      bottom: top + height,
       left: 0,
       right: 0,
       width: 0,
-      height: 100,
+      height,
     }) as DOMRect;
 }
 
@@ -92,9 +92,12 @@ describe('useLazyDiffRendering', () => {
       isEmpty: false,
     };
 
-    function setup(elements: Array<{ id: string; top: number; rendered?: boolean }>) {
+    function setup(
+      elements: Array<{ id: string; top: number; rendered?: boolean }>,
+      containerHeight?: number,
+    ) {
       const container = document.createElement('div');
-      stubRect(container, 0);
+      stubRect(container, 0, containerHeight);
       const scrollTo = vi.fn();
       container.scrollTo = scrollTo as typeof container.scrollTo;
       elements.forEach(({ id, top, rendered }) => {
@@ -450,6 +453,35 @@ describe('useLazyDiffRendering', () => {
       scroll('c.ts', 'only');
 
       await vi.waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 900 }));
+    });
+
+    describe('with a line above the element to keep in sight', () => {
+      const setupLineAndBox = (boxTop: number) =>
+        setup([...reviewSections, { id: 'line', top: 300 }, { id: 'box', top: boxTop }], 1000);
+
+      it('stays put when the line and the element are both in sight', async () => {
+        const { scroll, scrollTo } = setupLineAndBox(500);
+
+        scroll('b.ts', 'box', 'line');
+
+        await vi.waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 0 }));
+      });
+
+      it('scrolls just far enough to bring the element in under the line', async () => {
+        const { scroll, scrollTo } = setupLineAndBox(1100);
+
+        scroll('b.ts', 'box', 'line');
+
+        await vi.waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 200 }));
+      });
+
+      it('puts the element at the top when it and the line do not fit together', async () => {
+        const { scroll, scrollTo } = setupLineAndBox(1300);
+
+        scroll('b.ts', 'box', 'line');
+
+        await vi.waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 1300 }));
+      });
     });
   });
 });

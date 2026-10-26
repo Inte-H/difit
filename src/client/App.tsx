@@ -107,6 +107,7 @@ import { fetchClientSettings, saveClientSettings } from './services/userSettings
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
 import { fixupFileElementId, getFileElementId } from './utils/domUtils';
+import { getElementId } from './utils/navigation/domHelpers';
 import { findCommentPosition } from './utils/navigation/positionHelpers';
 import { resolveEventSourceUrl } from './utils/eventSourceUrl';
 import {
@@ -1869,7 +1870,13 @@ function App() {
     });
     const moveCursor = () => {
       const position = findCommentPosition(thread, files);
-      if (position) setCursorPosition(position);
+      if (!position) return;
+      setCursorPosition(position);
+      scrollFileIntoDiffContainer(
+        thread.file,
+        `comment-thread-${thread.id}`,
+        getElementId(position, diffMode),
+      );
     };
     if (afterRender) requestAnimationFrame(moveCursor);
     else moveCursor();
