@@ -361,7 +361,7 @@ export const DiffViewer = memo(function DiffViewer({
                 className="space-y-2 border-b border-github-border bg-github-bg-secondary px-4 py-2"
               >
                 {fileThreads.map((thread) => (
-                  <div key={thread.id} className="space-y-1">
+                  <div key={thread.id} id={`file-comment-${thread.id}`} className="space-y-1">
                     <FixupOverlayBlock
                       thread={thread}
                       filePath={file.path}

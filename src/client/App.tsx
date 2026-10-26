@@ -1906,7 +1906,13 @@ function App() {
       return next;
     });
     if (thread.line === undefined) {
-      scrollFileIntoDiffContainer(thread.file, `comment-thread-${thread.id}`);
+      if (diffData.files.some(({ path }) => path === thread.file)) {
+        scrollFileIntoDiffContainer(
+          thread.file,
+          `comment-thread-${thread.id}`,
+          `file-comment-${thread.id}`,
+        );
+      }
       return;
     }
     const moveCursor = () => {

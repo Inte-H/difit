@@ -7,7 +7,7 @@ import { type DirectEditRejection, REVIEW_THREAD_TRAILER } from '../types/diff.j
 
 import { autosquashGroups } from './autosquash.js';
 import { chooseFixupTarget } from './fixup-target.js';
-import { type GitOptions, runGit } from './run-git.js';
+import { type GitOptions, literalPathspec, runGit } from './run-git.js';
 
 export interface DirectEdit {
   filePath: string;
@@ -48,8 +48,6 @@ async function git(repoPath: string, args: string[], options?: GitOptions): Prom
 async function gitText(repoPath: string, args: string[], options?: GitOptions): Promise<string> {
   return (await git(repoPath, args, options)).toString('utf8').trim();
 }
-
-const literal = (path: string) => `:(literal)${path}`;
 
 async function readBlob(repoPath: string, commit: string, path: string): Promise<Buffer | null> {
   const run = await runGit(repoPath, ['cat-file', 'blob', `${commit}:${path}`]);
@@ -241,7 +239,7 @@ async function findFoldTarget(
       '--format=%H%x00%s',
       `${range.base}..${head}`,
     ]),
-    gitText(repoPath, ['rev-list', `${range.base}..${head}`, '--', literal(path)]),
+    gitText(repoPath, ['rev-list', `${range.base}..${head}`, '--', literalPathspec(path)]),
     view.commits ??
       gitText(repoPath, ['rev-list', `${view.base}..${view.target}`]).then((shas) =>
         shas.split('\n'),
@@ -377,7 +375,13 @@ async function prepareFixup(
   const atHead = await git(repoPath, ['cat-file', 'blob', headEntry.oid]);
   if (atHead.includes(0)) return { ok: false, reason: 'binary' };
 
-  const status = await git(repoPath, ['status', '--porcelain', '-z', '--', literal(edit.filePath)]);
+  const status = await git(repoPath, [
+    'status',
+    '--porcelain',
+    '-z',
+    '--',
+    literalPathspec(edit.filePath),
+  ]);
   if (status.length > 0) return { ok: false, reason: 'dirty-file' };
   if (await hasOperationInProgress(repoPath)) return { ok: false, reason: 'operation-in-progress' };
 
@@ -424,9 +428,9 @@ async function prepareFixup(
 // Brings the index entry up to the new commit while it still holds the previous HEAD's blob, and
 // the file too while it has no changes of its own; anything else is someone's work in progress.
 async function syncWorkingTree(repoPath: string, path: string, fixup: FixupCommit) {
-  const indexed = (await git(repoPath, ['ls-files', '-s', '-z', '--', literal(path)])).toString(
-    'utf8',
-  );
+  const indexed = (
+    await git(repoPath, ['ls-files', '-s', '-z', '--', literalPathspec(path)])
+  ).toString('utf8');
   if (/^\d+ ([0-9a-f]+) 0\t/.exec(indexed)?.[1] !== fixup.headBlob) return;
   const changed = await runGit(repoPath, [
     'diff',
@@ -434,7 +438,7 @@ async function syncWorkingTree(repoPath: string, path: string, fixup: FixupCommi
     '--no-ext-diff',
     '--no-textconv',
     '--',
-    literal(path),
+    literalPathspec(path),
   ]);
   // Left at the old blob, the index would stage a revert of the fixup for the next commit.
   await git(repoPath, ['update-index', '--cacheinfo', fixup.mode, fixup.blob, path]);

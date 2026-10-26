@@ -3565,15 +3565,50 @@ describe('App Component - Commits of the review', () => {
     const main = document.querySelector('main')!;
     const scrollTo = vi.fn();
     main.scrollTo = scrollTo;
-    document.getElementById('comment-thread-f1')!.getBoundingClientRect = () =>
-      ({ top: 900, bottom: 1000, left: 0, right: 0, width: 0, height: 100 }) as DOMRect;
+    main.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800 }) as DOMRect;
+    const rect = (top: number, bottom: number) => () =>
+      ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top }) as DOMRect;
+    document.getElementById('file-comment-f1')!.getBoundingClientRect = rect(900, 1100);
+    document.getElementById('comment-thread-f1')!.getBoundingClientRect = rect(1000, 1100);
 
     await userEvent.keyboard('{Shift>}L{/Shift}');
     await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() =>
-      expect(scrollTo).toHaveBeenCalledWith({ top: expect.toSatisfy((top: number) => top > 800) }),
+      expect(scrollTo).toHaveBeenCalledWith({
+        top: expect.toSatisfy((top: number) => top >= 1100 - 800 && top <= 900),
+      }),
+    );
+  });
+
+  it('keeps the card of a whole-file comment on screen when the fixups above it are taller', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'f1', filePath: 'test.ts', line: 1, body: 'About this file' }),
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '' },
+      },
+    ];
+    renderApp();
+    await screen.findByText('About this file');
+    const main = document.querySelector('main')!;
+    const scrollTo = vi.fn();
+    main.scrollTo = scrollTo;
+    main.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800 }) as DOMRect;
+    const rect = (top: number, bottom: number) => () =>
+      ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top }) as DOMRect;
+    document.getElementById('file-comment-f1')!.getBoundingClientRect = rect(100, 2100);
+    document.getElementById('comment-thread-f1')!.getBoundingClientRect = rect(2000, 2100);
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.toSatisfy((top: number) => top > 1800) }),
     );
   });
 
