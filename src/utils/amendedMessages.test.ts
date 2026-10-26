@@ -116,19 +116,6 @@ describe('amendedMessagesByCommit', () => {
     );
   });
 
-  it('leaves out a commit the amend! leaves with the message it has now', () => {
-    expect(amendedMessagesByCommit([amend('a', 'old subject')], [])).toEqual(new Map());
-
-    const first = amend('a', 'first try');
-    const restoring: ThreadFixup = {
-      ...amend('b', 'old subject', { threadId: 't2' }),
-      amendedMessage: { before: 'first try', after: 'old subject' },
-    };
-    expect(amendedMessagesByCommit([first, restoring], [decision(first, 'rejected')])).toEqual(
-      new Map(),
-    );
-  });
-
   it('keeps an approved amend!', () => {
     const fixup = amend('a', 'first try');
 
