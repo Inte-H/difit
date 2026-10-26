@@ -150,6 +150,35 @@ function standingApproval(own: ReviewDecision[]): ReviewDecision[] {
   return rejectedSince ? [] : approved;
 }
 
+// The standing approval when it covers every fixup still under judgment. With no fixup left, the
+// approved ones are being folded and the fold record has not landed yet.
+function approvalCovering(
+  threadId: string,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): ReviewDecision | undefined {
+  const approved = standingApproval(decisions.filter((decision) => decision.threadId === threadId));
+  const isApproved = matcherFor(approved);
+  const covered = pendingFixupsFor(threadId, fixups, decisions).every(isApproved);
+  return covered ? approved[0] : undefined;
+}
+
+// Whether the card shows the thread as resolved: the later of an approval or fold and the
+// reviewer's own resolve or reopen decides. What goes to the agent reads isThreadResolved instead.
+export function appearsResolved(
+  threadId: string,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): boolean {
+  const own = decisions.filter((decision) => decision.threadId === threadId);
+  const mark = latestOf(own, ['resolved', 'unresolved']);
+  const closings = [latestOf(own, ['folded']), approvalCovering(threadId, fixups, decisions)];
+  const closedAfterMark = closings.some(
+    (closing) => closing !== undefined && (!mark || decidedAt(closing) > decidedAt(mark)),
+  );
+  return closedAfterMark || mark?.kind === 'resolved';
+}
+
 export function deriveThreadReviewState(
   threadId: string,
   fixups: ThreadFixup[],
@@ -160,12 +189,8 @@ export function deriveThreadReviewState(
   if (own.some((decision) => decision.kind === 'folded')) return 'folded';
   if (own.some((decision) => decision.kind === 'deleted')) return 'deleted';
 
-  const isRejected = rejectionCheckFor(threadId, decisions);
-  const unrejected = fixups.filter((fixup) => !isRejected(fixup));
-  const approved = standingApproval(own);
-  // With no fixup left, the approved ones are being folded and the fold record has not landed yet.
-  if (approved.length > 0 && unrejected.every(matcherFor(approved))) return 'approved';
-  if (unrejected.length > 0) return 'awaiting-approval';
+  if (approvalCovering(threadId, fixups, decisions)) return 'approved';
+  if (pendingFixupsFor(threadId, fixups, decisions).length > 0) return 'awaiting-approval';
   if (!own.some((decision) => decision.kind === 'rejected')) {
     const messages = thread.messages ?? [];
     const last = messages.at(-1);
@@ -207,8 +232,9 @@ const COMMENT_PANEL_STATUS: Record<ThreadReviewState, CommentPanelStatus | null>
   rejected: 'open',
   answered: 'answered',
   'awaiting-approval': 'answered',
-  approved: 'resolved',
-  folded: 'resolved',
+  // Shown as resolved until the reviewer reopens it; then the next word is theirs.
+  approved: 'answered',
+  folded: 'answered',
   withdrawn: 'resolved',
   deleted: null,
 };
@@ -221,7 +247,7 @@ export function commentPanelStatus(
 ): CommentPanelStatus | null {
   const status =
     COMMENT_PANEL_STATUS[deriveThreadReviewState(thread.id, fixups, decisions, thread)];
-  if (status !== null && isThreadResolved(thread.id, decisions)) return 'resolved';
+  if (status !== null && appearsResolved(thread.id, fixups, decisions)) return 'resolved';
   return status;
 }
 

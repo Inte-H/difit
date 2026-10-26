@@ -376,6 +376,36 @@ describe('App Component - Clear Comments Functionality', () => {
       expect(showResolved()).toHaveAttribute('aria-checked', 'true');
     });
 
+    it('treats an approved comment as resolved until it is reopened or the approval is undone', async () => {
+      mockComments = [
+        createMockThread({ id: 'approved', filePath: 'test.ts', line: 10, body: 'Fixed' }),
+      ];
+      const record = (kind: ReviewDecision['kind'], minute: number): ReviewDecision => ({
+        threadId: 'approved',
+        kind,
+        fixupSha: kind === 'approved' ? 'aaaa' : '',
+        at: `2026-01-01T00:0${minute}:00Z`,
+      });
+      const showResolved = () => screen.queryByRole('checkbox', { name: '해결된 지적 보기' });
+      const app = () => (
+        <HotkeysProvider initiallyActiveScopes={['navigation']}>
+          <App />
+        </HotkeysProvider>
+      );
+      mockDecisions = [record('approved', 0)];
+
+      const { rerender } = renderApp();
+      expect(await screen.findByRole('checkbox', { name: '해결된 지적 보기' })).toBeInTheDocument();
+
+      mockDecisions = [record('approved', 0), record('unresolved', 1)];
+      rerender(app());
+      expect(showResolved()).not.toBeInTheDocument();
+
+      mockDecisions = [record('approved', 0), record('unapproved', 1)];
+      rerender(app());
+      expect(showResolved()).not.toBeInTheDocument();
+    });
+
     it('should not read fixups for a review that follows HEAD', async () => {
       mockComments = [
         createMockThread({ id: 'plain', filePath: 'test.ts', line: 10, body: 'Plain review' }),
@@ -1459,20 +1489,19 @@ describe('App Component - Returning from the review a comment was made on', () =
       undoApproval,
     }));
     const chips = () =>
-      screen
-        .queryAllByTestId('review-state-chip')
+      [...screen.queryAllByTestId('review-state-chip'), ...screen.queryAllByTestId('resolved-chip')]
         .map((chip) => chip.textContent)
         .sort();
 
     try {
       renderApp();
-      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '해결됨']));
 
       fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
       await waitFor(() => expect(chips()).toEqual(['다시 수정 중']));
 
       act(() => window.history.back());
-      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '해결됨']));
       expect(recordDecision).not.toHaveBeenCalled();
       expect(recordFixupDecisions).not.toHaveBeenCalled();
       expect(undoApproval).not.toHaveBeenCalled();

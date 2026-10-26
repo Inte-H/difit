@@ -25,14 +25,13 @@ import {
 } from 'react';
 import { useHotkeysContext } from 'react-hotkeys-hook';
 
-import { type DiffFile, type CommentThread, type ReviewDecision } from '../../types/diff';
+import { type DiffFile, type CommentThread } from '../../types/diff';
 import {
   combineChangeKinds,
   LEAVES_CODE_ALONE_LABEL,
   LEAVES_CODE_ALONE_TITLE,
   leavesCodeAlone,
 } from '../../utils/changeKind';
-import { isThreadResolved } from '../../utils/reviewDecisions';
 import { isSafariBrowser } from '../utils/browser';
 import {
   type FixupFileRef,
@@ -56,7 +55,7 @@ interface FileListProps {
   onScrollToFile: (path: string) => void;
   onFileSelected?: () => void;
   comments: CommentThread[];
-  decisions: ReviewDecision[];
+  resolvedThreadIds: ReadonlySet<string>;
   reviewedFiles: Set<string>;
   onToggleReviewed: (path: string) => void;
   onToggleFolderReviewed: (path: string, reviewed: boolean) => void;
@@ -254,7 +253,7 @@ export const FileList = memo(function FileList({
   onScrollToFile,
   onFileSelected,
   comments,
-  decisions,
+  resolvedThreadIds,
   reviewedFiles,
   onToggleReviewed,
   onToggleFolderReviewed,
@@ -290,11 +289,11 @@ export const FileList = memo(function FileList({
   const commentCountMap = useMemo(() => {
     const counts = new Map<string, number>();
     comments.forEach((comment) => {
-      if (isThreadResolved(comment.id, decisions)) return;
+      if (resolvedThreadIds.has(comment.id)) return;
       counts.set(comment.file, (counts.get(comment.file) ?? 0) + 1);
     });
     return counts;
-  }, [comments, decisions]);
+  }, [comments, resolvedThreadIds]);
 
   const fileIndexMap = useMemo(() => {
     const indices = new Map<string, number>();

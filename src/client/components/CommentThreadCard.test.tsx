@@ -586,6 +586,112 @@ describe('CommentThreadCard', () => {
     });
   });
 
+  describe('when approved', () => {
+    const at = (minute: number) => `2026-01-01T00:0${minute}:00Z`;
+    const record = (kind: ReviewDecision['kind'], minute: number): ReviewDecision => ({
+      threadId: 'thread-1',
+      kind,
+      fixupSha: kind === 'approved' ? 'aaaa' : '',
+      at: at(minute),
+    });
+    const overlayWith = (decisions: ReviewDecision[], recordDecision = vi.fn()) => ({
+      ...EMPTY_FIXUP_OVERLAY,
+      decisions,
+      recordDecision,
+    });
+    const review = (state: 'awaiting-approval' | 'approved', onUndoApproval = vi.fn()) => ({
+      state,
+      pendingFixups: [{ fixupSha: 'aaaa' }],
+      revertibleFixups: [{ fixupSha: 'aaaa' }],
+      targetCommit: 'b7c2e10',
+      responding: false,
+      onDecide: vi.fn(),
+      onUndoApproval,
+      onOpenReviewAt: vi.fn(),
+      onShowView: vi.fn(),
+    });
+    const card = (
+      decisions: ReviewDecision[],
+      state: 'awaiting-approval' | 'approved',
+      { recordDecision = vi.fn(), onUndoApproval = vi.fn(), onReplyToThread = vi.fn() } = {},
+    ) => (
+      <FixupOverlayProvider value={overlayWith(decisions, recordDecision)}>
+        <CommentThreadCard
+          thread={mockThread}
+          review={review(state, onUndoApproval)}
+          onResolveThread={vi.fn()}
+          onReplyToThread={onReplyToThread}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />
+      </FixupOverlayProvider>
+    );
+
+    it('collapses as resolved the moment the approval lands, with the check pressed', () => {
+      const { rerender } = render(card([], 'awaiting-approval'));
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+
+      rerender(card([record('approved', 0)], 'approved'));
+
+      expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+      expect(screen.getByTestId('resolved-chip')).toHaveTextContent('해결됨');
+      expect(screen.getByRole('button', { name: 'Reopen thread' })).toBeInTheDocument();
+    });
+
+    it('keeps undoing and reverting the approval reachable on the expanded card', async () => {
+      const user = userEvent.setup();
+      const onUndoApproval = vi.fn();
+      render(card([record('approved', 0)], 'approved', { onUndoApproval }));
+
+      await user.click(screen.getByRole('button', { name: 'Expand thread' }));
+      expect(screen.getByRole('button', { name: '되돌리기' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: '승인 취소' }));
+
+      expect(onUndoApproval).toHaveBeenCalledWith('thread-1');
+    });
+
+    it('reopens with an unresolved record when the check is pressed, keeping the approval', async () => {
+      const user = userEvent.setup();
+      const recordDecision = vi.fn();
+      const { rerender } = render(card([record('approved', 0)], 'approved', { recordDecision }));
+
+      await user.click(screen.getByRole('button', { name: 'Reopen thread' }));
+      expect(recordDecision).toHaveBeenCalledWith('thread-1', 'unresolved', '');
+
+      rerender(card([record('approved', 0), record('unresolved', 1)], 'approved'));
+      expect(screen.queryByTestId('resolved-chip')).not.toBeInTheDocument();
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+      expect(screen.getByTestId('review-state-chip')).toHaveTextContent('승인됨');
+      expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
+    });
+
+    it('opens again when the approval is undone', () => {
+      const { rerender } = render(card([record('approved', 0)], 'approved'));
+      expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+
+      rerender(card([record('approved', 0), record('unapproved', 1)], 'awaiting-approval'));
+
+      expect(screen.queryByTestId('resolved-chip')).not.toBeInTheDocument();
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
+    });
+
+    it('reopens the thread after sending a reply to it', async () => {
+      const user = userEvent.setup();
+      const recordDecision = vi.fn();
+      const onReplyToThread = vi.fn().mockResolvedValue(undefined);
+      render(card([record('approved', 0)], 'approved', { recordDecision, onReplyToThread }));
+
+      await user.click(screen.getByRole('button', { name: 'Expand thread' }));
+      await user.click(screen.getByRole('button', { name: '답글 달고 다시 열기...' }));
+      await user.type(screen.getByPlaceholderText('Write a reply...'), 'One more thing');
+      await user.click(screen.getByRole('button', { name: '답글 달고 다시 열기' }));
+
+      expect(onReplyToThread).toHaveBeenCalledWith('thread-1', 'One more thing');
+      expect(recordDecision).toHaveBeenCalledWith('thread-1', 'unresolved', '');
+    });
+  });
+
   it('collapses the thread into a single line and expands it back', async () => {
     const user = userEvent.setup();
 

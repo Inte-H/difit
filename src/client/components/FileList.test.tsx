@@ -5,7 +5,7 @@ import { HotkeysProvider } from 'react-hotkeys-hook';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '@testing-library/jest-dom';
 
-import type { CommentThread, DiffFile, ReviewDecision, ThreadFixup } from '../../types/diff';
+import type { CommentThread, DiffFile, ThreadFixup } from '../../types/diff';
 import type { FixupOnlyFiles } from '../utils/fixupSpread';
 
 import { FileList, type FileListHandle } from './FileList';
@@ -31,13 +31,6 @@ const createThread = (id: string, file: string): CommentThread => ({
   messages: [],
 });
 
-const decide = (threadId: string, kind: 'resolved' | 'unresolved', at: string): ReviewDecision => ({
-  threadId,
-  kind,
-  fixupSha: '',
-  at,
-});
-
 function getTreeRow(title: string): HTMLElement {
   const row = screen.getByTitle(title).closest<HTMLElement>('[data-tree-row="true"]');
   expect(row).not.toBeNull();
@@ -55,7 +48,7 @@ describe('FileList', () => {
         files={[createFile('a.ts'), createFile('b.ts')]}
         onScrollToFile={vi.fn()}
         comments={[]}
-        decisions={[]}
+        resolvedThreadIds={new Set()}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={vi.fn()}
@@ -78,7 +71,7 @@ describe('FileList', () => {
         ]}
         onScrollToFile={vi.fn()}
         comments={[]}
-        decisions={[]}
+        resolvedThreadIds={new Set()}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={vi.fn()}
@@ -102,7 +95,7 @@ describe('FileList', () => {
       files,
       onScrollToFile: vi.fn(),
       comments: [],
-      decisions: [],
+      resolvedThreadIds: new Set<string>(),
       onToggleReviewed: vi.fn(),
       onToggleFolderReviewed: vi.fn(),
       selectedFileIndex: null,
@@ -144,7 +137,7 @@ describe('FileList', () => {
         ]}
         onScrollToFile={vi.fn()}
         comments={[]}
-        decisions={[]}
+        resolvedThreadIds={new Set()}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={onToggleFolderReviewed}
@@ -170,7 +163,7 @@ describe('FileList', () => {
         ]}
         onScrollToFile={onScrollToFile}
         comments={[]}
-        decisions={[]}
+        resolvedThreadIds={new Set()}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={vi.fn()}
@@ -197,7 +190,7 @@ describe('FileList', () => {
         files={[createFile('src/cli/index.ts'), createFile('src/client/App.tsx')]}
         onScrollToFile={vi.fn()}
         comments={[]}
-        decisions={[]}
+        resolvedThreadIds={new Set()}
         reviewedFiles={new Set(['src/cli/index.ts', 'src/client/App.tsx'])}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={onToggleFolderReviewed}
@@ -212,7 +205,7 @@ describe('FileList', () => {
     expect(onToggleFolderReviewed).toHaveBeenCalledWith('src', false);
   });
 
-  it('counts only unresolved threads, including reopened ones', () => {
+  it('counts only the threads not shown as resolved', () => {
     render(
       <FileList
         files={[createFile('README.md'), createFile('calc.js')]}
@@ -223,12 +216,7 @@ describe('FileList', () => {
           createThread('c', 'calc.js'),
           createThread('d', 'calc.js'),
         ]}
-        decisions={[
-          decide('a', 'resolved', '2026-01-02T00:00:00.000Z'),
-          decide('b', 'resolved', '2026-01-02T00:00:00.000Z'),
-          decide('c', 'resolved', '2026-01-02T00:00:00.000Z'),
-          decide('c', 'unresolved', '2026-01-03T00:00:00.000Z'),
-        ]}
+        resolvedThreadIds={new Set(['a', 'b'])}
         reviewedFiles={new Set()}
         onToggleReviewed={vi.fn()}
         onToggleFolderReviewed={vi.fn()}
@@ -243,7 +231,7 @@ describe('FileList', () => {
     const baseProps = {
       onScrollToFile: vi.fn(),
       comments: [],
-      decisions: [],
+      resolvedThreadIds: new Set<string>(),
       reviewedFiles: new Set<string>(),
       onToggleReviewed: vi.fn(),
       onToggleFolderReviewed: vi.fn(),
@@ -440,7 +428,7 @@ describe('FileList keys', () => {
           files={files}
           onScrollToFile={onScrollToFile}
           comments={[]}
-          decisions={[]}
+          resolvedThreadIds={new Set()}
           reviewedFiles={new Set()}
           onToggleReviewed={vi.fn()}
           onToggleFolderReviewed={vi.fn()}
@@ -634,7 +622,7 @@ describe('FileList fixups', () => {
           onScrollToFile={onScrollToFile}
           onFileSelected={onFileSelected}
           comments={[createThread('t1', 'src/a.ts')]}
-          decisions={[]}
+          resolvedThreadIds={new Set()}
           reviewedFiles={new Set()}
           onToggleReviewed={vi.fn()}
           onToggleFolderReviewed={vi.fn()}
@@ -706,7 +694,7 @@ describe('FileList fixups', () => {
           files={[createFile('src/a.ts')]}
           onScrollToFile={vi.fn()}
           comments={[]}
-          decisions={[]}
+          resolvedThreadIds={new Set()}
           reviewedFiles={new Set()}
           onToggleReviewed={vi.fn()}
           onToggleFolderReviewed={vi.fn()}

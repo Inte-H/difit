@@ -1,13 +1,12 @@
 import { MessageSquare } from 'lucide-react';
 import { memo, useEffect, useMemo, useRef } from 'react';
 
-import { type CommentThread, type DiffFile, type ReviewDecision } from '../../types/diff';
-import { isThreadResolved } from '../../utils/reviewDecisions';
+import { type CommentThread, type DiffFile } from '../../types/diff';
 
 interface FileChipsProps {
   files: DiffFile[];
   comments: CommentThread[];
-  decisions: ReviewDecision[];
+  resolvedThreadIds: ReadonlySet<string>;
   reviewedFiles: Set<string>;
   selectedFileIndex: number | null;
   scrollVisibleFileIndex?: number | null;
@@ -20,7 +19,7 @@ const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 export const FileChips = memo(function FileChips({
   files,
   comments,
-  decisions,
+  resolvedThreadIds,
   reviewedFiles,
   selectedFileIndex,
   scrollVisibleFileIndex = null,
@@ -33,11 +32,11 @@ export const FileChips = memo(function FileChips({
   const commentCounts = useMemo(() => {
     const counts = new Map<string, number>();
     comments.forEach((comment) => {
-      if (isThreadResolved(comment.id, decisions)) return;
+      if (resolvedThreadIds.has(comment.id)) return;
       counts.set(comment.file, (counts.get(comment.file) ?? 0) + 1);
     });
     return counts;
-  }, [comments, decisions]);
+  }, [comments, resolvedThreadIds]);
 
   const scrollVisiblePath =
     scrollVisibleFileIndex === null ? undefined : files[scrollVisibleFileIndex]?.path;

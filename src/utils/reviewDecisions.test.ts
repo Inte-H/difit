@@ -9,6 +9,7 @@ import {
 } from '../types/diff';
 
 import {
+  appearsResolved,
   commentPanelStatus,
   deriveThreadReviewState,
   isAgentResponding,
@@ -306,6 +307,70 @@ describe('isThreadResolved', () => {
   });
 });
 
+describe('appearsResolved', () => {
+  const at = (minute: number) => `2026-01-01T00:0${minute}:00Z`;
+  const approved = (minute: number, sha = 'aaaa') => decision('approved', sha, at(minute));
+  const mark = (kind: 'resolved' | 'unresolved', minute: number) => decision(kind, '', at(minute));
+
+  it('follows the manual marks when nothing was approved or folded', () => {
+    expect(appearsResolved('t1', [], [])).toBe(false);
+    expect(appearsResolved('t1', [], [mark('resolved', 0)])).toBe(true);
+    expect(appearsResolved('t1', [], [mark('resolved', 0), mark('unresolved', 1)])).toBe(false);
+  });
+
+  it('shows an approved thread as resolved without a manual mark', () => {
+    expect(appearsResolved('t1', [fixup('aaaa')], [approved(0)])).toBe(true);
+  });
+
+  it('shows an approval of several fixups at once as resolved', () => {
+    const bundle = [fixup('aaaa'), fixup('bbbb')];
+    expect(appearsResolved('t1', bundle, [approved(0), approved(0, 'bbbb')])).toBe(true);
+  });
+
+  it('reopens an approved thread when the check is pressed after the approval, keeping the approval', () => {
+    const decisions = [approved(0), mark('unresolved', 1)];
+    expect(appearsResolved('t1', [fixup('aaaa')], decisions)).toBe(false);
+    expect(deriveThreadReviewState('t1', [fixup('aaaa')], decisions)).toBe('approved');
+    expect(appearsResolved('t1', [fixup('aaaa')], [...decisions, mark('resolved', 2)])).toBe(true);
+  });
+
+  it('shows the thread resolved again when it is approved after being reopened', () => {
+    const decisions = [mark('resolved', 0), mark('unresolved', 1), approved(2)];
+    expect(appearsResolved('t1', [fixup('aaaa')], decisions)).toBe(true);
+  });
+
+  it('falls back to the manual mark once the approval is undone', () => {
+    const undone = [approved(1), decision('unapproved', '', at(2))];
+    expect(appearsResolved('t1', [fixup('aaaa')], undone)).toBe(false);
+    expect(appearsResolved('t1', [fixup('aaaa')], [mark('resolved', 0), ...undone])).toBe(true);
+  });
+
+  it('stops counting an approval that a later rejection voided', () => {
+    const decisions = [approved(0), decision('rejected', 'aaaa', at(1))];
+    expect(appearsResolved('t1', [fixup('aaaa')], decisions)).toBe(false);
+  });
+
+  it('keeps a thread open while a fixup the approval does not cover waits for judgment', () => {
+    expect(appearsResolved('t1', [fixup('cccc')], [approved(0)])).toBe(false);
+  });
+
+  it('shows a folded thread as resolved until the check reopens it', () => {
+    const folded = decision('folded', 'aaaa', at(0));
+    expect(appearsResolved('t1', [], [folded])).toBe(true);
+    expect(appearsResolved('t1', [], [folded, mark('unresolved', 1)])).toBe(false);
+  });
+
+  it('leaves the manual mark alone, so what is handed to the agent does not change', () => {
+    expect(isThreadResolved('t1', [approved(0)])).toBe(false);
+  });
+
+  it('ignores other threads’ records', () => {
+    expect(
+      appearsResolved('t1', [fixup('aaaa')], [decision('approved', 'aaaa', at(0), 't2')]),
+    ).toBe(false);
+  });
+});
+
 describe('selectOpenThreads', () => {
   const threads = ['open', 'answered', 'rejected', 'retried', 'approved', 'folded'].map((id) => ({
     id,
@@ -406,6 +471,14 @@ describe('commentPanelStatus', () => {
     expect(status('t1', [fixup('aaaa')], [resolution])).toBe('resolved');
     const reopening = decision('unresolved', '', '2026-01-01T00:01:00Z');
     expect(status('t1', [fixup('aaaa')], [resolution, reopening])).toBe('answered');
+  });
+
+  it('shows an approved or folded thread reopened with the check as the reviewer’s move', () => {
+    const reopening = decision('unresolved', '', '2026-01-01T00:01:00Z');
+    expect(status('t1', [fixup('aaaa')], [decision('approved', 'aaaa'), reopening])).toBe(
+      'answered',
+    );
+    expect(status('t1', [], [decision('folded', 'aaaa'), reopening])).toBe('answered');
   });
 
   it('gives a deleted thread no status, so the panel leaves it out', () => {

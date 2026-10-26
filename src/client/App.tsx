@@ -48,9 +48,9 @@ import {
 } from '../utils/diffSelection';
 import { countOpenThreadsByCommit } from '../utils/openCommentCounts';
 import {
+  appearsResolved,
   commentPanelStatus,
   isThreadDeleted,
-  isThreadResolved,
   mergeReviewDecisions,
   selectOpenThreads,
   type CommentPanelStatus,
@@ -533,9 +533,13 @@ function App() {
   const resolvedThreadIds = useMemo(
     () =>
       new Set(
-        threads.filter((thread) => isThreadResolved(thread.id, decisions)).map(({ id }) => id),
+        threads
+          .filter((thread) =>
+            appearsResolved(thread.id, fixupsByThread.get(thread.id) ?? [], decisions),
+          )
+          .map(({ id }) => id),
       ),
-    [threads, decisions],
+    [threads, fixupsByThread, decisions],
   );
   if (resolvedThreadIds.size === 0 && !showResolvedThreads) setShowResolvedThreads(true);
   const commentPanelStatusById = useMemo(() => {
@@ -2305,7 +2309,7 @@ function App() {
           <FileChips
             files={diffData.files}
             comments={drawnThreads}
-            decisions={decisions}
+            resolvedThreadIds={resolvedThreadIds}
             reviewedFiles={viewedFiles}
             selectedFileIndex={cursor?.fileIndex ?? null}
             scrollVisibleFileIndex={scrollVisibleFileIndex}
@@ -2419,7 +2423,7 @@ function App() {
                   onScrollToFile={scrollFileIntoDiffContainer}
                   onFileSelected={isMobile ? handleMobileFileSelected : undefined}
                   comments={drawnThreads}
-                  decisions={decisions}
+                  resolvedThreadIds={resolvedThreadIds}
                   reviewedFiles={viewedFiles}
                   onToggleReviewed={toggleFileReviewed}
                   onToggleFolderReviewed={toggleFolderReviewed}

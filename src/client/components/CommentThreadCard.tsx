@@ -9,7 +9,7 @@ import {
 } from '../../types/diff';
 import { formatCommentContent } from '../../utils/commentFormatting';
 import { isSameCommit } from '../../utils/diffSelection';
-import { isThreadResolved, reviewStateLabel } from '../../utils/reviewDecisions';
+import { appearsResolved, reviewStateLabel } from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { usePickedThreadId } from '../contexts/PickedThreadContext';
 import { useClickOutside } from '../hooks/useClickOutside';
@@ -246,8 +246,8 @@ export function CommentThreadCard({
   syntaxTheme,
 }: CommentThreadCardProps) {
   const [isReplying, setIsReplying] = useState(false);
-  const { decisions, recordDecision } = useFixupOverlay();
-  const isResolved = isThreadResolved(thread.id, decisions);
+  const { decisions, fixupsByThread, recordDecision } = useFixupOverlay();
+  const isResolved = appearsResolved(thread.id, fixupsByThread.get(thread.id) ?? [], decisions);
   const isFolded = decisions.some(
     (decision) => decision.threadId === thread.id && decision.kind === 'folded',
   );
@@ -456,8 +456,8 @@ export function CommentThreadCard({
           ))}
 
           {review &&
-            !isResolved &&
-            (review.state === 'awaiting-approval' || review.state === 'approved') && (
+            ((review.state === 'awaiting-approval' && !isResolved) ||
+              review.state === 'approved') && (
               <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                 {review.state === 'awaiting-approval' && review.pendingFixups.length > 0 && (
                   <>

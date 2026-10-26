@@ -221,7 +221,7 @@ describe('App - live comment sync', { timeout: 15_000 }, () => {
       ],
     };
     await sendCommentsChanged();
-    await screen.findByRole('button', { name: '승인 취소' });
+    await screen.findByTestId('resolved-chip');
 
     expect(openWatch()).toBe(watch);
     expect(watch?.close).not.toHaveBeenCalled();
