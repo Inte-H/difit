@@ -115,6 +115,8 @@ function FixupOnlyGroup({
             key={file.path}
             id={fixupFileElementId(fixup.sha, file.path)}
             data-fixup-only-file={file.path}
+            // Line numbers here are the fixup commit's, while a click searches the review's refs.
+            data-symbol-no-position
             className={`mb-6 ${isFocused ? 'rounded-md border-2 border-github-accent' : ''}`}
           >
             <DiffViewer

@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { DiffMode, type ClientWatchState, type WatchEvent } from '../../types/watch.js';
+import {
+  DiffMode,
+  type ClientWatchState,
+  type SymbolIndexStatus,
+  type WatchEvent,
+} from '../../types/watch.js';
 import { resolveEventSourceUrl } from '../utils/eventSourceUrl';
 
 interface FileWatchHook {
@@ -14,11 +19,16 @@ interface FileWatchHook {
 export function useFileWatch(
   onReload?: () => Promise<void>,
   onCommentsChanged?: () => Promise<void>,
+  onSymbolIndexChanged?: (commit: string, status: SymbolIndexStatus) => void,
 ): FileWatchHook {
   const eventSourceRef = useRef<EventSource | null>(null);
   // Read through a ref so a new callback identity never closes and reopens the connection,
   // which would drop events sent while reconnecting.
   const onCommentsChangedRef = useRef(onCommentsChanged);
+  const onSymbolIndexChangedRef = useRef(onSymbolIndexChanged);
+  useEffect(() => {
+    onSymbolIndexChangedRef.current = onSymbolIndexChanged;
+  }, [onSymbolIndexChanged]);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
@@ -87,6 +97,10 @@ export function useFileWatch(
 
             case 'commentsChanged':
               void onCommentsChangedRef.current?.();
+              break;
+
+            case 'symbolIndexChanged':
+              onSymbolIndexChangedRef.current?.(data.commit, data.status);
               break;
           }
         } catch (parseError) {

@@ -1,5 +1,5 @@
 {
-  "ignoreBinaries": ["gh", "ssh-keygen"],
+  "ignoreBinaries": ["gh", "ssh-keygen", "taskkill"],
   "workspaces": {
     ".": {
       "ignoreDependencies": [

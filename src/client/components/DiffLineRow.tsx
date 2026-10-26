@@ -70,6 +70,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
     const lineNumber = line.newLineNumber || line.oldLineNumber;
     const showLineActions = hoveredLineIndex === index && lineNumber;
     const side = line.type === 'delete' ? 'old' : 'new';
+    const sideLineNumber = side === 'old' ? line.oldLineNumber : line.newLineNumber;
 
     const highlightClass = isCurrentLine ? 'keyboard-cursor' : '';
 
@@ -108,7 +109,8 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
           className="p-0 w-full relative align-top"
           data-symbol-side={side}
           data-symbol-path={filename}
-          {...codeCellAttributes(side, side === 'old' ? line.oldLineNumber : line.newLineNumber)}
+          data-symbol-line={sideLineNumber}
+          {...codeCellAttributes(side, sideLineNumber)}
         >
           <DiffCodeLine
             line={line}

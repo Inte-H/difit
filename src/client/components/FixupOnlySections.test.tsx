@@ -47,20 +47,31 @@ const groupAnswering = (threadIds: string[]): FixupOnlyFiles => ({
 });
 
 describe('FixupOnlySections', () => {
+  const onAddComment = vi.fn(() => Promise.resolve());
+  const props = (group: FixupOnlyFiles): ComponentProps<typeof FixupOnlySections> => ({
+    groups: [group],
+    firstFileIndex: 0,
+    threadsByFixupFile: new Map(),
+    onAddComment,
+    fixupOverlay: EMPTY_FIXUP_OVERLAY,
+    diffMode: 'unified',
+    onResolveThread: vi.fn(),
+    onReplyToThread: vi.fn(() => Promise.resolve()),
+    onRemoveMessage: vi.fn(),
+    onUpdateMessage: vi.fn(),
+  });
+
+  it('keeps clicked names in a fixup-only file from sending the fixup line to the review commit', () => {
+    const { container } = render(<FixupOnlySections {...props(groupAnswering([]))} />);
+
+    expect(
+      container
+        .querySelector('[data-fixup-only-file="p.ts"]')
+        ?.closest('[data-symbol-no-position]'),
+    ).not.toBeNull();
+  });
+
   it('keeps the comment handler of a section when its group is rebuilt for the same fixup', () => {
-    const onAddComment = vi.fn(() => Promise.resolve());
-    const props = (group: FixupOnlyFiles): ComponentProps<typeof FixupOnlySections> => ({
-      groups: [group],
-      firstFileIndex: 0,
-      threadsByFixupFile: new Map(),
-      onAddComment,
-      fixupOverlay: EMPTY_FIXUP_OVERLAY,
-      diffMode: 'unified',
-      onResolveThread: vi.fn(),
-      onReplyToThread: vi.fn(() => Promise.resolve()),
-      onRemoveMessage: vi.fn(),
-      onUpdateMessage: vi.fn(),
-    });
     const { rerender } = render(<FixupOnlySections {...props(groupAnswering(['c1']))} />);
     const before = viewerProps.at(-1)?.onAddComment;
 

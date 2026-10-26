@@ -804,6 +804,7 @@ export function SideBySideDiffChunk({
                         className="flex items-center relative min-h-[20px] px-3"
                         data-symbol-side="old"
                         data-symbol-path={filename}
+                        data-symbol-line={sideLine.oldLineNumber}
                       >
                         {sideLine.wordLevelDiff ? (
                           <WordLevelDiffHighlighter
@@ -857,6 +858,7 @@ export function SideBySideDiffChunk({
                         className="flex items-center relative min-h-[20px] px-3"
                         data-symbol-side="new"
                         data-symbol-path={filename}
+                        data-symbol-line={sideLine.newLineNumber}
                       >
                         {sideLine.wordLevelDiff ? (
                           <WordLevelDiffHighlighter

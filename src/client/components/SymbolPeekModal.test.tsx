@@ -1,9 +1,12 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SymbolSearchResponse } from '../../types/diff';
+import type { SymbolIndexStatus } from '../../types/watch';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
+import type { SymbolIndexUpdates } from '../hooks/useSymbolPeek';
+import { symbolRequestFromTarget } from '../utils/symbolPeek';
 
 import { SymbolPeekModal } from './SymbolPeekModal';
 
@@ -27,6 +30,7 @@ const found: SymbolSearchResponse = {
   definitions: [{ path: 'src/math.ts', line: 2, text: 'export function addOne(n) {' }],
   references: [{ path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' }],
   truncated: false,
+  source: 'name',
 };
 
 const files: Record<string, string> = {
@@ -330,5 +334,220 @@ describe('SymbolPeekModal', () => {
     fireEvent.click(screen.getByRole('button', { name: '뒤로' }));
 
     expect(onBack).toHaveBeenCalled();
+  });
+});
+
+describe('SymbolPeekModal with a commit index', () => {
+  const commit = 'a'.repeat(40);
+  const request = { name: 'addOne', ref: 'abc1234', from: 'src/use.ts', line: 1, column: 12 };
+  const byName: SymbolSearchResponse = {
+    ...found,
+    references: [
+      { path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' },
+      { path: 'src/other.ts', line: 5, text: 'other.addOne(2);' },
+    ],
+    indexing: commit,
+  };
+  const byIndex: SymbolSearchResponse = {
+    ...found,
+    references: [{ path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' }],
+    source: 'index',
+  };
+
+  // `null` answers the search with a failure.
+  let answers: ((value: SymbolSearchResponse | null) => void)[];
+
+  beforeEach(() => {
+    global.fetch = vi.fn();
+    answers = [];
+    files['src/other.ts'] = 'const other = {};\n\n\n\nother.addOne(2);\n';
+    vi.mocked(global.fetch).mockImplementation(async (input) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/symbol') {
+        const search = await new Promise<SymbolSearchResponse | null>((resolve) =>
+          answers.push(resolve),
+        );
+        return search === null
+          ? new Response('', { status: 404 })
+          : new Response(JSON.stringify(search), { status: 200 });
+      }
+      const content = files[decodeURIComponent(url.pathname.replace('/api/blob/', ''))];
+      return content === undefined
+        ? new Response('', { status: 404 })
+        : new Response(new TextEncoder().encode(content), { status: 200 });
+    });
+  });
+
+  afterEach(() => {
+    delete files['src/other.ts'];
+    vi.restoreAllMocks();
+  });
+
+  const symbolRequests = () =>
+    vi.mocked(global.fetch).mock.calls.filter(([url]) => String(url).startsWith('/api/symbol'));
+
+  async function answer(search: SymbolSearchResponse | null, count: number) {
+    await waitFor(() => expect(answers).toHaveLength(count));
+    answers[count - 1]!(search);
+  }
+
+  function modal(indexUpdates?: SymbolIndexUpdates) {
+    return (
+      <WordHighlightProvider>
+        <SymbolPeekModal
+          request={request}
+          canGoBack={false}
+          onBack={vi.fn()}
+          onClose={vi.fn()}
+          indexUpdates={indexUpdates}
+        />
+      </WordHighlightProvider>
+    );
+  }
+
+  const updates = (status: SymbolIndexStatus, seq: number, on = commit): SymbolIndexUpdates => ({
+    seq,
+    byCommit: new Map([[on, { status, seq }]]),
+  });
+
+  const selectedItem = () => document.querySelector('nav [aria-current="true"]')?.textContent;
+
+  it('sends where the name was clicked', async () => {
+    render(modal());
+    await answer(byIndex, 1);
+
+    expect(symbolRequests()[0]?.[0]).toBe(
+      '/api/symbol?name=addOne&ref=abc1234&from=src%2Fuse.ts&line=1&column=12',
+    );
+  });
+
+  it('says the index is being built only while the answer says so', async () => {
+    const { unmount } = render(modal());
+    await answer(byName, 1);
+    expect(await screen.findByRole('status')).toHaveTextContent('색인을 만드는 중');
+    unmount();
+
+    render(modal());
+    await answer(byIndex, 2);
+    await shownRows();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('swaps in the index answer when the index is ready and keeps the selected line', async () => {
+    const { rerender } = render(modal(updates('building', 1)));
+    await answer(byName, 1);
+    await shownRows();
+    fireEvent.click(screen.getByText('src/use.ts:1'));
+    expect(await screen.findByText('src/use.ts')).toBeInTheDocument();
+
+    rerender(modal(updates('building', 2)));
+    rerender(modal(updates('building', 2, 'b'.repeat(40))));
+    expect(symbolRequests()).toHaveLength(1);
+
+    rerender(modal(updates('ready', 3)));
+    await answer(byIndex, 2);
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(screen.queryByText('src/other.ts:5')).not.toBeInTheDocument();
+    expect(selectedItem()).toContain('src/use.ts:1');
+    expect(screen.getByText('src/use.ts')).toBeInTheDocument();
+    const useFileRequests = vi
+      .mocked(global.fetch)
+      .mock.calls.filter(([url]) => String(url).startsWith('/api/blob/src%2Fuse.ts'));
+    expect(useFileRequests).toHaveLength(1);
+  });
+
+  it('selects the first item when the selected line is gone from the index answer', async () => {
+    const { rerender } = render(modal());
+    await answer(byName, 1);
+    await shownRows();
+    fireEvent.click(screen.getByText('src/other.ts:5'));
+    expect(await screen.findByText('src/other.ts')).toBeInTheDocument();
+
+    rerender(modal(updates('ready', 1)));
+    await answer(byIndex, 2);
+
+    await waitFor(() => expect(selectedItem()).toContain('src/math.ts:2'));
+    expect(await screen.findByText('src/math.ts')).toBeInTheDocument();
+  });
+
+  it('keeps the name search answer but drops the status line when asking again fails', async () => {
+    const { rerender } = render(modal());
+    await answer(byName, 1);
+    await shownRows();
+    fireEvent.click(screen.getByText('src/other.ts:5'));
+    expect(await screen.findByText('src/other.ts')).toBeInTheDocument();
+
+    rerender(modal(updates('ready', 1)));
+    await answer(null, 2);
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(selectedItem()).toContain('src/other.ts:5');
+    expect(screen.getByText('src/use.ts:1')).toBeInTheDocument();
+    expect(screen.queryByText('이 리비전에서는 찾을 수 없습니다.')).not.toBeInTheDocument();
+  });
+
+  it('asks again when the index was finished before the first answer arrived', async () => {
+    const { rerender } = render(modal());
+    await waitFor(() => expect(answers).toHaveLength(1));
+    rerender(modal(updates('ready', 1)));
+    answers[0]!(byName);
+
+    await answer(byIndex, 2);
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+  });
+
+  it('does not ask again over an index change heard before it searched', async () => {
+    render(modal(updates('ready', 1)));
+    await answer(byName, 1);
+    await shownRows();
+
+    expect(symbolRequests()).toHaveLength(1);
+  });
+
+  it('shows a declaration that only a library holds, then the uses in the repository', async () => {
+    render(modal());
+    await answer(
+      {
+        ...byIndex,
+        name: 'orElse',
+        definitions: [],
+        library: 'java.util.Optional#orElse()',
+      },
+      1,
+    );
+
+    const list = await screen.findByRole('navigation');
+    expect(within(list).getByText('선언 1')).toBeInTheDocument();
+    expect(within(list).getByText('라이브러리 선언')).toBeInTheDocument();
+    expect(within(list).getByText('java.util.Optional#orElse()')).toBeInTheDocument();
+    expect(within(list).getByText('저장소에 소스가 없어 열 수 없습니다')).toBeInTheDocument();
+    expect(within(list).getByText('쓰인 곳 1')).toBeInTheDocument();
+    expect(selectedItem()).toContain('src/use.ts:1');
+    expect(list.textContent?.indexOf('저장소에 소스가 없어')).toBeLessThan(
+      list.textContent?.indexOf('src/use.ts:1') ?? -1,
+    );
+  });
+
+  it('gives a name clicked inside the window its line and column', async () => {
+    render(modal());
+    await answer(byIndex, 1);
+    await shownRows();
+
+    const word = await waitFor(() => {
+      const found = document.querySelector(
+        '[data-symbol-line="2"] .word-token[data-word="addOne"]',
+      );
+      expect(found).not.toBeNull();
+      return found;
+    });
+
+    expect(symbolRequestFromTarget(word, {})).toEqual({
+      name: 'addOne',
+      ref: 'abc1234',
+      from: 'src/math.ts',
+      line: 2,
+      column: 'export function '.length,
+    });
   });
 });

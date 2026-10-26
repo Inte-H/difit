@@ -12,12 +12,13 @@ const CONFIG_VERSION = 1 as const;
 // Generous ceiling for UI preferences; anything larger is a bug or abuse.
 export const MAX_USER_CONFIG_BYTES = 64 * 1024;
 
-export function getUserConfigPath(): string {
+export function getDifitConfigDir(): string {
   const configDir = process.env.DIFIT_CONFIG_DIR?.trim();
-  if (configDir) {
-    return join(configDir, 'config.json');
-  }
-  return join(homedir(), '.difit', 'config.json');
+  return configDir || join(homedir(), '.difit');
+}
+
+export function getUserConfigPath(): string {
+  return join(getDifitConfigDir(), 'config.json');
 }
 
 function createDefaultUserConfig(): UserConfig {

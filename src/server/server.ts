@@ -10,7 +10,7 @@ import open from 'open';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
-import { type DiffMode } from '../types/watch.js';
+import { type DiffMode, type WatchEvent } from '../types/watch.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
 import {
   mergeCommentImports,
@@ -45,6 +45,9 @@ import { commitDirectEdit } from './direct-edit.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
+import { runGit } from './run-git.js';
+import { ScipIndexBuilder } from './scip-build.js';
+import { type SymbolPosition, answerFromScipIndex, commitFiles, isJavaPath } from './scip-peek.js';
 import { searchSymbol } from './symbol-search.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
 
@@ -79,6 +82,7 @@ import {
   fixupCommitOf,
   getDiffSelectionKey,
   isCommitHash,
+  isCommitTarget,
   isSameView,
   isViewOfReview,
 } from '../utils/diffSelection.js';
@@ -105,6 +109,12 @@ const LOOPBACK_ADDRESSES = new Set(['localhost', '127.0.0.1', '::1']);
 // A Host header wraps an IPv6 address in brackets.
 const LOOPBACK_HOST_HEADERS = new Set([...LOOPBACK_ADDRESSES, '[::1]']);
 const MAX_DIFF_CACHE_ENTRIES = 8;
+
+function parseIntAtLeast(value: unknown, min: number): number | undefined {
+  if (typeof value !== 'string' || !/^\d{1,9}$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return parsed >= min ? parsed : undefined;
+}
 
 function createDiffCacheKey(selection: DiffSelection, ignoreWhitespace: boolean) {
   return `${getDiffSelectionKey(selection)}\u0000${ignoreWhitespace ? '1' : '0'}`;
@@ -171,6 +181,9 @@ export async function startServer(options: ServerOptions): Promise<{
   server?: Server;
   settleDirectEdits?: () => Promise<unknown>;
   endCommentWaits?: () => Promise<void>;
+  stopSymbolIndex?: () => Promise<void>;
+  // Settles once every index build that the opened reviews asked for has ended.
+  settleSymbolIndex?: () => Promise<void>;
 }> {
   const app = express();
   const repositoryPath = resolve(options.repoPath ?? process.cwd());
@@ -298,6 +311,56 @@ export async function startServer(options: ServerOptions): Promise<{
     return review;
   };
   await reviewOf(initialSelection, currentCommentSelection);
+
+  const symbolIndex = options.stdinDiff
+    ? undefined
+    : new ScipIndexBuilder({ repoPath: repositoryPath });
+  const indexEvents = new Map<string, WatchEvent>();
+  symbolIndex?.onChange((commit, state) => {
+    const event: WatchEvent = {
+      type: 'symbolIndexChanged',
+      commit,
+      status: state.status,
+      timestamp: new Date().toISOString(),
+    };
+    indexEvents.set(commit, event);
+    fileWatcher.broadcast(event);
+  });
+  // A ref that rev-parse returns unchanged is a full hash and always names the same commit.
+  const resolvedCommits = new Map<string, string>();
+  const resolveCommit = async (ref: string): Promise<string | null> => {
+    if (!isCommitTarget(ref) || !validateCommitish(ref)) return null;
+    const known = resolvedCommits.get(ref);
+    if (known) return known;
+    const result = await runGit(repositoryPath, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `${ref}^{commit}`,
+    ]);
+    const commit = result.code === 0 ? result.stdout.toString('utf8').trim() : '';
+    if (commit === '') return null;
+    if (commit === ref) resolvedCommits.set(ref, commit);
+    return commit;
+  };
+  const indexRequests = new Set<Promise<void>>();
+  const indexReviewedCommit = (selection: DiffSelection) => {
+    if (!symbolIndex) return;
+    const pending: Promise<void> = (async () => {
+      try {
+        const commit = await resolveCommit(selection.targetCommitish);
+        if (commit) await symbolIndex.request(commit);
+      } catch (error) {
+        console.error('Error starting the symbol index:', error);
+      }
+    })().finally(() => indexRequests.delete(pending));
+    indexRequests.add(pending);
+  };
+  const settleSymbolIndex = async () => {
+    while (indexRequests.size > 0) await Promise.all(indexRequests);
+  };
+  indexReviewedCommit(initialSelection);
+
   const canEditDirectly = (selection: DiffSelection) =>
     !options.stdinDiff &&
     listensOnLoopbackOnly &&
@@ -445,6 +508,7 @@ export async function startServer(options: ServerOptions): Promise<{
     }
 
     currentSelection = requestedSelection;
+    indexReviewedCommit(requestedSelection);
 
     const viewSelection = createResolvedCommentSelection(
       responseDiffData,
@@ -589,20 +653,63 @@ export async function startServer(options: ServerOptions): Promise<{
       return;
     }
     const fromPath = typeof from === 'string' ? parseRepositoryRelativePath(from) : undefined;
+    const path = fromPath?.ok ? fromPath.path : undefined;
+    const line = parseIntAtLeast(req.query.line, 1);
+    const column = parseIntAtLeast(req.query.column, 0);
+    const at: SymbolPosition | undefined =
+      path !== undefined && line !== undefined && column !== undefined
+        ? { path, line, column }
+        : undefined;
     const disconnected = new AbortController();
     res.on('close', () => {
       if (!res.writableEnded) disconnected.abort();
     });
 
     try {
+      const commit =
+        symbolIndex && path !== undefined && isJavaPath(path) ? await resolveCommit(ref) : null;
+      let askedIndex = false;
+      const fromIndex = async () => {
+        if (!commit || !at) return null;
+        try {
+          const index = await symbolIndex?.getIndex(commit);
+          if (!index) return null;
+          askedIndex = true;
+          return await answerFromScipIndex(
+            index,
+            name,
+            ref,
+            at,
+            commitFiles(repositoryPath, commit, disconnected.signal),
+          );
+        } catch (error) {
+          if (!disconnected.signal.aborted) console.error('Error reading the symbol index:', error);
+          return null;
+        }
+      };
+
+      const indexed = await fromIndex();
+      if (indexed) {
+        res.json(indexed);
+        return;
+      }
       const response: SymbolSearchResponse = await searchSymbol(
         repositoryPath,
         name,
         ref,
-        fromPath?.ok ? fromPath.path : undefined,
+        path,
         disconnected.signal,
       );
-      res.json(response);
+      const state = commit ? symbolIndex?.state(commit).status : undefined;
+      // The index may have finished while the name search ran.
+      const late = !askedIndex && state === 'ready' ? await fromIndex() : null;
+      if (late) {
+        res.json(late);
+      } else if (commit && at && state === 'building') {
+        res.json({ ...response, indexing: commit });
+      } else {
+        res.json(response);
+      }
     } catch (error) {
       if (disconnected.signal.aborted) return;
       console.error('Error searching symbol:', error);
@@ -1653,7 +1760,7 @@ export async function startServer(options: ServerOptions): Promise<{
       'Access-Control-Allow-Origin': '*',
     });
 
-    fileWatcher.addClient(res);
+    fileWatcher.addClient(res, [...indexEvents.values()]);
 
     req.on('close', () => {
       fileWatcher.removeClient(res);
@@ -1726,6 +1833,7 @@ export async function startServer(options: ServerOptions): Promise<{
 
           // Stop file watcher
           await fileWatcher.stop();
+          await symbolIndex?.stop();
 
           await directEditQueue;
           await endCommentWaits();
@@ -1805,6 +1913,10 @@ export async function startServer(options: ServerOptions): Promise<{
     server,
     settleDirectEdits: () => directEditQueue,
     endCommentWaits,
+    stopSymbolIndex: async () => {
+      await symbolIndex?.stop();
+    },
+    settleSymbolIndex,
   };
 }
 

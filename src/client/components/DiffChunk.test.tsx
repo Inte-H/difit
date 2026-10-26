@@ -11,6 +11,7 @@ import {
 } from '../contexts/FixupOverlayContext';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import { boxesByAnchor, type FixupBox } from '../utils/fixupSpread';
+import { symbolRequestFromTarget } from '../utils/symbolPeek';
 
 import { DiffChunk } from './DiffChunk';
 import { SideBySideDiffChunk } from './SideBySideDiffChunk';
@@ -1318,5 +1319,89 @@ describe.each<ChunkMode>(['unified', 'split'])('a view that takes no comments (%
 
     expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '고른 부분에 지적 달기' })).not.toBeInTheDocument();
+  });
+});
+
+describe('DiffChunk symbol positions', () => {
+  const emojiLine = 'String 표시 = "😀" + name;';
+  const oldLine = '        return port.findById(id).orElse(null);';
+  const newLine = '        return port.findById(id).orElse(cache.findById(id));';
+  const javaChunk: DiffChunkData = {
+    header: '@@ -10,2 +10,2 @@',
+    oldStart: 10,
+    oldLines: 2,
+    newStart: 10,
+    newLines: 2,
+    lines: [
+      { type: 'normal', content: emojiLine, oldLineNumber: 10, newLineNumber: 10 },
+      { type: 'delete', content: oldLine, oldLineNumber: 11 },
+      { type: 'add', content: newLine, newLineNumber: 11 },
+    ],
+  };
+  const refs = { base: 'base111', target: 'target2' };
+
+  async function wordsIn(side: 'old' | 'new', line: number, word: string) {
+    return waitFor(() => {
+      const found = Array.from(
+        document.querySelectorAll(
+          `[data-symbol-side="${side}"][data-symbol-line="${line}"] .word-token[data-word="${word}"]`,
+        ),
+      );
+      expect(found.length).toBeGreaterThan(0);
+      return found;
+    });
+  }
+
+  describe.each(['unified', 'split'] as const)('in the %s view', (mode) => {
+    it('sends the line and the column of each clicked name', async () => {
+      renderWithProviders(
+        <DiffChunk
+          chunk={javaChunk}
+          chunkIndex={0}
+          threads={[]}
+          mode={mode}
+          onAddComment={asyncNoop}
+          onResolveThread={noop}
+          onReplyToThread={asyncNoop}
+          onRemoveMessage={noop}
+          onUpdateMessage={noop}
+          filename="src/Service.java"
+        />,
+      );
+
+      const twoOnOneLine = await wordsIn('new', 11, 'findById');
+      expect(document.querySelector('.word-diff-added')).not.toBeNull();
+      expect(twoOnOneLine.map((word) => symbolRequestFromTarget(word, refs))).toEqual([
+        {
+          name: 'findById',
+          ref: 'target2',
+          from: 'src/Service.java',
+          line: 11,
+          column: newLine.indexOf('findById'),
+        },
+        {
+          name: 'findById',
+          ref: 'target2',
+          from: 'src/Service.java',
+          line: 11,
+          column: newLine.lastIndexOf('findById'),
+        },
+      ]);
+
+      const [deleted] = await wordsIn('old', 11, 'orElse');
+      expect(symbolRequestFromTarget(deleted!, refs)).toMatchObject({
+        ref: 'base111',
+        line: 11,
+        column: oldLine.indexOf('orElse'),
+      });
+
+      // Columns count UTF-16 code units, as the index does.
+      const [afterEmoji] = await wordsIn('new', 10, 'name');
+      expect(symbolRequestFromTarget(afterEmoji!, refs)).toMatchObject({
+        line: 10,
+        column: emojiLine.indexOf('name'),
+      });
+      expect(emojiLine.indexOf('name')).toBe(19);
+    });
   });
 });
