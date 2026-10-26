@@ -97,6 +97,8 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
 4. 리뷰어가 직접 고친 fixup을 `되돌리기`로 거절했을 때도 같은 방법으로 버린다. 리뷰어가 직접 고치면서 연 스레드는 텍스트 출력에 `[되돌림]`이 붙는데, 이때는 fixup만 곧바로 버리고 다시 고치지 않는다. 버리기 전까지는 wait가 그 지적을 계속 알린다. 원래 있던 지적에 리뷰어가 직접 고쳐 답했다가 되돌렸으면 `[다시 수정 중]`이 붙으니, 여느 거절처럼 버리고 새로 고친다.
 
+5. 리뷰어가 커밋 목록에서 커밋 메시지를 고치면, difit은 파일을 바꾸지 않는 `amend! <대상 SHA>` 커밋을 HEAD 위에 만들고 승인으로 기록한다. 그 커밋 메시지의 첫 문단 아래가 새 메시지이고, 끝에 `Review-Thread` 트레일러가 붙는다. 스레드는 새로 열리고 `filePath`가 `/COMMIT_MSG`(1번 줄), `fixupTarget`이 메시지를 고친 커밋, author가 `reviewer-edit`이다. 접을 때까지 할 일은 없다.
+
 ## 승인된 수정 접기와 기록 올리기
 
 브랜치를 마무리할 때 한 번에 접는다. `--autosquash`는 범위 안의 fixup을 모두 접으므로, 남은 fixup이 전부 승인되고 거절된 fixup을 모두 버린 뒤에 돌린다. 리뷰어가 지운 지적의 fixup도 먼저 버린다. 지운 지적은 텍스트 출력에 나오지 않으므로, JSON `decisions`에서 `"kind": "deleted"`인 지적을 찾아 그 지적을 `Review-Thread` 트레일러로 단 fixup을 버린다.
@@ -109,6 +111,14 @@ GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 범위의 시작 커밋
 ```
 
 접기 전 SHA는 셸 변수에 담지 말고 적어 둔다. 명령을 한 번씩 따로 돌리는 에이전트에게는 앞 명령의 셸 변수가 남지 않는다. 접기는 커밋을 다시 나눌 뿐 마지막 파일 내용은 바꾸지 않으므로, 접은 뒤 `git diff --exit-code <접기 전 SHA> HEAD`가 아무것도 찍지 않아야 한다.
+
+`amend!` 커밋은 첫 문단 아래를 트레일러까지 그대로 대상 커밋의 메시지로 쓴다. 그래서 접은 뒤의 메시지에 `Review-Thread` 줄이 남는다. 이 줄이 남은 커밋은 나중 리뷰에서 fixup으로 읽혀 커밋 목록에서 빠지므로, 접은 직후 기록을 올리기 전에 지운다. 아래 명령은 그 줄이 있는 커밋만 고쳐 쓴다([docs/adr/0009](adr/0009-reviewer-rewords-become-amend-commits.md)).
+
+```sh
+git rebase <리뷰 범위의 시작 커밋> --exec 'git log -1 --format=%B | grep -q "^Review-Thread: " || exit 0; git log -1 --format=%B | sed "/^Review-Thread: /d" | git commit -q --amend --allow-empty --no-verify --cleanup=whitespace -F -'
+```
+
+`amend!`를 접으려면 git 2.32 이상이 필요하다. 그보다 오래된 git은 `amend!` 커밋을 접지 않고 그대로 둔다. 이때는 `git rebase -i`에서 `amend!` 커밋을 `drop`하고, 대상 커밋을 `reword`해 `git log -1 --format=%B <amend! SHA> | sed '1,/^$/d; /^Review-Thread: /d'`가 찍는 메시지로 바꾼다.
 
 리뷰 범위의 시작 커밋은 diff의 비교 기준이다. 커밋 하나만 주고 연 리뷰라면 그 커밋의 부모(`<SHA>^`)이다. 커밋 여러 개를 한꺼번에 본 리뷰에서는 커밋 하나를 보며 단 지적의 fixup과 리뷰어가 직접 고친 fixup이 범위 중간의 커밋을 향할 수 있으므로, 리뷰 대상 커밋이 아니라 범위의 시작점부터 돌려야 모두 접힌다.
 

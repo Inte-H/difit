@@ -113,6 +113,8 @@ Once a thread reaches you either way, its card shows `응답 중` until you repl
 
 The user can also edit code in the viewer. difit then commits a `fixup! <target SHA>` commit with a `Review-Thread` trailer on top of HEAD and records it as approved. Its author is `reviewer-edit`.
 
+The user can also reword a commit from the commit list. difit then commits an `amend! <target SHA>` commit that changes no file, whose message below the first paragraph is the new message with a `Review-Thread` trailer, and records it as approved under a new thread whose `filePath` is `/COMMIT_MSG` (line 1), with `fixupTarget` the reworded commit and author `reviewer-edit`. It needs nothing from you until folding.
+
 ### Answering a comment
 
 1. Read threads with their ids. The text output has no ids.
@@ -168,6 +170,14 @@ The JSON `decisions` only accumulate. Approving a comment with several fixups ad
 git rev-parse HEAD   # note this SHA as <pre-fold SHA>
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <review base>
 ```
+
+An `amend!` commit replaces its target's message with everything below its first paragraph, `Review-Thread` trailer included. Right after folding, before recording where the fixups went, remove those lines; a commit left with one reads as a fixup in a later review and drops out of its commit list. This rewrites only the commits that carry the line:
+
+```bash
+git rebase <review base> --exec 'git log -1 --format=%B | grep -q "^Review-Thread: " || exit 0; git log -1 --format=%B | sed "/^Review-Thread: /d" | git commit -q --amend --allow-empty --no-verify --cleanup=whitespace -F -'
+```
+
+Folding `amend!` commits needs git 2.32 or later; an older git leaves them in place. There, drop each one in `git rebase -i` and `reword` its target with the message `git log -1 --format=%B <amend! SHA> | sed '1,/^$/d; /^Review-Thread: /d'` prints.
 
 `<review base>` is the compare-with side of the diff, or `<SHA>^` for a single-commit review. Start from the review base, not the target commit: a fixup for a comment made on one commit, or one the user made in the viewer, can point at an earlier commit in the range. Folding only regroups changes, so afterwards `git diff --exit-code <pre-fold SHA> HEAD` must print nothing. Note the SHA itself rather than a shell variable: a variable does not survive into the next command when each command runs on its own.
 
