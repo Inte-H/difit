@@ -813,10 +813,9 @@ export function SideBySideDiffChunk({
                             syntaxTheme={syntaxTheme}
                             filename={filename}
                             lineTokens={
-                              getProcomputedTokens(
-                                getOldTokens,
-                                sideLine.oldLine.oldLineNumber,
-                              )?.[0]
+                              sideLine.oldLine.oldLineNumber != null
+                                ? (getOldTokens?.(sideLine.oldLine.oldLineNumber) ?? null)
+                                : null
                             }
                           />
                         ) : (
@@ -875,10 +874,9 @@ export function SideBySideDiffChunk({
                             syntaxTheme={syntaxTheme}
                             filename={filename}
                             lineTokens={
-                              getProcomputedTokens(
-                                getNewTokens,
-                                sideLine.newLine.newLineNumber,
-                              )?.[0]
+                              sideLine.newLine.newLineNumber != null
+                                ? (getNewTokens?.(sideLine.newLine.newLineNumber) ?? null)
+                                : null
                             }
                           />
                         ) : (

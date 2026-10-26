@@ -75,8 +75,8 @@ export const WordLevelDiffHighlighter = React.memo(function WordLevelDiffHighlig
   );
   const usablePrecomputed = lineTokens && textOf(lineTokens) === code ? lineTokens : null;
 
-  const renderSegments = (lineTokens: Token[] | null, getTokenProps: GetTokenProps) => {
-    const pieces = lineTokens ? tokensPerSegment(lineTokens, segments) : null;
+  const renderSegments = (shown: Token[] | null, getTokenProps: GetTokenProps) => {
+    const pieces = shown ? tokensPerSegment(shown, segments) : null;
     return segments.map((segment, index) => {
       const segmentTokens = pieces?.[index];
       return (
