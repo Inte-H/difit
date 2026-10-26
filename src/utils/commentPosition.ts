@@ -1,10 +1,11 @@
-import type { DiffCommentPosition, LineNumber } from '../types/diff.js';
+import type { DiffCommentPosition, DiffLineRange, LineNumber } from '../types/diff.js';
+
+export function lineOfRange(range: DiffLineRange): LineNumber {
+  return typeof range === 'number' ? range : [range.start, range.end];
+}
 
 export function lineOfPosition(position: DiffCommentPosition): LineNumber | undefined {
-  if (!('line' in position)) return undefined;
-  return typeof position.line === 'number'
-    ? position.line
-    : [position.line.start, position.line.end];
+  return 'line' in position ? lineOfRange(position.line) : undefined;
 }
 
 export function locationLabel(file: string, line: LineNumber | undefined): string {

@@ -42,7 +42,7 @@ export async function chooseFixupTarget(
   const last = commits?.at(-1) ?? target;
   if (startLine === undefined || endLine === undefined) {
     const touched = (
-      await gitText(repoPath, ['rev-list', `${base}..${target}`, '--', filePath])
+      await gitText(repoPath, ['rev-list', `${base}..${target}`, '--', `:(literal)${filePath}`])
     ).split('\n');
     if (!commits) return touched[0] || last;
     return [...commits].reverse().find((sha) => touched.includes(sha)) ?? last;

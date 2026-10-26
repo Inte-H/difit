@@ -2,13 +2,12 @@ import type {
   AnchorStaleReason,
   DiffCommentThread,
   DiffFile,
-  DiffLineRange,
   DiffSelection,
   LineNumber,
   ReviewScope,
 } from '../../types/diff';
 import { noVisibleLineContradictsAnchor, relocateAnchor } from '../../utils/anchorRelocation';
-import { lineOfPosition } from '../../utils/commentPosition';
+import { lineOfPosition, lineOfRange } from '../../utils/commentPosition';
 import { commitsOfView, isSameCommit, isSameView } from '../../utils/diffSelection';
 
 export interface FileLineIndex {
@@ -41,9 +40,6 @@ export function buildFileLineIndex(file: Pick<DiffFile, 'chunks'>): FileLineInde
   return { old: oldIndex, new: newIndex };
 }
 
-const toLineNumber = (line: DiffLineRange): LineNumber =>
-  typeof line === 'number' ? line : [line.start, line.end];
-
 // A stale thread keeps its stored position. Without a target commit (working tree, index, stdin)
 // the thread is never moved, only checked at its stored line.
 export function locateThread(
@@ -56,7 +52,7 @@ export function locateThread(
   if (!('line' in position)) {
     return index ? { isOutdated: false } : { isOutdated: true, outdatedReason: 'missing' };
   }
-  const storedLine = toLineNumber(position.line);
+  const storedLine = lineOfRange(position.line);
   const snapshot = thread.codeSnapshot?.content;
   if (snapshot === undefined) return { line: storedLine, isOutdated: false };
   if (!index) return { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
@@ -80,7 +76,7 @@ export function locateThread(
   if (relocation.kind === 'stale') {
     return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };
   }
-  return { line: toLineNumber(relocation.line), isOutdated: false };
+  return { line: lineOfRange(relocation.line), isOutdated: false };
 }
 
 export type Placement =

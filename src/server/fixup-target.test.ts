@@ -220,6 +220,16 @@ describe('chooseFixupTarget', () => {
       ).resolves.toBe(pin);
     });
 
+    it('reads a file name with brackets as written, not as a pattern', async () => {
+      const { repo, base } = pinThenFix();
+      const page = commit(repo, 'feat: id page', { '[id].tsx': lines('page') });
+      const other = commit(repo, 'feat: i page', { 'i.tsx': lines('other') });
+
+      await expect(
+        chooseFixupTarget(repo, wholeFile({ base, target: other }, '[id].tsx')),
+      ).resolves.toBe(page);
+    });
+
     it('passes over commits it is not given', async () => {
       const { repo, base, pin, fix } = pinThenFix();
       const unlisted = commit(repo, 'fixup! test: pin current discount', {
