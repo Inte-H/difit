@@ -384,7 +384,7 @@ export function SideBySideDiffChunk({
         const lineMatches = Array.isArray(thread.line)
           ? thread.line[1] === lineNumber
           : thread.line === lineNumber;
-        const sideMatches = !thread.side || thread.side === side;
+        const sideMatches = (thread.side ?? 'new') === side;
         return lineMatches && sideMatches;
       })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));

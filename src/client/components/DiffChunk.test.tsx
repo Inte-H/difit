@@ -1217,28 +1217,87 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
     });
   });
 
-  it('shows an old-side comment that ends on an unchanged line', () => {
-    const thread: CommentThread = {
-      id: 't-old',
-      file: 'src/example.ts',
-      line: [19, 21],
-      side: 'old',
-      createdAt: '2026-10-26T00:00:00.000Z',
-      updatedAt: '2026-10-26T00:00:00.000Z',
-      messages: [
-        {
-          id: 'm-old',
-          body: 'Why drop these notes?',
-          createdAt: '2026-10-26T00:00:00.000Z',
-          updatedAt: '2026-10-26T00:00:00.000Z',
-        },
-      ],
-    };
-
-    renderChunk(mode, { chunk: renumbered, threads: [thread] });
-
-    expect(screen.getAllByText('Why drop these notes?')).toHaveLength(1);
+  const threadOn = (
+    line: CommentThread['line'],
+    body: string,
+    side?: CommentThread['side'],
+  ): CommentThread => ({
+    id: `t-${body}`,
+    file: 'src/example.ts',
+    line,
+    ...(side && { side }),
+    createdAt: '2026-10-26T00:00:00.000Z',
+    updatedAt: '2026-10-26T00:00:00.000Z',
+    messages: [
+      {
+        id: `m-${body}`,
+        body,
+        createdAt: '2026-10-26T00:00:00.000Z',
+        updatedAt: '2026-10-26T00:00:00.000Z',
+      },
+    ],
   });
+  const textOf = (row: Element) =>
+    renumbered.lines.map((line) => line.content).find((text) => row.textContent?.includes(text));
+
+  it('shows an old-side comment under the unchanged line it ends on', () => {
+    const { rows } = renderChunk(mode, {
+      chunk: renumbered,
+      threads: [threadOn([19, 21], 'Why drop these notes?', 'old')],
+    });
+
+    const shown = screen.getAllByText('Why drop these notes?');
+    expect(shown).toHaveLength(1);
+    const guard = rows.find((row) => textOf(row) === 'guard();')!;
+    const after = rows.find((row) => textOf(row) === 'after();')!;
+    expect(
+      guard.compareDocumentPosition(shown[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      after.compareDocumentPosition(shown[0]!) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
+  it('shows a comment without a side once, on the new side', () => {
+    const { rows } = renderChunk(mode, {
+      chunk: renumbered,
+      threads: [threadOn(20, 'Saved before sides existed')],
+    });
+
+    const shown = screen.getAllByText('Saved before sides existed');
+    expect(shown).toHaveLength(1);
+    const added = rows.find((row) => textOf(row) === 'added();')!;
+    const alsoAdded = rows.find((row) => textOf(row) === 'alsoAdded();')!;
+    expect(
+      added.compareDocumentPosition(shown[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      alsoAdded.compareDocumentPosition(shown[0]!) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
+  it.runIf(mode === 'unified')(
+    'takes the old side when a drag from an unchanged line reaches deleted lines',
+    async () => {
+      const { onAddComment, rows } = renderChunk(mode, { chunk: renumbered });
+      const rowOf = (content: string) => rows.find((row) => textOf(row) === content)!;
+
+      fireEvent.mouseDown(rowOf('kept();').children[0]!);
+      fireEvent.mouseMove(codeCell(mode, rowOf('// second note')));
+      fireEvent.mouseUp(document);
+      fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'These go' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+      await waitFor(() => {
+        expect(onAddComment).toHaveBeenCalledWith(
+          [18, 20],
+          'These go',
+          ['kept();', '// first note', '// second note'].join('\n'),
+          'old',
+        );
+      });
+    },
+  );
 
   it('opens no comment for a click on a line number', async () => {
     const { rows } = renderChunk(mode);
