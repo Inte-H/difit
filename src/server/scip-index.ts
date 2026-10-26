@@ -291,6 +291,8 @@ export interface ConvertOptions {
   chunkBytes?: number;
   // Longest stretch of work before giving the event loop a turn.
   sliceMs?: number;
+  // Checked between slices; an aborted conversion rejects with the signal's reason.
+  signal?: AbortSignal;
 }
 
 // Reads a raw index.scip into the lookup form, a document at a time, yielding to the
@@ -299,7 +301,7 @@ export async function convertScipIndex(
   rawPath: string,
   options: ConvertOptions = {},
 ): Promise<ScipIndex> {
-  const slicer = new Slicer(options.sliceMs ?? DEFAULT_SLICE_MS);
+  const slicer = new Slicer(options.sliceMs ?? DEFAULT_SLICE_MS, options.signal);
   const handle = await open(rawPath, 'r');
   const builder = new IndexBuilder();
   try {
@@ -336,11 +338,16 @@ export async function convertScipIndex(
 class Slicer {
   private sliceStart = performance.now();
 
-  constructor(private readonly budgetMs: number) {}
+  constructor(
+    private readonly budgetMs: number,
+    private readonly signal?: AbortSignal,
+  ) {}
 
   async maybeYield(): Promise<void> {
+    this.signal?.throwIfAborted();
     if (performance.now() - this.sliceStart < this.budgetMs) return;
     await new Promise<void>((resolve) => setImmediate(resolve));
+    this.signal?.throwIfAborted();
     this.sliceStart = performance.now();
   }
 }

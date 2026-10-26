@@ -170,6 +170,13 @@ describe('convertScipIndex on a scip-java index', () => {
     expect(await yields(Infinity)).toBe(0);
     expect(await yields(0)).toBeGreaterThanOrEqual(documents);
   });
+
+  it('stops at the next slice once its signal is aborted', async () => {
+    const controller = new AbortController();
+    const conversion = convertScipIndex(FIXTURE, { sliceMs: 0, signal: controller.signal });
+    controller.abort(new Error('stopped'));
+    await expect(conversion).rejects.toThrow('stopped');
+  });
 });
 
 describe('writeScipIndex and readScipIndex', () => {
