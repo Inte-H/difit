@@ -44,6 +44,7 @@ import {
 
 import { validateCommitish } from '../cli/utils.js';
 import { sendToClaudeSession, sessionMessageFor } from './claude-session.js';
+import { CLIENT_GONE_GRACE_MS, createClientPresence } from './client-presence.js';
 import { commitDirectEdit, commitDirectReword } from './direct-edit.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
@@ -1979,6 +1980,18 @@ export async function startServer(options: ServerOptions): Promise<{
     void wait.check();
   });
 
+  const clientPresence = createClientPresence(() => {
+    void (async () => {
+      console.log('All tabs closed, shutting down server...');
+      await fileWatcher.stop();
+      await symbolIndex?.stop();
+      await directEditQueue;
+      await endCommentWaits();
+      await outputFinalComments();
+      process.exit(0);
+    })();
+  }, CLIENT_GONE_GRACE_MS);
+
   // SSE endpoint to detect when tab is closed
   app.get('/api/heartbeat', (req, res) => {
     res.writeHead(200, {
@@ -1996,26 +2009,16 @@ export async function startServer(options: ServerOptions): Promise<{
       res.write('data: heartbeat\n\n');
     }, 5000);
 
+    const leave = options.keepAlive ? undefined : clientPresence.join();
+
     // When client disconnects (tab closed, navigation, etc.)
     req.on('close', () => {
       clearInterval(heartbeatInterval);
-      if (options.keepAlive) {
+      if (leave) {
+        leave();
+      } else {
         console.log('Client disconnected, but server is staying alive (--keep-alive)');
         console.log('Press Ctrl+C to stop the server');
-      } else {
-        // Add a small delay to ensure any pending sendBeacon requests are processed
-        setTimeout(async () => {
-          console.log('Client disconnected, shutting down server...');
-
-          // Stop file watcher
-          await fileWatcher.stop();
-          await symbolIndex?.stop();
-
-          await directEditQueue;
-          await endCommentWaits();
-          await outputFinalComments();
-          process.exit(0);
-        }, 100);
       }
     });
   });

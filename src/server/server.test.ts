@@ -24,6 +24,12 @@ const reviewCommits = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('./direct-edit.js', () => ({ commitDirectEdit, commitDirectReword }));
 vi.mock('./symbol-search.js', () => ({ searchSymbol }));
 
+const TEST_CLIENT_GONE_GRACE_MS = vi.hoisted(() => 400);
+vi.mock('./client-presence.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./client-presence.js')>()),
+  CLIENT_GONE_GRACE_MS: TEST_CLIENT_GONE_GRACE_MS,
+}));
+
 // Helper function to get available port
 async function getAvailablePort(preferredPort: number): Promise<number> {
   let port = preferredPort;
@@ -1992,44 +1998,76 @@ describe('Server Integration Tests', () => {
       // Disconnect by aborting
       controller.abort();
 
-      // Wait for the server's close handler + setTimeout(100ms) to run
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, TEST_CLIENT_GONE_GRACE_MS + 300));
 
       // With keepAlive, process.exit should NOT have been called
       expect(process.exit).not.toHaveBeenCalled();
     });
 
-    it('calls process.exit on client disconnect when keepAlive is false', async () => {
+    async function openHeartbeat(port: number): Promise<() => void> {
+      const controller = new AbortController();
+      const response = await fetch(`http://localhost:${port}/api/heartbeat`, {
+        signal: controller.signal,
+      });
+      await response.body?.getReader().read();
+      return () => controller.abort();
+    }
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const waitForShutdown = () =>
+      vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0), {
+        timeout: TEST_CLIENT_GONE_GRACE_MS * 5,
+      });
+
+    it('keeps running when one of two tabs disconnects', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9080,
+      });
+      servers.push(server);
+      const closeFirst = await openHeartbeat(port);
+      const closeSecond = await openHeartbeat(port);
+
+      closeFirst();
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
+      expect(process.exit).not.toHaveBeenCalled();
+
+      closeSecond();
+      await waitForShutdown();
+    });
+
+    it('shuts down only after the last tab has been gone for the grace period', async () => {
       const { port, server } = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
         keepAlive: false,
         preferredPort: 9080,
       });
       servers.push(server);
+      const closeOnly = await openHeartbeat(port);
 
-      // Connect to heartbeat SSE endpoint and then abort
-      const controller = new AbortController();
-      const responsePromise = fetch(`http://localhost:${port}/api/heartbeat`, {
-        signal: controller.signal,
+      closeOnly();
+      await sleep(TEST_CLIENT_GONE_GRACE_MS / 2);
+      expect(process.exit).not.toHaveBeenCalled();
+
+      await waitForShutdown();
+    });
+
+    it('keeps running when a tab reconnects within the grace period, as on reload', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9080,
       });
+      servers.push(server);
+      const closeBeforeReload = await openHeartbeat(port);
 
-      // Wait for the connection to be established
-      const response = await responsePromise.catch(() => null);
-      if (response) {
-        const reader = response.body?.getReader();
-        if (reader) {
-          await reader.read(); // Read the initial "connected" message
-        }
-      }
+      closeBeforeReload();
+      await sleep(100);
+      const closeAfterReload = await openHeartbeat(port);
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
+      expect(process.exit).not.toHaveBeenCalled();
 
-      // Disconnect by aborting
-      controller.abort();
-
-      // Wait for the server's close handler + setTimeout(100ms) to run
-      await new Promise((resolve) => setTimeout(resolve, 300));
-
-      // Without keepAlive, process.exit SHOULD have been called
-      expect(process.exit).toHaveBeenCalledWith(0);
+      closeAfterReload();
+      await waitForShutdown();
     });
   });
 
