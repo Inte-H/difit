@@ -561,6 +561,20 @@ describe('reviewerEditFixups', () => {
     expect(shas(reviewerEditFixups(thread, [edited], decisions))).toEqual(['eeee']);
   });
 
+  it('offers nothing while an agent fixup written on top of the edit also stands', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(1)],
+    };
+    const fixups = [
+      fixup('eeee', ['t1'], '2026-01-01T00:01:00Z'),
+      fixup('aaaa', ['t1'], '2026-01-01T00:05:00Z'),
+    ];
+    const decisions = [decision('approved', 'eeee', at(6)), decision('approved', 'aaaa', at(6))];
+
+    expect(reviewerEditFixups(thread, fixups, decisions)).toEqual([]);
+  });
+
   it('pairs a second edit with its own fixup, not the agent fixup rejected before it', () => {
     const thread = {
       id: 't1',

@@ -117,7 +117,7 @@ export function isThreadResolved(threadId: string, decisions: ReviewDecision[]):
   return latestOf(own, ['resolved', 'unresolved'])?.kind === 'resolved';
 }
 
-type ThreadMessages = { messages?: ReadonlyArray<{ author?: string }> };
+type ThreadMessages = { messages?: ReadonlyArray<{ author?: string; createdAt?: string }> };
 
 export function isThreadDeleted(threadId: string, decisions: ReviewDecision[]): boolean {
   return decisions.some(
@@ -408,15 +408,10 @@ export function selectThreadsAwaitingAgent(
   });
 }
 
-type EditedThread = {
-  id: string;
-  messages?: ReadonlyArray<{ author?: string; createdAt?: string }>;
-};
-
-// An edit is taken only while no fixup on the thread is under judgment, and the server writes its
-// fixup just before the message on the same clock: its fixup is the last one authored by then.
+// The fixups standing on the thread when each is the one a reviewer edit wrote: the last authored
+// by the time of that edit's message. Empty when any other fixup stands beside them.
 export function reviewerEditFixups(
-  thread: EditedThread,
+  thread: { id: string } & ThreadMessages,
   fixups: ThreadFixup[],
   decisions: ReviewDecision[],
 ): ThreadFixup[] {
@@ -435,7 +430,8 @@ export function reviewerEditFixups(
         return latest ? [latest] : [];
       }),
   );
-  return pendingFixupsFor(thread.id, fixups, decisions).filter((fixup) => written.has(fixup));
+  const pending = pendingFixupsFor(thread.id, fixups, decisions);
+  return pending.every((fixup) => written.has(fixup)) ? pending : [];
 }
 
 export function pendingFixupsFor(
