@@ -8,6 +8,7 @@ import {
   REVIEWER_AUTHOR,
 } from '../../types/diff';
 import { formatCommentContent } from '../../utils/commentFormatting';
+import { locationLabel } from '../../utils/commentPosition';
 import { isSameCommit } from '../../utils/diffSelection';
 import { appearsResolved, reviewStateLabel } from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
@@ -263,10 +264,6 @@ export function CommentThreadCard({
     setWasPicked(isPicked);
     if (isPicked) setIsCollapsed(false);
   }
-  const location =
-    thread.line === undefined
-      ? thread.file
-      : `${thread.file}:${Array.isArray(thread.line) ? `${thread.line[0]}-${thread.line[1]}` : thread.line}`;
 
   const toggleCollapsed = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -328,7 +325,7 @@ export function CommentThreadCard({
               color: 'var(--color-yellow-path-text)',
             }}
           >
-            {location}
+            {locationLabel(thread.file, thread.line)}
           </span>
           {isResolved && (
             <span

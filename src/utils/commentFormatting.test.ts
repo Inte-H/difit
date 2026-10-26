@@ -430,7 +430,7 @@ Related entries are below.`);
       expect(result.match(/고쳐 넣을 커밋/g)).toHaveLength(2);
     });
 
-    it('should name only the file for a thread on the whole file, on either side', () => {
+    it('should name only the file for a thread on the whole file, marking a deleted one', () => {
       const onFile = (id: string, side: 'old' | 'new'): CommentThread => ({
         id,
         file: 'src/App.tsx',
@@ -455,7 +455,9 @@ Related entries are below.`);
       expect(result).toContain(
         '\nsrc/App.tsx [수정 중]\n고쳐 넣을 커밋: 1111111 first\nWhole file kept',
       );
-      expect(result).toContain('\nsrc/App.tsx\n고쳐 넣을 커밋: 1111111 first\nWhole file deleted');
+      expect(result).toContain(
+        '\nsrc/App.tsx (old)\n고쳐 넣을 커밋: 1111111 first\nWhole file deleted',
+      );
     });
 
     it('should handle comments with multi-line bodies', () => {

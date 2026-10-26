@@ -1020,10 +1020,10 @@ export async function startServer(options: ServerOptions): Promise<{
         typeof thread.file === 'string' && thread.file.length > 0 ? thread.file : '<unknown file>',
       createdAt: thread.createdAt || firstMessage?.createdAt || now,
       updatedAt: thread.updatedAt || lastMessage?.updatedAt || thread.createdAt || now,
-      position: {
-        side: thread.side ?? 'new',
-        line: normalizeLineValue(thread.line),
-      },
+      position:
+        thread.line === undefined
+          ? { side: thread.side ?? 'new', scope: 'file' }
+          : { side: thread.side ?? 'new', line: normalizeLineValue(thread.line) },
       codeSnapshot:
         typeof thread.codeContent === 'string'
           ? {

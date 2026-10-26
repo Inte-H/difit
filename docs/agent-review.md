@@ -62,7 +62,7 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
    - 줄 번호는 `view` 트리의 줄이다. 새 쪽(`"side": "new"`) 줄은 `git show <view.targetCommitish>:<파일>`, 옛 쪽 줄은 `git show <view.baseCommitish>:<파일>`로 읽는다. `view`가 없으면 리뷰 대상 커밋의 줄이다. fixup에서만 수정한 파일에 단 지적은 `codeSnapshot.commit`이 그 fixup 커밋이다. 새 쪽 줄은 `git show <codeSnapshot.commit>:<파일>`, 옛 쪽 줄은 그 fixup의 부모 커밋인 `git show <codeSnapshot.commit>^:<파일>`로 읽는다.
    - 고치는 곳은 HEAD의 파일이다. 뒤 커밋이 그 줄을 옮기거나 바꿨을 수 있으니 줄 번호 대신 `codeSnapshot.content`(지적한 줄의 내용)로 자리를 찾는다. 뒤 커밋이 그 줄을 바꿨어도 fixup은 하나만 만든다([docs/adr/0002](adr/0002-one-fixup-per-target-commit.md)). 접을 때 생기는 충돌은 아래 「범위 중간 커밋에 접다가 충돌하면」대로 푼다.
-   - 파일 전체에 단 지적은 위치가 `"position": { "side": "new", "scope": "file" }`이고 `line`이 없다. diff가 지운 파일이면 `"side": "old"`이다. 텍스트 출력의 위치 줄에는 `:L<줄>` 없이 파일 경로만 나온다. 특정 줄이 아니라 파일 전체에 대한 지적이므로 파일을 통째로 읽고 지적이 가리키는 곳을 고치되, fixup은 역시 하나만 만든다. 이 지적의 `fixupTarget`은 그 화면의 커밋 가운데 그 파일을 마지막으로 바꾼 커밋이고, 그런 커밋이 없으면 그 화면의 마지막 커밋이다. 커밋 목록에 없는 커밋이 바꾼 것은 세지 않는다. 답글은 같은 `position`으로 단다([docs/adr/0010](adr/0010-file-level-comments.md)).
+   - 파일 전체에 단 지적은 위치가 `"position": { "side": "new", "scope": "file" }`이고 `line`이 없다. diff가 지운 파일이면 `"side": "old"`이다. 텍스트 출력의 위치 줄에는 `:L<줄>` 없이 파일 경로만 나오고, 지운 파일이면 뒤에 `(old)`가 붙는다. 특정 줄이 아니라 파일 전체에 대한 지적이므로 파일을 통째로 읽고 지적이 가리키는 곳을 고치되, fixup은 역시 하나만 만든다. 이 지적의 `fixupTarget`은 그 화면의 커밋 가운데 그 파일을 마지막으로 바꾼 커밋이고, 그런 커밋이 없으면 그 화면의 마지막 커밋이다. 커밋 목록에 없는 커밋이 바꾼 것은 세지 않는다. 답글은 같은 `position`으로 단다([docs/adr/0010](adr/0010-file-level-comments.md)).
 
 2. 코드를 고친 뒤 fixup 커밋을 만들고 스레드 id를 트레일러로 붙인다. 대상은 지적의 `fixupTarget`이고, 없으면 리뷰 대상 SHA다.
 

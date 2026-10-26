@@ -190,8 +190,43 @@ describe('DiffViewer comments on the whole file', () => {
     await user.type(screen.getByPlaceholderText(/comment/i), 'Split this file');
     await user.click(screen.getByRole('button', { name: 'Submit' }));
 
-    expect(onAddFileComment).toHaveBeenCalledWith('a.ts', 'Split this file');
+    expect(onAddFileComment).toHaveBeenCalledWith('a.ts', 'Split this file', 'new');
     expect(screen.queryByPlaceholderText(/comment/i)).toBeNull();
+  });
+
+  it('keeps the form and its text when the comment cannot be added', async () => {
+    const onAddFileComment = vi.fn(async () => {
+      throw new Error('offline');
+    });
+    renderViewer([changed(10, 10)], [], undefined, { onAddFileComment });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: '파일 전체에 지적 달기' }));
+    await user.type(screen.getByPlaceholderText(/comment/i), 'Split this file');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+    expect(screen.getByPlaceholderText(/comment/i)).toHaveValue('Split this file');
+  });
+
+  it('puts a comment on a deleted file on the old side', async () => {
+    const onAddFileComment = vi.fn(async () => {});
+    renderViewer([deleted(1, 0)], [], undefined, {
+      onAddFileComment,
+      file: {
+        path: 'a.ts',
+        status: 'deleted',
+        additions: 0,
+        deletions: 1,
+        chunks: [deleted(1, 0)],
+      },
+    });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('button', { name: '파일 전체에 지적 달기' }));
+    await user.type(screen.getByPlaceholderText(/comment/i), 'Keep this file');
+    await user.click(screen.getByRole('button', { name: 'Submit' }));
+
+    expect(onAddFileComment).toHaveBeenCalledWith('a.ts', 'Keep this file', 'old');
   });
 
   it('opens a folded file to take the comment', async () => {

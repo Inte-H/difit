@@ -122,6 +122,42 @@ vi.mock('./git-diff.js', () => {
 
 describe('Server Integration Tests', () => {
   describe('Comments API', () => {
+    it('keeps a thread posted without a line as a thread on the whole file', async () => {
+      const port = await getAvailablePort(4966);
+      const result = await startServer({ preferredPort: port, openBrowser: false });
+
+      try {
+        const at = '2024-01-01T00:00:00Z';
+        await fetch(`http://localhost:${result.port}/api/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            threads: [
+              {
+                id: 'f1',
+                file: 'src/App.tsx',
+                side: 'new',
+                createdAt: at,
+                updatedAt: at,
+                messages: [{ id: 'f1', body: 'Split this file', createdAt: at, updatedAt: at }],
+              },
+            ],
+          }),
+        });
+
+        const json = (await (
+          await fetch(`http://localhost:${result.port}/api/comments-json`)
+        ).json()) as { threads: Array<{ position: unknown }> };
+        expect(json.threads.map(({ position }) => position)).toEqual([
+          { side: 'new', scope: 'file' },
+        ]);
+      } finally {
+        if (result.server) {
+          await new Promise<void>((resolve) => result.server!.close(() => resolve()));
+        }
+      }
+    });
+
     it('should accept properly formatted comments', async () => {
       const port = await getAvailablePort(4966);
       const result = await startServer({

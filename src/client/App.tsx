@@ -1807,15 +1807,11 @@ function App() {
     [bindNewThread],
   );
   const handleAddFileComment = useCallback(
-    async (file: string, body: string): Promise<void> => {
-      const deleted = diffData?.files.some(
-        ({ path, status }) => path === file && status === 'deleted',
-      );
-      const side = deleted ? 'old' : 'new';
+    async (file: string, body: string, side: DiffSide): Promise<void> => {
       const binding = await bindNewThread(file, undefined, side);
       addThreadRef.current({ filePath: file, body, side, binding });
     },
-    [bindNewThread, diffData],
+    [bindNewThread],
   );
   const handleAddFixupOnlyComment = useCallback(
     (
@@ -1896,6 +1892,8 @@ function App() {
     const thread = normalizedThreads.find(({ id }) => id === threadId);
     if (thread) pickComment(thread);
   };
+  const pendingFileThreadRef = useRef<CommentThread | null>(null);
+  const [fileThreadScrollRequest, setFileThreadScrollRequest] = useState(0);
   const jumpToThread = (thread: CommentThread, afterRender: boolean) => {
     if (!diffData) return;
     const placed = fixupSpread.outsidePlacements.get(thread.id);
@@ -1909,13 +1907,13 @@ function App() {
       next.delete(thread.file);
       return next;
     });
+    if (thread.line === undefined) {
+      pendingFileThreadRef.current = thread;
+      ensureFileRendered(thread.file);
+      setFileThreadScrollRequest((count) => count + 1);
+      return;
+    }
     const moveCursor = () => {
-      if (thread.line === undefined) {
-        document
-          .getElementById(`comment-thread-${thread.id}`)
-          ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        return;
-      }
       const position = findCommentPosition(thread, navigableFilesRef.current);
       setCursorPosition(position);
       scrollFileIntoDiffContainer(
@@ -1927,6 +1925,16 @@ function App() {
     if (afterRender) requestAnimationFrame(moveCursor);
     else moveCursor();
   };
+  useEffect(() => {
+    const thread = pendingFileThreadRef.current;
+    if (!thread || !renderedFilePaths.has(thread.file) || collapsedFiles.has(thread.file)) return;
+    pendingFileThreadRef.current = null;
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`comment-thread-${thread.id}`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+    );
+  }, [fileThreadScrollRequest, renderedFilePaths, collapsedFiles]);
   const jumpToThreadRef = useRef(jumpToThread);
   jumpToThreadRef.current = jumpToThread;
   useEffect(() => {

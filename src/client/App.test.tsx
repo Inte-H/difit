@@ -3552,6 +3552,31 @@ describe('App Component - Commits of the review', () => {
     expect(diffQueries()).toHaveLength(queriesBefore);
   });
 
+  it('scrolls to the card of a comment on the whole file picked from the list', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'f1', filePath: 'test.ts', line: 1, body: 'About this file' }),
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '' },
+      },
+    ];
+    const scrolled: string[] = [];
+    const scrollIntoView = vi
+      .spyOn(Element.prototype, 'scrollIntoView')
+      .mockImplementation(function (this: Element) {
+        scrolled.push(this.id);
+      });
+    renderApp();
+    await screen.findByText('About this file');
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() => expect(scrolled).toContain('comment-thread-f1'));
+    scrollIntoView.mockRestore();
+  });
+
   it('names on the card the commit a fix for the comment goes into', async () => {
     mockComments = [pinnedThread('const a = 1;')];
     renderApp();

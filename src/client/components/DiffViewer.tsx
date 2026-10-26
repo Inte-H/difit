@@ -48,7 +48,7 @@ interface DiffViewerProps {
     side?: DiffSide,
   ) => Promise<void>;
   // Left out where the file takes no comment on the whole file.
-  onAddFileComment?: (file: string, body: string) => Promise<void>;
+  onAddFileComment?: (file: string, body: string, side: DiffSide) => Promise<void>;
   onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
@@ -382,11 +382,11 @@ export const DiffViewer = memo(function DiffViewer({
                 {isAddingFileComment && onAddFileComment && (
                   <CommentForm
                     onSubmit={async (body) => {
-                      try {
-                        await onAddFileComment(file.path, body);
-                      } catch (error) {
-                        console.error('Failed to add comment:', error);
-                      }
+                      await onAddFileComment(
+                        file.path,
+                        body,
+                        file.status === 'deleted' ? 'old' : 'new',
+                      );
                       setIsAddingFileComment(false);
                     }}
                     onCancel={() => setIsAddingFileComment(false)}

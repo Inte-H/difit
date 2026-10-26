@@ -24,8 +24,7 @@ function formatCommentLocation(
 ): string {
   const filePath = file || '<unknown file>';
   const stateSuffix = reviewState ? ` [${reviewStateLabel(reviewState)}]` : '';
-  const oldSide = side === 'old' && line !== undefined ? ' (old)' : '';
-  return `${filePath}${getLineInfo(line)}${oldSide}${stateSuffix}`;
+  return `${filePath}${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
 }
 
 function isNonRangeCommitish(commitish: string): boolean {

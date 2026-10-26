@@ -6,3 +6,8 @@ export function lineOfPosition(position: DiffCommentPosition): LineNumber | unde
     ? position.line
     : [position.line.start, position.line.end];
 }
+
+export function locationLabel(file: string, line: LineNumber | undefined): string {
+  if (line === undefined) return file;
+  return `${file}:${Array.isArray(line) ? `${line[0]}-${line[1]}` : line}`;
+}

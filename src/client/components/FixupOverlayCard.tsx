@@ -13,6 +13,7 @@ import {
   LEAVES_CODE_ALONE_TITLE,
   leavesCodeAlone,
 } from '../../utils/changeKind';
+import { locationLabel } from '../../utils/commentPosition';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
 import { useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { fixupFileElementId } from '../utils/domUtils';
@@ -217,11 +218,11 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
 }
 
 const locationOf = ({ file, line }: Pick<CommentThread, 'file' | 'line'>) =>
-  line === undefined ? file : `${file}:${Array.isArray(line) ? `${line[0]}-${line[1]}` : line}`;
+  locationLabel(file, line);
 
-// Read aloud, a line number ending in 2, 4, 5 or 9 ends in a vowel, and so does a file name read
-// letter by letter, as most extensions are.
-const objectParticle = (label: string) => (/[2459]$|[^0-9]$/.test(label) ? '를' : '을');
+// Read aloud, a line number ending in 2, 4, 5 or 9 ends in a vowel; a path read letter by letter
+// ends in a consonant only after l, m, n or r.
+const objectParticle = (label: string) => (/[2459]$|[^0-9lmnr]$/i.test(label) ? '를' : '을');
 
 function FixupFileBox({
   box,

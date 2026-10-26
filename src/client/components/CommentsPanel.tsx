@@ -11,6 +11,7 @@ import {
 import { useHotkeysContext } from 'react-hotkeys-hook';
 
 import type { CommentThread } from '../../types/diff';
+import { locationLabel } from '../../utils/commentPosition';
 import type { CommentPanelStatus } from '../../utils/reviewDecisions';
 import { keyByPosition } from '../utils/keyByPosition';
 
@@ -55,9 +56,6 @@ const FILTER_OFF_CLASS =
 // A comment on the whole file comes before its lines.
 const firstLine = (line: CommentThread['line']) =>
   line === undefined ? 0 : Array.isArray(line) ? line[0] : line;
-
-const lineSuffix = (line: CommentThread['line']) =>
-  line === undefined ? '' : `:${Array.isArray(line) ? `${line[0]}-${line[1]}` : line}`;
 
 const baseName = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
@@ -239,8 +237,7 @@ export function CommentsPanel({
                     className="min-w-0 flex-1 truncate font-mono text-[11px] text-github-text-secondary"
                     title={thread.file}
                   >
-                    {baseName(thread.file)}
-                    {lineSuffix(thread.line)}
+                    {locationLabel(baseName(thread.file), thread.line)}
                   </span>
                   <span
                     className={`inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[10px] font-medium ${chip.className}`}
