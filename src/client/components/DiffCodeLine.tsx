@@ -72,6 +72,9 @@ export function DiffCodeLine({
         <WordLevelDiffHighlighter
           segments={diffSegments}
           className="flex-1 px-3 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text"
+          syntaxTheme={syntaxTheme}
+          filename={filename}
+          precomputedTokens={getPrecomputedTokens()}
         />
       ) : (
         <EnhancedPrismSyntaxHighlighter
