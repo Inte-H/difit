@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { commitDirectReword } from './direct-edit';
 import { GitDiffParser } from './git-diff';
 
 const runGitCalls = vi.hoisted(() => [] as string[][]);
@@ -490,7 +491,7 @@ describe('the commit each fixup folds into against a real repository', () => {
 });
 
 describe('messages of amend! commits against a real repository', () => {
-  it('gives an amend! commit the message of the commit it amends and the one folding leaves', async () => {
+  it('gives an amend! commit the message of the commit it amends and the one folding leaves, without thread trailers', async () => {
     const repo = createRepo();
     const base = commit(repo, 'base', { 'f.txt': 'a\n' });
     commit(repo, 'add feture\n\nExplains it.', { 'g.txt': 'g\n' });
@@ -506,7 +507,7 @@ describe('messages of amend! commits against a real repository', () => {
     expect(amend?.files).toEqual([]);
     expect(amend?.amendedMessage).toEqual({
       before: 'add feture\n\nExplains it.',
-      after: 'add feature\n\nExplains it.\n\nReview-Thread: t1',
+      after: 'add feature\n\nExplains it.',
     });
     expect(fixup?.amendedMessage).toBeUndefined();
   });
@@ -522,7 +523,7 @@ describe('messages of amend! commits against a real repository', () => {
       baseCommitish: base,
     });
 
-    expect(amend?.amendedMessage).toEqual({ before: 'wrong', after: 'right\n\nReview-Thread: t1' });
+    expect(amend?.amendedMessage).toEqual({ before: 'wrong', after: 'right' });
   });
   it('takes each amend! from the message the one before it leaves', async () => {
     const repo = createRepo();
@@ -536,14 +537,8 @@ describe('messages of amend! commits against a real repository', () => {
       baseCommitish: base,
     });
 
-    expect(first?.amendedMessage).toEqual({
-      before: 'add feture',
-      after: 'add featur\n\nReview-Thread: t1',
-    });
-    expect(second?.amendedMessage).toEqual({
-      before: 'add featur\n\nReview-Thread: t1',
-      after: 'add feature\n\nReview-Thread: t2',
-    });
+    expect(first?.amendedMessage).toEqual({ before: 'add feture', after: 'add featur' });
+    expect(second?.amendedMessage).toEqual({ before: 'add featur', after: 'add feature' });
   });
 
   it('drops the whole first paragraph of an amend! commit, as git does', async () => {
@@ -557,7 +552,7 @@ describe('messages of amend! commits against a real repository', () => {
       baseCommitish: base,
     });
 
-    expect(amend?.amendedMessage?.after).toBe('add feature\n\nReview-Thread: t1');
+    expect(amend?.amendedMessage?.after).toBe('add feature');
   });
 
   it('leaves the message out after a squash! and for an amend! with nothing past its subject', async () => {
@@ -577,6 +572,39 @@ describe('messages of amend! commits against a real repository', () => {
 
     expect(fixups.map((fixup) => fixup.foldTargetSha)).toEqual([first, target]);
     expect(fixups.map((fixup) => fixup.amendedMessage)).toEqual([undefined, undefined]);
+  });
+});
+
+describe('amend! commits made by commitDirectReword', () => {
+  it('reads the message the reviewer wrote, with other trailers kept', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const target = commit(repo, 'add feture', { 'g.txt': 'g\n' });
+    const result = await commitDirectReword(
+      repo,
+      { base, target },
+      {
+        commit: target,
+        message: 'add feature\n\nCo-Authored-By: someone <s@example.com>',
+        threadId: 't1',
+      },
+    );
+
+    const [amend] = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(amend).toMatchObject({
+      sha: result.ok ? result.sha : '',
+      threadIds: ['t1'],
+      files: [],
+      foldTargetSha: target,
+      amendedMessage: {
+        before: 'add feture',
+        after: 'add feature\n\nCo-Authored-By: someone <s@example.com>',
+      },
+    });
   });
 });
 

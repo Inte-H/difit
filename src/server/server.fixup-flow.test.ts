@@ -365,3 +365,74 @@ it('binds a comment on the whole file to the last commit that changed it and han
     '\ndiscount.test.js [승인 대기]\n',
   );
 });
+
+it('rewords a commit of the review into an amend! the commit list then shows', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-'));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }));
+  git(repo, ['init', '-q']);
+  git(repo, ['checkout', '-q', '-b', 'main']);
+  const base = commit(repo, 'base', { 'price.js': 'export const price = 1;\n' });
+  const typo = commit(repo, 'add prcie helper\n\nRounds down.', {
+    'helper.js': 'export const helper = 1;\n',
+  });
+  const tip = commit(repo, 'use helper', { 'price.js': 'export const price = 2;\n' });
+  writeFileSync(join(repo, 'price.js'), 'work in progress\n');
+
+  const { port, server } = await startServer({
+    selection: createDiffSelection(base, tip),
+    repoPath: repo,
+    preferredPort: 9270,
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server?.close(() => resolve())));
+  const api = (path: string) => `http://localhost:${port}${path}`;
+  const review = ((await (await fetch(api('/api/diff'))).json()) as DiffResponse).review!;
+  const query = `?base=${review.selection.baseCommitish}&target=${review.selection.targetCommitish}`;
+  const messageOf = async () =>
+    (
+      (await (await fetch(api(`/api/commit-message${query}&commit=${typo}`))).json()) as {
+        message: string;
+      }
+    ).message;
+
+  expect(await messageOf()).toBe('add prcie helper\n\nRounds down.');
+  const response = await fetch(api(`/api/reword${query}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      commit: typo,
+      original: 'add prcie helper\n\nRounds down.',
+      message: 'add price helper\n\nRounds down.',
+    }),
+  });
+  const { threadId, sha } = (await response.json()) as { threadId: string; sha: string };
+
+  expect(response.status).toBe(200);
+  expect(git(repo, ['rev-parse', 'HEAD'])).toBe(sha);
+  expect(git(repo, ['log', '-1', '--format=%B'])).toBe(
+    `amend! ${typo}\n\nadd price helper\n\nRounds down.\n\nReview-Thread: ${threadId}`,
+  );
+  expect(git(repo, ['status', '--porcelain'])).toBe('M price.js');
+  const { fixups } = (await (await fetch(api(`/api/fixups${query}`))).json()) as {
+    fixups: Array<{
+      sha: string;
+      threadIds: string[];
+      foldTargetSha?: string;
+      amendedMessage?: unknown;
+    }>;
+  };
+  expect(fixups).toEqual([
+    expect.objectContaining({
+      sha,
+      threadIds: [threadId],
+      foldTargetSha: typo,
+      amendedMessage: {
+        before: 'add prcie helper\n\nRounds down.',
+        after: 'add price helper\n\nRounds down.',
+      },
+    }),
+  ]);
+  expect(await messageOf()).toBe('add price helper\n\nRounds down.');
+  const commits = ((await (await fetch(api(`/api/diff${query}`))).json()) as DiffResponse).review!
+    .commits;
+  expect(commits.map(({ sha: commitSha }) => commitSha)).toEqual([typo, tip]);
+});

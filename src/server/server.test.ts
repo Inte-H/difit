@@ -16,11 +16,12 @@ const { fetch } = await import('undici');
 globalThis.fetch = fetch as any;
 const parserInstances = vi.hoisted(() => [] as any[]);
 const commitDirectEdit = vi.hoisted(() => vi.fn());
+const commitDirectReword = vi.hoisted(() => vi.fn());
 
 const searchSymbol = vi.hoisted(() => vi.fn());
 const reviewCommits = vi.hoisted(() => ({ list: [] as unknown[] }));
 
-vi.mock('./direct-edit.js', () => ({ commitDirectEdit }));
+vi.mock('./direct-edit.js', () => ({ commitDirectEdit, commitDirectReword }));
 vi.mock('./symbol-search.js', () => ({ searchSymbol }));
 
 // Helper function to get available port
@@ -101,6 +102,7 @@ vi.mock('./git-diff.js', () => {
     listThreadFixups = vi.fn().mockResolvedValue([]);
     listFixupsForScreen = vi.fn(async () => this.listThreadFixups());
     findNewerTarget = vi.fn().mockResolvedValue(null);
+    readCommitMessage = vi.fn().mockResolvedValue('second\n\nExplains it.');
     listReviewCommits = vi.fn(async () => reviewCommits.list);
     readThreadFixup = vi.fn(
       async (sha: string) =>
@@ -2653,6 +2655,151 @@ describe('Server Integration Tests', () => {
 
         expect(response.status).toBe(400);
         expect(commitDirectEdit).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('rewording one of its commits', () => {
+      const AMEND_SHA = 'e'.repeat(40);
+      const SECOND_SHA = full('abc1234');
+      let port: number;
+
+      const reword = (body: Record<string, unknown>, headers = {}) =>
+        fetch(`http://localhost:${port}/api/reword${REVIEW}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...headers },
+          body: JSON.stringify({
+            commit: SECOND_SHA,
+            original: 'second\n\nExplains it.',
+            message: 'second, better\n\nExplains it.',
+            ...body,
+          }),
+        });
+      const messageOf = async (commit: string) =>
+        fetch(`http://localhost:${port}/api/commit-message${REVIEW}&commit=${commit}`);
+      const amendOf = (threadId: string, after: string) => ({
+        sha: AMEND_SHA,
+        shortSha: AMEND_SHA.slice(0, 7),
+        patchId: AMEND_SHA,
+        authoredAt: '2026-01-01T00:00:00Z',
+        subject: `amend! ${SECOND_SHA}`,
+        threadIds: [threadId],
+        files: [],
+        foldTargetSha: SECOND_SHA,
+        amendedMessage: { before: 'second\n\nExplains it.', after },
+      });
+
+      beforeEach(async () => {
+        commitDirectReword.mockReset();
+        commitDirectReword.mockImplementation(async (_repo, _range, request) => {
+          const parser = parserInstances.at(-1)!;
+          parser.listThreadFixups.mockResolvedValue([amendOf(request.threadId, request.message)]);
+          return { ok: true, sha: AMEND_SHA };
+        });
+        port = await startReview();
+        await view(port);
+      });
+
+      it('reads the message of a commit as the review shows it', async () => {
+        const response = await messageOf(SECOND_SHA);
+
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ message: 'second\n\nExplains it.' });
+        expect(parserInstances.at(-1)!.readCommitMessage).toHaveBeenCalledWith(SECOND_SHA);
+      });
+
+      it('reads the message a pending amend! leaves', async () => {
+        parserInstances.at(-1)!.listThreadFixups.mockResolvedValue([amendOf('t0', 'second!')]);
+
+        expect(await (await messageOf(SECOND_SHA)).json()).toEqual({ message: 'second!' });
+      });
+
+      it('refuses to read a commit outside the review', async () => {
+        expect((await messageOf(full('9999999'))).status).toBe(400);
+      });
+
+      it('commits the amend! and opens an approved thread on the commit message', async () => {
+        const response = await reword({});
+        const data = (await response.json()) as any;
+
+        expect(response.status).toBe(200);
+        expect(commitDirectReword).toHaveBeenCalledWith(
+          expect.any(String),
+          { base: 'def4567', target: 'abc1234' },
+          {
+            commit: SECOND_SHA,
+            message: 'second, better\n\nExplains it.',
+            threadId: data.threadId,
+          },
+        );
+        const { threads, decisions } = (await (
+          await fetch(`http://localhost:${port}/api/comments-json${REVIEW}`)
+        ).json()) as any;
+        expect(threads).toEqual([
+          expect.objectContaining({
+            id: data.threadId,
+            filePath: '/COMMIT_MSG',
+            position: { side: 'new', line: 1 },
+            view: { baseCommitish: full('1111111'), targetCommitish: SECOND_SHA },
+            fixupTarget: SECOND_SHA,
+            messages: [expect.objectContaining({ author: 'reviewer-edit' })],
+          }),
+        ]);
+        expect(decisions).toEqual([
+          expect.objectContaining({
+            threadId: data.threadId,
+            kind: 'approved',
+            fixupSha: AMEND_SHA,
+          }),
+        ]);
+      });
+
+      it('refuses when the message shown is no longer the current one', async () => {
+        parserInstances.at(-1)!.listThreadFixups.mockResolvedValue([amendOf('t0', 'second!')]);
+
+        const response = await reword({});
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ reason: 'stale-view' });
+        expect(commitDirectReword).not.toHaveBeenCalled();
+      });
+
+      it('refuses a message that cleans up to the current one', async () => {
+        const response = await reword({ message: 'second  \n\n\nExplains it.\n' });
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ reason: 'no-change' });
+        expect(commitDirectReword).not.toHaveBeenCalled();
+      });
+
+      it('passes on the reason git refused', async () => {
+        commitDirectReword.mockResolvedValue({ ok: false, reason: 'target-not-in-head' });
+
+        const response = await reword({});
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ reason: 'target-not-in-head' });
+        const { threads } = (await (
+          await fetch(`http://localhost:${port}/api/comments-json${REVIEW}`)
+        ).json()) as any;
+        expect(threads).toEqual([]);
+      });
+
+      it('refuses a commit outside the review', async () => {
+        const response = await reword({ commit: full('9999999') });
+
+        expect(response.status).toBe(400);
+        expect(commitDirectReword).not.toHaveBeenCalled();
+      });
+
+      it('refuses a body that is not JSON', async () => {
+        const response = await fetch(`http://localhost:${port}/api/reword${REVIEW}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify({ commit: SECOND_SHA, original: '', message: 'x' }),
+        });
+
+        expect(response.status).toBe(415);
+        expect(commitDirectReword).not.toHaveBeenCalled();
       });
     });
 
