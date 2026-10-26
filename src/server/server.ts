@@ -191,7 +191,7 @@ export async function startServer(options: ServerOptions): Promise<{
   isEmpty?: boolean;
   server?: Server;
   settleDirectEdits?: () => Promise<unknown>;
-  stopClientPresence?: () => void;
+  stopClientPresence?: () => boolean;
   endCommentWaits?: () => Promise<void>;
   stopSymbolIndex?: () => Promise<void>;
   // Settles once every index build that the opened reviews asked for has ended.

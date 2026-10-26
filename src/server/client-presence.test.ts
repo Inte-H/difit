@@ -94,6 +94,17 @@ describe('createClientPresence', () => {
     expect(onAllGone).not.toHaveBeenCalled();
   });
 
+  it('tells whether it was stopped before or after reporting', () => {
+    const presence = createClientPresence(vi.fn(), GRACE_MS);
+    presence.join()();
+    expect(presence.stop()).toBe(true);
+
+    const reported = createClientPresence(vi.fn(), GRACE_MS);
+    reported.join()();
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(reported.stop()).toBe(false);
+  });
+
   it('does not report anything before any client has joined', () => {
     const onAllGone = vi.fn();
     createClientPresence(onAllGone, GRACE_MS);

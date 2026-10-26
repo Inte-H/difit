@@ -352,7 +352,8 @@ program
         if (shuttingDown) process.exit(130);
         shuttingDown = true;
         console.log('\n👋 Shutting down difit server...');
-        stopClientPresence?.();
+        // The shutdown for closed tabs is already under way and exits on its own.
+        if (stopClientPresence?.() === false) return;
         await settleDirectEdits?.();
         await endCommentWaits?.();
         await stopSymbolIndex?.();
