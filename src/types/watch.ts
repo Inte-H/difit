@@ -38,11 +38,13 @@ interface CommentsChangedWatchEvent {
   timestamp: string;
 }
 
+export type SymbolIndexStatus = 'none' | 'building' | 'ready' | 'failed';
+
 interface SymbolIndexChangedWatchEvent {
   type: 'symbolIndexChanged';
   // Full commit sha.
   commit: string;
-  status: 'none' | 'building' | 'ready' | 'failed';
+  status: SymbolIndexStatus;
   timestamp: string;
 }
 

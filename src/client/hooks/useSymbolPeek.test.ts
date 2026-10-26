@@ -130,4 +130,20 @@ describe('useSymbolPeek', () => {
     act(() => result.current.close());
     expect(result.current.stack).toEqual([]);
   });
+
+  it('keeps the last index change of each commit in the order heard', () => {
+    const { result } = renderHook(() =>
+      useSymbolPeek({ base: 'aaa', target: 'bbb', enabled: true }),
+    );
+
+    act(() => result.current.noteIndexChange('c1', 'building'));
+    act(() => result.current.noteIndexChange('c2', 'building'));
+    act(() => result.current.noteIndexChange('c1', 'ready'));
+
+    expect(result.current.indexUpdates.seq).toBe(3);
+    expect(Object.fromEntries(result.current.indexUpdates.byCommit)).toEqual({
+      c1: { status: 'ready', seq: 3 },
+      c2: { status: 'building', seq: 2 },
+    });
+  });
 });

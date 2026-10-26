@@ -1001,6 +1001,7 @@ function App() {
   const { shouldReload, reload, watchState } = useFileWatch(
     handleWatchReload,
     handleCommentsChanged,
+    symbolPeek.noteIndexChange,
   );
 
   const openCommentsPanelWithKeys = useCallback(() => {
@@ -2644,6 +2645,7 @@ function App() {
             onBack={symbolPeek.back}
             onClose={symbolPeek.close}
             syntaxTheme={settings.syntaxTheme}
+            indexUpdates={symbolPeek.indexUpdates}
           />
         ))}
         {symbolPeek.offer && (

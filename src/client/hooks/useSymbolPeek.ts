@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useHotkeysContext } from 'react-hotkeys-hook';
 
+import type { SymbolIndexStatus } from '../../types/watch';
 import {
   type ReviewRefs,
   type SymbolPeekRequest,
@@ -13,11 +14,30 @@ export interface SymbolPeekOffer {
   y: number;
 }
 
+// The last index change heard for each commit. `seq` counts every change heard, so a window can
+// tell whether a change came after it last searched.
+export interface SymbolIndexUpdates {
+  seq: number;
+  byCommit: ReadonlyMap<string, { status: SymbolIndexStatus; seq: number }>;
+}
+
+export const NO_INDEX_UPDATES: SymbolIndexUpdates = { seq: 0, byCommit: new Map() };
+
 export function useSymbolPeek({ base, target, enabled }: ReviewRefs & { enabled: boolean }) {
   const { enableScope, disableScope } = useHotkeysContext();
   const [offer, setOffer] = useState<SymbolPeekOffer | null>(null);
   const [stack, setStack] = useState<SymbolPeekRequest[]>([]);
+  const [indexUpdates, setIndexUpdates] = useState(NO_INDEX_UPDATES);
   const isOpen = stack.length > 0;
+
+  const noteIndexChange = useCallback((commit: string, status: SymbolIndexStatus) => {
+    setIndexUpdates((current) => {
+      const seq = current.seq + 1;
+      const byCommit = new Map(current.byCommit);
+      byCommit.set(commit, { status, seq });
+      return { seq, byCommit };
+    });
+  }, []);
 
   const open = useCallback((request: SymbolPeekRequest) => {
     setOffer(null);
@@ -72,5 +92,5 @@ export function useSymbolPeek({ base, target, enabled }: ReviewRefs & { enabled:
     };
   }, [enabled, base, target, open]);
 
-  return { offer, stack, open, back, close };
+  return { offer, stack, open, back, close, indexUpdates, noteIndexChange };
 }

@@ -1,6 +1,8 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { symbolRequestFromTarget } from './symbolPeek';
+import type { SymbolSearchResponse } from '../../types/diff';
+
+import { fetchSymbol, reselect, symbolRequestFromTarget } from './symbolPeek';
 
 const refs = { base: 'aaa1111', target: 'bbb2222' };
 
@@ -63,5 +65,80 @@ describe('symbolRequestFromTarget', () => {
     document.body.innerHTML = '<div data-symbol-side="new"><span>(</span></div>';
     expect(symbolRequestFromTarget(document.querySelector('span'), refs)).toBeNull();
     expect(symbolRequestFromTarget(null, refs)).toBeNull();
+  });
+
+  it('places the name where its text starts, past whitespace inside its token', () => {
+    expect(
+      symbolRequestFromTarget(
+        wordIn(
+          '<div data-symbol-ref="ccc3333" data-symbol-path="src/A.java"><table><tbody><tr><td>3</td><td data-symbol-line="3"><span>\t</span><span class="word-token" data-word="helper">\thelper</span></td></tr></tbody></table></div>',
+        ),
+        refs,
+      ),
+    ).toEqual({ name: 'helper', ref: 'ccc3333', from: 'src/A.java', line: 3, column: 2 });
+  });
+
+  it('sends no position for a diff row whose line numbers belong to another commit', () => {
+    expect(
+      symbolRequestFromTarget(
+        wordIn(
+          '<div data-symbol-no-position><table><tbody><tr><td data-symbol-side="new" data-symbol-path="src/A.java" data-symbol-line="10"><span class="word-token" data-word="save">save</span></td></tr></tbody></table></div>',
+        ),
+        refs,
+      ),
+    ).toEqual({ name: 'save', ref: 'bbb2222', from: 'src/A.java' });
+  });
+
+  it('sends no position for code that does not say which line it is', () => {
+    expect(
+      symbolRequestFromTarget(
+        wordIn(
+          '<div data-symbol-ref="ccc3333" data-symbol-path="src/A.java" data-symbol-line="0"><span class="word-token" data-word="helper">helper</span></div>',
+        ),
+        refs,
+      ),
+    ).toEqual({ name: 'helper', ref: 'ccc3333', from: 'src/A.java' });
+  });
+});
+
+describe('fetchSymbol', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('asks with the clicked line and column only when both are known', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchSymbol({ name: 'run', ref: 'HEAD', from: 'A.java', line: 4, column: 0 });
+    await fetchSymbol({ name: 'run', ref: 'HEAD', from: 'A.java', line: 4 });
+
+    expect(fetchMock.mock.calls.map((call: unknown[]) => call[0])).toEqual([
+      '/api/symbol?name=run&ref=HEAD&from=A.java&line=4&column=0',
+      '/api/symbol?name=run&ref=HEAD&from=A.java',
+    ]);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('reselect', () => {
+  const result = (paths: string[]): SymbolSearchResponse => ({
+    name: 'run',
+    ref: 'HEAD',
+    definitions: [],
+    references: paths.map((path) => ({ path, line: 1, text: 'run();' })),
+    truncated: false,
+    source: 'index',
+  });
+
+  it('keeps the same place, or else takes the first item', () => {
+    const current = { path: 'B.java', line: 1, text: 'old text' };
+    expect(reselect(current, result(['A.java', 'B.java']))).toEqual({
+      path: 'B.java',
+      line: 1,
+      text: 'run();',
+    });
+    expect(reselect(current, result(['A.java']))?.path).toBe('A.java');
+    expect(reselect(current, result([]))).toBeNull();
   });
 });

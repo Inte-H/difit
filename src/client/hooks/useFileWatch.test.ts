@@ -232,6 +232,25 @@ describe('useFileWatch', () => {
       expect(second).toHaveBeenCalledTimes(1);
     });
 
+    it('passes on a change of a commit index without reconnecting', () => {
+      const onSymbolIndexChanged = vi.fn();
+      renderHook(() => useFileWatch(undefined, undefined, onSymbolIndexChanged));
+
+      act(() => {
+        MockEventSource.instances[0]!.dispatchMessage(
+          JSON.stringify({
+            type: 'symbolIndexChanged',
+            commit: 'a'.repeat(40),
+            status: 'ready',
+            timestamp: new Date().toISOString(),
+          }),
+        );
+      });
+
+      expect(onSymbolIndexChanged).toHaveBeenCalledWith('a'.repeat(40), 'ready');
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
     it('reconnects after giving up when the comments callback changes', () => {
       vi.useFakeTimers();
       try {
