@@ -232,7 +232,7 @@ const COMMENT_PANEL_STATUS: Record<ThreadReviewState, CommentPanelStatus | null>
   rejected: 'open',
   answered: 'answered',
   'awaiting-approval': 'answered',
-  // Shown as resolved until the reviewer reopens it; then the next word is theirs.
+  // Resolved until the reviewer reopens it; reopened, it stays out of the open count.
   approved: 'answered',
   folded: 'answered',
   withdrawn: 'resolved',

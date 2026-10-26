@@ -676,6 +676,24 @@ describe('CommentThreadCard', () => {
       expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
     });
 
+    it('still shows that the agent is answering a reply on an approved card', () => {
+      render(
+        <FixupOverlayProvider value={overlayWith([record('approved', 0)])}>
+          <CommentThreadCard
+            thread={mockThread}
+            review={{ ...review('approved'), responding: true }}
+            onResolveThread={vi.fn()}
+            onReplyToThread={vi.fn()}
+            onRemoveMessage={vi.fn()}
+            onUpdateMessage={vi.fn()}
+          />
+        </FixupOverlayProvider>,
+      );
+
+      expect(screen.getByTestId('resolved-chip')).toBeInTheDocument();
+      expect(screen.getByTestId('responding-chip')).toBeInTheDocument();
+    });
+
     it('reopens the thread after sending a reply to it', async () => {
       const user = userEvent.setup();
       const recordDecision = vi.fn();

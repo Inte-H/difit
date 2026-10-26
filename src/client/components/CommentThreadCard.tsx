@@ -345,7 +345,7 @@ export function CommentThreadCard({
               {reviewStateLabel(review.state)}
             </span>
           )}
-          {review?.responding && !isResolved && (
+          {review?.responding && (
             <span
               data-testid="responding-chip"
               className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-github-accent px-2 text-[10px] font-medium text-github-accent"
