@@ -202,6 +202,52 @@ describe('CommitList', () => {
     expect(within(row(/1111111/)).queryByTitle(/^열린 지적/)).not.toBeInTheDocument();
   });
 
+  describe('amended messages', () => {
+    function renderAmended(message: string, { inDrawer = false } = {}) {
+      render(
+        <CommitList
+          review={REVIEW}
+          shown={{ kind: 'all' }}
+          onSelect={vi.fn()}
+          inDrawer={inDrawer}
+          amendedMessages={new Map([[COMMITS[1]!.sha, message]])}
+        />,
+      );
+    }
+
+    it('strikes the subject of a commit an amend! rewords and shows the subject it will get', () => {
+      renderAmended('change the behavior on purpose\n\nwith a body');
+
+      const amended = row(/2222222/);
+      expect(within(amended).getByText('change the behavior').tagName).toBe('DEL');
+      expect(within(amended).getByText('change the behavior on purpose')).toBeInTheDocument();
+      expect(within(amended).getByText('바뀔 메시지')).toBeInTheDocument();
+      expect(within(amended).queryByText(/with a body/)).not.toBeInTheDocument();
+      expect(amended).toHaveAttribute(
+        'title',
+        'change the behavior\n\n바뀔 메시지:\nchange the behavior on purpose\n\nwith a body',
+      );
+      expect(within(row(/1111111/)).queryByText('바뀔 메시지')).not.toBeInTheDocument();
+      expect(row(/1111111/).querySelector('del')).toBeNull();
+    });
+
+    it('keeps the subject unstruck when only the body changes', () => {
+      renderAmended('change the behavior\n\nwith a new body');
+
+      const amended = row(/2222222/);
+      expect(within(amended).getByText('change the behavior').tagName).not.toBe('DEL');
+      expect(within(amended).getByText('본문만 바뀜')).toBeInTheDocument();
+    });
+
+    it('shows the subject it will get in the phone drawer too', () => {
+      renderAmended('change the behavior on purpose', { inDrawer: true });
+
+      const amended = row(/2222222/);
+      expect(within(amended).getByText('change the behavior').tagName).toBe('DEL');
+      expect(within(amended).getByText('change the behavior on purpose')).toBeInTheDocument();
+    });
+  });
+
   it('folds the list away and keeps naming what is shown', () => {
     renderList({ kind: 'commit', sha: COMMITS[0]!.sha });
 

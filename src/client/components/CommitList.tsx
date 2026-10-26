@@ -22,6 +22,8 @@ interface CommitListProps {
   rangeStart?: string | undefined;
   inDrawer?: boolean;
   openCounts?: ReadonlyMap<string, number> | undefined;
+  // Keyed by commit sha: the whole message an amend! will leave on that commit.
+  amendedMessages?: ReadonlyMap<string, string> | undefined;
   height?: number | null | undefined;
   onResize?: ((height: number) => void) | undefined;
 }
@@ -57,6 +59,38 @@ const CURRENT_MERGED_CLASS =
 const commitUnder = (x: number, y: number) =>
   document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-commit-sha]')?.dataset.commitSha ??
   null;
+
+const AMEND_BADGE_CLASS =
+  'inline-flex h-4 shrink-0 items-center rounded-full border border-github-accent px-1.5 text-[10px] font-medium text-github-accent';
+
+// Like git's %s: the first paragraph with its lines joined by spaces.
+const subjectOf = (message: string) =>
+  (message.split(/\n[ \t]*\n/, 1)[0] ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .join(' ')
+    .trim();
+
+function AmendedSubject({ subject, message }: { subject: string; message: string }) {
+  const amendedSubject = subjectOf(message);
+  if (amendedSubject === subject) {
+    return (
+      <span className="min-w-0 flex items-center gap-1.5">
+        <span className="min-w-0 truncate">{subject}</span>
+        <span className={AMEND_BADGE_CLASS}>본문만 바뀜</span>
+      </span>
+    );
+  }
+  return (
+    <span className="min-w-0 flex flex-col">
+      <del className="min-w-0 truncate text-github-text-muted">{subject}</del>
+      <span className="min-w-0 flex items-center gap-1.5">
+        <span className={AMEND_BADGE_CLASS}>바뀔 메시지</span>
+        <span className="min-w-0 truncate text-github-text-primary">{amendedSubject}</span>
+      </span>
+    </span>
+  );
+}
 
 export function ShownCommits({
   commits,
@@ -100,6 +134,7 @@ export function CommitList({
   rangeStart,
   inDrawer = false,
   openCounts,
+  amendedMessages,
   height,
   onResize,
 }: CommitListProps) {
@@ -331,6 +366,7 @@ export function CommitList({
           {graph.map(({ commit, cell, merged }, index) => {
             const isCurrent = index >= shownStart && index <= shownEnd;
             const isPreviewed = index >= previewStart && index <= previewEnd;
+            const amendedMessage = amendedMessages?.get(commit.sha);
             return (
               <Fragment key={commit.sha}>
                 {merged.map((entry) => (
@@ -378,12 +414,20 @@ export function CommitList({
                     }
                     aria-current={isCurrent ? true : undefined}
                     data-drag-preview={isPreviewed ? '' : undefined}
-                    title={commit.subject}
+                    title={
+                      amendedMessage === undefined
+                        ? commit.subject
+                        : `${commit.subject}\n\n바뀔 메시지:\n${amendedMessage}`
+                    }
                     className={`${itemClass} ${isCurrent ? CURRENT_COMMIT_CLASS : 'text-github-text-secondary'} ${isPreviewed ? PREVIEW_CLASS : ''}`}
                   >
                     <CommitGraph cell={cell} bleed={graphBleed} />
                     <code className="shrink-0 font-mono text-xs">{commit.shortSha}</code>
-                    <span className="min-w-0 truncate">{commit.subject}</span>
+                    {amendedMessage === undefined ? (
+                      <span className="min-w-0 truncate">{commit.subject}</span>
+                    ) : (
+                      <AmendedSubject subject={commit.subject} message={amendedMessage} />
+                    )}
                     {openCountOf(commit.sha)}
                   </button>
                 </li>

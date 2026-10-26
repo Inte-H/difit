@@ -29,6 +29,7 @@ import {
   type ReviewView,
   type ReviewViewAction,
 } from '../types/diff';
+import { amendedMessagesByCommit } from '../utils/amendedMessages';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
 import { mergeCommentThreads } from '../utils/commentImports';
 import {
@@ -529,6 +530,10 @@ function App() {
         ? countOpenThreadsByCommit(threads, fixupsByThread, decisions, review)
         : undefined,
     [review, fixupsLoaded, threads, fixupsByThread, decisions],
+  );
+  const amendedMessages = useMemo(
+    () => amendedMessagesByCommit(fixups, decisions),
+    [fixups, decisions],
   );
   const resolvedThreadIds = useMemo(
     () =>
@@ -2362,6 +2367,7 @@ function App() {
                 rangeStart={rangeStart}
                 inDrawer
                 openCounts={openCountsByCommit}
+                amendedMessages={amendedMessages}
               />
             </aside>
           </>
@@ -2444,6 +2450,7 @@ function App() {
                   onSelect={selectView}
                   rangeStart={rangeStart}
                   openCounts={openCountsByCommit}
+                  amendedMessages={amendedMessages}
                   height={commitListHeight}
                   onResize={handleCommitListResize}
                 />
