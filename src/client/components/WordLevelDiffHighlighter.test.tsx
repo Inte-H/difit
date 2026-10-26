@@ -53,7 +53,7 @@ describe('WordLevelDiffHighlighter', () => {
           { type: 'added', value: 'bar' },
         ]}
         filename="notes.ts"
-        precomputedTokens={[[{ types: ['comment'], content: 'foo bar' }]]}
+        lineTokens={[{ types: ['comment'], content: 'foo bar' }]}
       />,
     );
 

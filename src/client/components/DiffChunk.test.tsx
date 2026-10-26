@@ -1340,7 +1340,6 @@ describe('DiffChunk symbol positions', () => {
   };
   const refs = { base: 'base111', target: 'target2' };
 
-  // Waits for the Java colors too, since the line is drawn again once the language loads.
   async function wordsIn(side: 'old' | 'new', line: number, word: string) {
     return waitFor(() => {
       const row = document.querySelector(

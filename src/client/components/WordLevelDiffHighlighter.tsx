@@ -15,7 +15,7 @@ interface WordLevelDiffHighlighterProps {
   className?: string;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   filename?: string;
-  precomputedTokens?: Token[][] | null;
+  lineTokens?: Token[] | null;
 }
 
 type GetTokenProps = (options: { token: Token }) => Record<string, unknown>;
@@ -67,15 +67,13 @@ export const WordLevelDiffHighlighter = React.memo(function WordLevelDiffHighlig
   className = '',
   syntaxTheme = 'vsDark',
   filename = '',
-  precomputedTokens,
+  lineTokens,
 }: WordLevelDiffHighlighterProps) {
   const code = segments.map((segment) => segment.value).join('');
   const { actualLang } = useHighlightedCode(
     filename ? getPrismLanguageFromFilename(filename) : 'text',
   );
-  const precomputedLine = precomputedTokens?.[0];
-  const usablePrecomputed =
-    precomputedLine && textOf(precomputedLine) === code ? precomputedLine : null;
+  const usablePrecomputed = lineTokens && textOf(lineTokens) === code ? lineTokens : null;
 
   const renderSegments = (lineTokens: Token[] | null, getTokenProps: GetTokenProps) => {
     const pieces = lineTokens ? tokensPerSegment(lineTokens, segments) : null;
@@ -103,16 +101,15 @@ export const WordLevelDiffHighlighter = React.memo(function WordLevelDiffHighlig
       prism={Prism}
     >
       {({ style, tokens, getTokenProps }) => {
-        const lineTokens = usablePrecomputed ?? tokens[0] ?? null;
+        const highlighted = tokens[0];
+        const shownTokens =
+          usablePrecomputed ?? (highlighted && textOf(highlighted) === code ? highlighted : null);
         return (
           <span
             className={className}
             style={{ ...style, background: 'transparent', backgroundColor: 'transparent' }}
           >
-            {renderSegments(
-              lineTokens && textOf(lineTokens) === code ? lineTokens : null,
-              getTokenProps,
-            )}
+            {renderSegments(shownTokens, getTokenProps)}
           </span>
         );
       }}

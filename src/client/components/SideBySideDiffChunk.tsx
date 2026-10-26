@@ -812,10 +812,12 @@ export function SideBySideDiffChunk({
                             className="flex-1 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text"
                             syntaxTheme={syntaxTheme}
                             filename={filename}
-                            precomputedTokens={getProcomputedTokens(
-                              getOldTokens,
-                              sideLine.oldLine.oldLineNumber,
-                            )}
+                            lineTokens={
+                              getProcomputedTokens(
+                                getOldTokens,
+                                sideLine.oldLine.oldLineNumber,
+                              )?.[0]
+                            }
                           />
                         ) : (
                           <EnhancedPrismSyntaxHighlighter
@@ -872,10 +874,12 @@ export function SideBySideDiffChunk({
                             className="flex-1 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text"
                             syntaxTheme={syntaxTheme}
                             filename={filename}
-                            precomputedTokens={getProcomputedTokens(
-                              getNewTokens,
-                              sideLine.newLine.newLineNumber,
-                            )}
+                            lineTokens={
+                              getProcomputedTokens(
+                                getNewTokens,
+                                sideLine.newLine.newLineNumber,
+                              )?.[0]
+                            }
                           />
                         ) : (
                           <EnhancedPrismSyntaxHighlighter
