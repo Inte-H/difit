@@ -2,7 +2,13 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { CommentThread, DiffChunk, DiffFile, ExpandedRange } from '../../types/diff';
+import type {
+  CommentThread,
+  DiffChunk,
+  DiffFile,
+  ExpandedRange,
+  ThreadFixup,
+} from '../../types/diff';
 import { EMPTY_FIXUP_OVERLAY, type FixupOverlayState } from '../contexts/FixupOverlayContext';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import type { MergedChunk } from '../hooks/useExpandedLines';
@@ -240,6 +246,27 @@ describe('DiffViewer comments on the whole file', () => {
     await userEvent.setup().click(screen.getByRole('button', { name: '파일 전체에 지적 달기' }));
 
     expect(onToggleCollapsed).toHaveBeenCalledWith('a.ts');
+  });
+
+  it('keeps the fixup of a thread on the whole file in the block the comments panel scrolls to', () => {
+    const fixup: ThreadFixup = {
+      sha: 'f'.repeat(40),
+      shortSha: 'abc1234',
+      patchId: 'patch-abc1234',
+      authoredAt: '2026-01-01T00:00:00Z',
+      subject: 'fixup! split file',
+      threadIds: ['file'],
+      files: [],
+    };
+    renderViewer([changed(10, 10)], [thread('file', 'Split this file')], {
+      ...EMPTY_FIXUP_OVERLAY,
+      enabled: true,
+      fixupsByThread: new Map([['file', [fixup]]]),
+    });
+
+    const block = document.getElementById('file-comment-file')!;
+    expect(within(block).getByText('Split this file')).toBeInTheDocument();
+    expect(within(block).getByText(/abc1234/)).toBeInTheDocument();
   });
 
   it('offers no header button where the diff takes no comments', () => {
