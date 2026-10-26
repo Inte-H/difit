@@ -31,9 +31,16 @@ function columnOf(word: Element, name: string, line: Element): number | null {
   return null;
 }
 
-function positionOf(word: Element, name: string, host: Element) {
+// A marker around the host covers only lines whose ref comes from the review, since a host with
+// its own ref numbers its lines in that ref.
+function hidesPosition(word: Element, host: HTMLElement): boolean {
+  const marker = word.closest('[data-symbol-no-position]');
+  return marker !== null && (host.contains(marker) || host.dataset.symbolRef === undefined);
+}
+
+function positionOf(word: Element, name: string, host: HTMLElement) {
   const line = word.closest<HTMLElement>('[data-symbol-line]');
-  if (!line || !host.contains(line) || host.closest('[data-symbol-no-position]')) return {};
+  if (!line || !host.contains(line) || hidesPosition(word, host)) return {};
   const lineNumber = Number(line.dataset.symbolLine);
   if (!Number.isInteger(lineNumber) || lineNumber < 1) return {};
   const column = columnOf(word, name, line);
@@ -59,6 +66,10 @@ export function symbolRequestFromTarget(
 
   const from = host.dataset.symbolPath;
   return from ? { name, ref, from, ...positionOf(word, name, host) } : { name, ref };
+}
+
+export function shortRef(ref: string): string {
+  return /^[0-9a-f]{40}\^?$/i.test(ref) ? ref.slice(0, 7) + ref.slice(40) : ref;
 }
 
 export async function fetchSymbol(

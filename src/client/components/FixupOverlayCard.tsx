@@ -50,13 +50,29 @@ function FixupFileLabels({ file }: { file: FixupFile }) {
   ));
 }
 
+// The chunks are the fixup's own diff, so a deleted line is in the fixup's parent.
+const symbolAttributes = (line: DiffLine, fixupSha: string, file: FixupFile) =>
+  line.type === 'delete'
+    ? {
+        'data-symbol-ref': `${fixupSha}^`,
+        'data-symbol-path': file.oldPath ?? file.path,
+        'data-symbol-line': line.oldLineNumber,
+      }
+    : {
+        'data-symbol-ref': fixupSha,
+        'data-symbol-path': file.path,
+        'data-symbol-line': line.newLineNumber,
+      };
+
 function FixupChunksTable({
   chunks,
-  filePath,
+  fixupSha,
+  file,
   syntaxTheme,
 }: {
   chunks: DiffChunk[];
-  filePath: string;
+  fixupSha: string;
+  file: FixupFile;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
 }) {
   return (
@@ -69,11 +85,14 @@ function FixupChunksTable({
                 <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted select-none align-top">
                   {line.newLineNumber ?? line.oldLineNumber ?? ''}
                 </td>
-                <td className="p-0 w-full align-top [&_span:first-child]:!bg-transparent">
+                <td
+                  className="p-0 w-full align-top [&_span:first-child]:!bg-transparent"
+                  {...symbolAttributes(line, fixupSha, file)}
+                >
                   <DiffCodeLine
                     line={line}
                     syntaxTheme={syntaxTheme}
-                    filename={filePath}
+                    filename={file.path}
                     showPrefixBorder={false}
                   />
                 </td>
@@ -123,7 +142,8 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
         <FixupChunksTable
           key={file.path}
           chunks={file.chunks}
-          filePath={file.path}
+          fixupSha={fixup.sha}
+          file={file}
           syntaxTheme={syntaxTheme}
         />
       ))}
@@ -133,7 +153,12 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
             {fixupFileName(file)}
             <FixupFileLabels file={file} />
           </div>
-          <FixupChunksTable chunks={file.chunks} filePath={file.path} syntaxTheme={syntaxTheme} />
+          <FixupChunksTable
+            chunks={file.chunks}
+            fixupSha={fixup.sha}
+            file={file}
+            syntaxTheme={syntaxTheme}
+          />
         </div>
       ))}
       {otherFiles.length > 0 && (
@@ -211,7 +236,12 @@ function FixupFileBox({
         )}
       </div>
       {isOpen && (
-        <FixupChunksTable chunks={[chunk]} filePath={file.path} syntaxTheme={syntaxTheme} />
+        <FixupChunksTable
+          chunks={[chunk]}
+          fixupSha={fixup.sha}
+          file={file}
+          syntaxTheme={syntaxTheme}
+        />
       )}
     </div>
   );

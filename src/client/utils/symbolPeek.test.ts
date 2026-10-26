@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { SymbolSearchResponse } from '../../types/diff';
 
-import { fetchSymbol, reselect, symbolRequestFromTarget } from './symbolPeek';
+import { fetchSymbol, reselect, shortRef, symbolRequestFromTarget } from './symbolPeek';
 
 const refs = { base: 'aaa1111', target: 'bbb2222' };
 
@@ -89,6 +89,28 @@ describe('symbolRequestFromTarget', () => {
     ).toEqual({ name: 'save', ref: 'bbb2222', from: 'src/A.java' });
   });
 
+  it('sends the position of code that names its own ref inside a section without positions', () => {
+    expect(
+      symbolRequestFromTarget(
+        wordIn(
+          '<div data-symbol-no-position><table><tbody><tr><td data-symbol-ref="ccc3333" data-symbol-path="src/A.java" data-symbol-line="4"><span class="word-token" data-word="save">save</span></td></tr></tbody></table></div>',
+        ),
+        refs,
+      ),
+    ).toEqual({ name: 'save', ref: 'ccc3333', from: 'src/A.java', line: 4, column: 0 });
+  });
+
+  it('sends no position when the code itself says it has none', () => {
+    expect(
+      symbolRequestFromTarget(
+        wordIn(
+          '<div data-symbol-ref="ccc3333" data-symbol-path="src/A.java"><div data-symbol-no-position data-symbol-line="4"><span class="word-token" data-word="save">save</span></div></div>',
+        ),
+        refs,
+      ),
+    ).toEqual({ name: 'save', ref: 'ccc3333', from: 'src/A.java' });
+  });
+
   it('sends no position for code that does not say which line it is', () => {
     expect(
       symbolRequestFromTarget(
@@ -98,6 +120,21 @@ describe('symbolRequestFromTarget', () => {
         refs,
       ),
     ).toEqual({ name: 'helper', ref: 'ccc3333', from: 'src/A.java' });
+  });
+});
+
+describe('shortRef', () => {
+  it.each([
+    ['0123456789abcdef0123456789abcdef01234567', '0123456'],
+    ['0123456789abcdef0123456789abcdef01234567^', '0123456^'],
+    ['HEAD', 'HEAD'],
+    ['abc1234', 'abc1234'],
+    [
+      'feature/0123456789abcdef0123456789abcdef01234567',
+      'feature/0123456789abcdef0123456789abcdef01234567',
+    ],
+  ])('shows %s as %s', (ref, shown) => {
+    expect(shortRef(ref)).toBe(shown);
   });
 });
 
