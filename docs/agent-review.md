@@ -105,6 +105,8 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
 
 승인 여부는 `difit comment get --port <port>` 텍스트 출력에서 지적마다 붙는 `[승인됨]`으로 확인한다. JSON의 `decisions`는 판정을 지우지 않고 쌓기만 한다. fixup이 여럿인 지적을 승인하면 fixup마다 `approved`가 같은 시각으로 하나씩 쌓인다. 리뷰어가 승인을 취소하면 `"kind": "unapproved"`가 더해지므로, 같은 지적의 `approved`와 `unapproved` 가운데 시각이 늦은 쪽이 지금의 판정이다. 다만 승인한 fixup에 그보다 늦은 `rejected`가 있으면 거절이 우선한다. 리뷰어가 직접 고친 수정을 `되돌리기`로 거절하면 이렇게 남는다.
 
+git이 2.32보다 오래되었으면(`git --version`) 아래 접기 명령에 `--keep-empty`를 붙인다. 붙이지 않으면 리뷰어가 고친 커밋 메시지가 사라진다. 까닭과 그 뒤에 할 일은 아래 git 2.32 문단에 있다.
+
 ```sh
 git rev-parse HEAD   # 찍힌 SHA를 <접기 전 SHA>로 적어 둔다
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 범위의 시작 커밋>
@@ -118,7 +120,7 @@ GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <리뷰 범위의 시작 커밋
 git rebase <리뷰 범위의 시작 커밋> --exec 'git log -1 --format=%B | grep -q "^Review-Thread: " || exit 0; git log -1 --format=%B | sed "/^Review-Thread: /d" | git commit -q --amend --allow-empty --no-verify --cleanup=whitespace -F -'
 ```
 
-`amend!`를 접으려면 git 2.32 이상이 필요하다. 그보다 오래된 git은 `amend!` 커밋을 접지 않고 그대로 둔다. 이때는 `git rebase -i`에서 `amend!` 커밋을 `drop`하고, 대상 커밋을 `reword`해 `git log -1 --format=%B <amend! SHA> | sed '1,/^$/d; /^Review-Thread: /d'`가 찍는 메시지로 바꾼다.
+`amend!`를 접으려면 git 2.32 이상이 필요하다. 그보다 오래된 git은 `amend!`를 알아보지 못하고, 파일을 바꾸지 않는 커밋이라 위 접기 명령에서 아무 말 없이 버린다. 파일 내용은 그대로라 `git diff` 확인도 통과하므로, 리뷰어가 고친 메시지가 사라져도 드러나지 않는다. 그래서 이 git에서는 접기 명령에 `--keep-empty`를 붙여 `amend!` 커밋을 남긴다. 그다음 `git rebase -i <리뷰 범위의 시작 커밋>`에서 `amend!` 커밋을 `drop`하고, 대상 커밋을 `reword`해 `git log -1 --format=%B <amend! SHA> | sed '1,/^$/d; /^Review-Thread: /d'`가 찍는 메시지로 바꾼다. 이렇게 바꾼 메시지에는 `Review-Thread` 줄이 없으므로 위의 줄 지우기 명령은 돌리지 않는다. `--keep-empty` 없이 이미 접었다면 `amend!` 커밋은 `git log --format='%H %s' <리뷰 범위의 시작 커밋>..<접기 전 SHA> | grep ' amend! '`로 찾는다. 대상 커밋은 접으면서 SHA가 바뀌었으니 제목으로 찾아 같은 방법으로 `reword`한다.
 
 리뷰 범위의 시작 커밋은 diff의 비교 기준이다. 커밋 하나만 주고 연 리뷰라면 그 커밋의 부모(`<SHA>^`)이다. 커밋 여러 개를 한꺼번에 본 리뷰에서는 커밋 하나를 보며 단 지적의 fixup과 리뷰어가 직접 고친 fixup이 범위 중간의 커밋을 향할 수 있으므로, 리뷰 대상 커밋이 아니라 범위의 시작점부터 돌려야 모두 접힌다.
 

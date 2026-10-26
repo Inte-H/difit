@@ -166,6 +166,8 @@ Fold once, when the branch is wrapped up: every remaining fixup is `[승인됨]`
 
 The JSON `decisions` only accumulate. Approving a comment with several fixups adds one `approved` per fixup, all at the same time. When the user unapproves, `"kind": "unapproved"` is added; the later of `approved` and `unapproved` for a thread wins, and a `rejected` later than the approval wins over both. Read the current state from the text output labels.
 
+On a git older than 2.32 (`git --version`), add `--keep-empty` to the fold command below, or the user's commit message edits are lost; see the git 2.32 paragraph after it.
+
 ```bash
 git rev-parse HEAD   # note this SHA as <pre-fold SHA>
 GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash <review base>
@@ -177,7 +179,7 @@ An `amend!` commit replaces its target's message with everything below its first
 git rebase <review base> --exec 'git log -1 --format=%B | grep -q "^Review-Thread: " || exit 0; git log -1 --format=%B | sed "/^Review-Thread: /d" | git commit -q --amend --allow-empty --no-verify --cleanup=whitespace -F -'
 ```
 
-Folding `amend!` commits needs git 2.32 or later; an older git leaves them in place. There, drop each one in `git rebase -i` and `reword` its target with the message `git log -1 --format=%B <amend! SHA> | sed '1,/^$/d; /^Review-Thread: /d'` prints.
+Folding `amend!` commits needs git 2.32 or later. An older git does not recognize them, and because they change no file, the fold command above silently drops them; the `git diff` check still passes, so the user's reword is lost without a trace. There, add `--keep-empty` to the fold command so the `amend!` commits stay, then drop each one in `git rebase -i <review base>` and `reword` its target with the message `git log -1 --format=%B <amend! SHA> | sed '1,/^$/d; /^Review-Thread: /d'` prints. That message has no `Review-Thread` line, so skip the line-removal command above. If you already folded without `--keep-empty`, find the `amend!` commits with `git log --format='%H %s' <review base>..<pre-fold SHA> | grep ' amend! '`, and `reword` each target the same way, finding it by subject since folding changed its SHA.
 
 `<review base>` is the compare-with side of the diff, or `<SHA>^` for a single-commit review. Start from the review base, not the target commit: a fixup for a comment made on one commit, or one the user made in the viewer, can point at an earlier commit in the range. Folding only regroups changes, so afterwards `git diff --exit-code <pre-fold SHA> HEAD` must print nothing. Note the SHA itself rather than a shell variable: a variable does not survive into the next command when each command runs on its own.
 
