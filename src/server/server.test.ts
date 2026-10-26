@@ -24,7 +24,7 @@ const reviewCommits = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('./direct-edit.js', () => ({ commitDirectEdit, commitDirectReword }));
 vi.mock('./symbol-search.js', () => ({ searchSymbol }));
 
-const TEST_CLIENT_GONE_GRACE_MS = vi.hoisted(() => 400);
+const TEST_CLIENT_GONE_GRACE_MS = vi.hoisted(() => 1000);
 vi.mock('./client-presence.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./client-presence.js')>()),
   CLIENT_GONE_GRACE_MS: TEST_CLIENT_GONE_GRACE_MS,
@@ -1951,7 +1951,13 @@ describe('Server Integration Tests', () => {
     });
   });
 
-  describe('Keep-alive option', () => {
+  describe('Keep-alive option', { timeout: 15_000 }, () => {
+    const openHeartbeats = new Set<() => void>();
+
+    afterEach(() => {
+      for (const close of openHeartbeats) close();
+    });
+
     it('accepts keepAlive option without error', async () => {
       const { port, server } = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
@@ -2010,13 +2016,18 @@ describe('Server Integration Tests', () => {
         signal: controller.signal,
       });
       await response.body?.getReader().read();
-      return () => controller.abort();
+      const close = () => {
+        openHeartbeats.delete(close);
+        controller.abort();
+      };
+      openHeartbeats.add(close);
+      return close;
     }
 
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     const waitForShutdown = () =>
       vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0), {
-        timeout: TEST_CLIENT_GONE_GRACE_MS * 5,
+        timeout: TEST_CLIENT_GONE_GRACE_MS * 3,
       });
 
     it('keeps running when one of two tabs disconnects', async () => {
@@ -2075,7 +2086,6 @@ describe('Server Integration Tests', () => {
       const closeBeforeReload = await openHeartbeat(port);
 
       closeBeforeReload();
-      await sleep(100);
       const closeAfterReload = await openHeartbeat(port);
       await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
       expect(process.exit).not.toHaveBeenCalled();
