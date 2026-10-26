@@ -8,7 +8,13 @@ import { useHighlightedCode } from '../hooks/useHighlightedCode';
 import { NO_INDEX_UPDATES, type SymbolIndexUpdates } from '../hooks/useSymbolPeek';
 import { fetchBlobText, tokenizeContent } from '../utils/fileTokens';
 import { getPrismLanguageFromFilename } from '../utils/languageDetection';
-import { fetchSymbol, isSameMatch, reselect, type SymbolPeekRequest } from '../utils/symbolPeek';
+import {
+  fetchSymbol,
+  isSameMatch,
+  reselect,
+  shortRef,
+  type SymbolPeekRequest,
+} from '../utils/symbolPeek';
 
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import type { AppearanceSettings } from './SettingsModal';
@@ -140,7 +146,9 @@ export function SymbolPeekModal({
           )}
           <h2 className="min-w-0 flex-1 truncate text-sm text-github-text-primary">
             <code className="font-mono font-semibold">{request.name}</code>
-            <span className="ml-2 text-xs text-github-text-secondary">@ {request.ref}</span>
+            <span className="ml-2 text-xs text-github-text-secondary">
+              @ {shortRef(request.ref)}
+            </span>
           </h2>
           <button
             onClick={onClose}

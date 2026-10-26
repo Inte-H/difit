@@ -335,6 +335,19 @@ describe('SymbolPeekModal', () => {
 
     expect(onBack).toHaveBeenCalled();
   });
+
+  it('shows a full commit hash shortened but searches with the whole of it', async () => {
+    const ref = '0123456789abcdef0123456789abcdef01234567^';
+    respond({ ...found, ref });
+    renderModal({ request: { name: 'addOne', ref } });
+
+    expect(screen.getByRole('heading')).toHaveTextContent('addOne@ 0123456^');
+    await shownRows();
+    expect(global.fetch).toHaveBeenCalledWith(
+      `/api/symbol?name=addOne&ref=${encodeURIComponent(ref)}`,
+      { signal: expect.any(AbortSignal) },
+    );
+  });
 });
 
 describe('SymbolPeekModal with a commit index', () => {

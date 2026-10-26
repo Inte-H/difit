@@ -1405,3 +1405,197 @@ describe('DiffChunk symbol positions', () => {
     });
   });
 });
+
+describe.each<ChunkMode>(['unified', 'split'])('names clicked in fixup code (%s)', (mode) => {
+  const sha = 'abc1234abc1234';
+  const refs = { base: 'base111', target: 'target2' };
+  const thread: CommentThread = {
+    id: 't1',
+    file: 'src/example.ts',
+    line: 12,
+    side: 'new',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    codeContent: 'const third = 3;',
+    messages: [],
+  };
+  const changed = (file: { path: string; oldPath?: string }): ThreadFixup['files'][number] => ({
+    status: file.oldPath ? 'renamed' : 'modified',
+    ...file,
+    chunks: [
+      {
+        header: '@@ -12,1 +12,1 @@',
+        oldStart: 12,
+        oldLines: 1,
+        newStart: 12,
+        newLines: 1,
+        lines: [
+          { type: 'delete', content: 'const third = 3;', oldLineNumber: 12 },
+          { type: 'add', content: 'const three = 3;', newLineNumber: 12 },
+        ],
+      },
+    ],
+  });
+  const fixupOf = (files: ThreadFixup['files']): ThreadFixup => ({
+    sha,
+    shortSha: 'abc1234',
+    patchId: 'patch-abc1234',
+    authoredAt: '2026-01-01T00:00:00Z',
+    subject: 'fixup! x',
+    threadIds: ['t1'],
+    files,
+  });
+
+  const renderCard = (
+    fixup: ThreadFixup,
+    overlay: Partial<FixupOverlayState> = {},
+    wrap: (ui: ReactNode) => ReactNode = (ui) => ui,
+  ) =>
+    renderWithProviders(
+      wrap(
+        <FixupOverlayProvider
+          value={{
+            ...EMPTY_FIXUP_OVERLAY,
+            targetCommit: 'b7c2e10',
+            enabled: true,
+            fixupsByThread: new Map([['t1', [fixup]]]),
+            ...overlay,
+          }}
+        >
+          <DiffChunk
+            chunk={testChunk}
+            chunkIndex={0}
+            threads={[thread]}
+            mode={mode}
+            onAddComment={asyncNoop}
+            onResolveThread={noop}
+            onReplyToThread={asyncNoop}
+            onRemoveMessage={noop}
+            onUpdateMessage={noop}
+            filename="src/example.ts"
+          />
+        </FixupOverlayProvider>,
+      ),
+    );
+
+  async function clicked(scope: Element, word: string) {
+    const token = await waitFor(() => {
+      const found = scope.querySelector(`.word-token[data-word="${word}"]`);
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    return symbolRequestFromTarget(token, refs);
+  }
+
+  it('looks a name up in the fixup commit, and on a deleted line in its parent', async () => {
+    renderCard(fixupOf([changed({ path: 'src/example.ts' })]));
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(await clicked(card, 'three')).toEqual({
+      name: 'three',
+      ref: sha,
+      from: 'src/example.ts',
+      line: 12,
+      column: 6,
+    });
+    expect(await clicked(card, 'third')).toEqual({
+      name: 'third',
+      ref: `${sha}^`,
+      from: 'src/example.ts',
+      line: 12,
+      column: 6,
+    });
+  });
+
+  it('looks a deleted line of a renamed file up under its old path', async () => {
+    renderCard(fixupOf([changed({ path: 'src/renamed.ts', oldPath: 'src/example.ts' })]));
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(await clicked(card, 'three')).toMatchObject({ ref: sha, from: 'src/renamed.ts' });
+    expect(await clicked(card, 'third')).toMatchObject({
+      ref: `${sha}^`,
+      from: 'src/example.ts',
+      line: 12,
+    });
+  });
+
+  it('looks a name up in a file the card holds for another path', async () => {
+    renderCard(fixupOf([changed({ path: 'src/example.ts' }), changed({ path: 'src/held.ts' })]), {
+      fixupPlaces: new Map([[`${sha}:src/held.ts`, { kind: 'card', threadId: 't1' }]]),
+    });
+
+    const held = screen.getByText('src/held.ts').parentElement!;
+    expect(await clicked(held, 'three')).toEqual({
+      name: 'three',
+      ref: sha,
+      from: 'src/held.ts',
+      line: 12,
+      column: 6,
+    });
+  });
+
+  it('keeps the position of a card inside a section whose diff lines have none', async () => {
+    const { container } = renderCard(fixupOf([changed({ path: 'src/example.ts' })]), {}, (ui) => (
+      <div data-symbol-no-position>{ui}</div>
+    ));
+
+    const card = screen.getByTestId('fixup-overlay-card');
+    expect(await clicked(card, 'three')).toMatchObject({ ref: sha, line: 12, column: 6 });
+    const diffLine = container.querySelector('[data-symbol-side="new"]')!;
+    expect(await clicked(diffLine, 'first')).toEqual({
+      name: 'first',
+      ref: 'target2',
+      from: 'src/example.ts',
+    });
+  });
+
+  it('looks a name up in the fixup commit from a box in another file', async () => {
+    const file = changed({ path: 'src/caller.ts' });
+    renderWithProviders(
+      <FixupOverlayProvider
+        value={{
+          ...EMPTY_FIXUP_OVERLAY,
+          targetCommit: 'b7c2e10',
+          enabled: true,
+          boxesByFile: new Map([
+            [
+              'src/caller.ts',
+              boxesByAnchor([
+                {
+                  fixup: fixupOf([file]),
+                  threads: [{ id: 't1', file: 'src/example.ts', line: 12 }],
+                  file,
+                  chunk: file.chunks[0]!,
+                  chunkIndex: 0,
+                  anchor: 12,
+                },
+              ]),
+            ],
+          ]),
+        }}
+      >
+        <DiffChunk
+          chunk={testChunk}
+          chunkIndex={0}
+          threads={[]}
+          mode={mode}
+          onAddComment={asyncNoop}
+          onResolveThread={noop}
+          onReplyToThread={asyncNoop}
+          onRemoveMessage={noop}
+          onUpdateMessage={noop}
+          filename="src/caller.ts"
+        />
+      </FixupOverlayProvider>,
+    );
+
+    const box = screen.getByTestId('fixup-file-box');
+    expect(await clicked(box, 'third')).toEqual({
+      name: 'third',
+      ref: `${sha}^`,
+      from: 'src/caller.ts',
+      line: 12,
+      column: 6,
+    });
+  });
+});
