@@ -88,6 +88,47 @@ describe('amendedMessagesByCommit', () => {
     expect(amendedMessagesByCommit([fixup], [decision(fixup, 'deleted')])).toEqual(new Map());
   });
 
+  it('leaves out a commit whose message a later squash! or amend! makes unknown', () => {
+    const squash: ThreadFixup = {
+      ...amend('b', 'unused', { threadId: 't2' }),
+      subject: 'squash! old subject',
+    };
+    delete squash.amendedMessage;
+    const unread = amend('c', 'unused', { threadId: 't3' });
+    delete unread.amendedMessage;
+
+    expect(amendedMessagesByCommit([amend('a', 'first try'), squash], [])).toEqual(new Map());
+    expect(amendedMessagesByCommit([amend('a', 'first try'), unread], [])).toEqual(new Map());
+    expect(
+      amendedMessagesByCommit([amend('a', 'first try'), squash], [decision(squash, 'rejected')]),
+    ).toEqual(new Map([[TARGET, 'first try']]));
+  });
+
+  it('keeps a plain fixup after an amend! from hiding the message', () => {
+    const plain: ThreadFixup = {
+      ...amend('b', 'unused', { threadId: 't2' }),
+      subject: 'fixup! old subject',
+    };
+    delete plain.amendedMessage;
+
+    expect(amendedMessagesByCommit([amend('a', 'first try'), plain], []).get(TARGET)).toBe(
+      'first try',
+    );
+  });
+
+  it('leaves out a commit the amend! leaves with the message it has now', () => {
+    expect(amendedMessagesByCommit([amend('a', 'old subject')], [])).toEqual(new Map());
+
+    const first = amend('a', 'first try');
+    const restoring: ThreadFixup = {
+      ...amend('b', 'old subject', { threadId: 't2' }),
+      amendedMessage: { before: 'first try', after: 'old subject' },
+    };
+    expect(amendedMessagesByCommit([first, restoring], [decision(first, 'rejected')])).toEqual(
+      new Map(),
+    );
+  });
+
   it('keeps an approved amend!', () => {
     const fixup = amend('a', 'first try');
 

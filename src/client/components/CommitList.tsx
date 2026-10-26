@@ -67,9 +67,8 @@ const AMEND_BADGE_CLASS =
 const subjectOf = (message: string) =>
   (message.split(/\n[ \t]*\n/, 1)[0] ?? '')
     .split('\n')
-    .map((line) => line.trim())
-    .join(' ')
-    .trim();
+    .map((line) => line.trimEnd())
+    .join(' ');
 
 function AmendedSubject({ subject, message }: { subject: string; message: string }) {
   const amendedSubject = subjectOf(message);

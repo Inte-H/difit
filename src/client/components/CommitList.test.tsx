@@ -239,6 +239,19 @@ describe('CommitList', () => {
       expect(within(amended).getByText('본문만 바뀜')).toBeInTheDocument();
     });
 
+    it('reads the subject as git does, joining the lines of the first paragraph', () => {
+      renderAmended('change the  \nbehavior\n\nwith a new body');
+
+      expect(within(row(/2222222/)).getByText('본문만 바뀜')).toBeInTheDocument();
+    });
+
+    it('counts leading spaces as part of the subject, as git does', () => {
+      renderAmended('  change the behavior');
+
+      expect(row(/2222222/).querySelector('del')).toHaveTextContent('change the behavior');
+      expect(within(row(/2222222/)).queryByText('본문만 바뀜')).not.toBeInTheDocument();
+    });
+
     it('shows the subject it will get in the phone drawer too', () => {
       renderAmended('change the behavior on purpose', { inDrawer: true });
 
