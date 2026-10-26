@@ -1406,7 +1406,7 @@ describe('DiffChunk symbol positions', () => {
   });
 });
 
-describe('names clicked in fixup code', () => {
+describe.each<ChunkMode>(['unified', 'split'])('names clicked in fixup code (%s)', (mode) => {
   const sha = 'abc1234abc1234';
   const refs = { base: 'base111', target: 'target2' };
   const thread: CommentThread = {
@@ -1466,7 +1466,7 @@ describe('names clicked in fixup code', () => {
             chunk={testChunk}
             chunkIndex={0}
             threads={[thread]}
-            mode="unified"
+            mode={mode}
             onAddComment={asyncNoop}
             onResolveThread={noop}
             onReplyToThread={asyncNoop}
@@ -1578,7 +1578,7 @@ describe('names clicked in fixup code', () => {
           chunk={testChunk}
           chunkIndex={0}
           threads={[]}
-          mode="unified"
+          mode={mode}
           onAddComment={asyncNoop}
           onResolveThread={noop}
           onReplyToThread={asyncNoop}
