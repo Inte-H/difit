@@ -393,10 +393,7 @@ describe('CommitList', () => {
     });
 
     it('offers no editing on a merge, whose message folding cannot change', () => {
-      const merge = {
-        ...COMMITS[1]!,
-        merged: [{ sha: '9'.repeat(40), shortSha: '9999999', subject: 'side' }],
-      };
+      const merge = { ...COMMITS[1]!, isMerge: true as const };
       render(
         <CommitList
           review={{ ...REVIEW, commits: [COMMITS[0]!, merge] }}

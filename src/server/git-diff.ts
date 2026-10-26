@@ -898,9 +898,18 @@ export class GitDiffParser {
     const mergedOf = mainline.some((entry) => entry.isMerge)
       ? await this.listMergedCommits(mainline, range)
       : new Map<string, Pick<ReviewCommit, 'merged' | 'mergedOmitted'>>();
-    return mainline.flatMap(({ sha, firstParent, subject, threadIds }) =>
+    return mainline.flatMap(({ sha, firstParent, subject, threadIds, isMerge }) =>
       firstParent && threadIds.length === 0 && !AUTOSQUASH_PREFIX.test(subject)
-        ? [{ sha, shortSha: shortHash(sha), parentSha: firstParent, subject, ...mergedOf.get(sha) }]
+        ? [
+            {
+              sha,
+              shortSha: shortHash(sha),
+              parentSha: firstParent,
+              subject,
+              ...mergedOf.get(sha),
+              ...(isMerge ? { isMerge: true as const } : {}),
+            },
+          ]
         : [],
     );
   }

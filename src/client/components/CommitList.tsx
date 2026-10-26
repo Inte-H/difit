@@ -463,7 +463,7 @@ export function CommitList({
                       )}
                       {openCountOf(commit.sha)}
                     </button>
-                    {guardedReword && commit.merged === undefined && (
+                    {guardedReword && !commit.isMerge && (
                       <button
                         type="button"
                         aria-label="메시지 고치기"
@@ -473,7 +473,7 @@ export function CommitList({
                         onClick={() =>
                           setRewording((current) => (current === commit.sha ? null : commit.sha))
                         }
-                        className={`shrink-0 px-2 text-github-text-muted hover:text-github-text-primary hover:bg-github-bg-tertiary focus:opacity-100 ${inDrawer || rewording === commit.sha ? '' : 'opacity-0 group-hover:opacity-100'}`}
+                        className={`shrink-0 px-2 text-github-text-muted hover:text-github-text-primary hover:bg-github-bg-tertiary focus:opacity-100 disabled:pointer-events-none disabled:opacity-50 ${inDrawer || rewording === commit.sha ? '' : 'opacity-0 group-hover:opacity-100'}`}
                       >
                         <Pencil size={12} />
                       </button>

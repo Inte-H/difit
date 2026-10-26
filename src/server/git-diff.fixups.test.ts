@@ -725,7 +725,33 @@ describe('listReviewCommits against a real repository', () => {
       await parser.listReviewCommits({ baseCommitish: base, targetCommitish: merged }),
     ).toEqual([
       entry(mainWork, base, 'main work'),
-      { ...entry(merged, mainWork, 'merge side'), merged: [mergedEntry(sideWork, 'side work')] },
+      {
+        ...entry(merged, mainWork, 'merge side'),
+        merged: [mergedEntry(sideWork, 'side work')],
+        isMerge: true,
+      },
+    ]);
+  });
+
+  it('marks a merge that brings in no commit of its own', async () => {
+    const repo = createRepo();
+    commit(repo, 'root', { 'f.txt': 'a\n' });
+    git(repo, 'checkout', '-q', '-b', 'side');
+    commit(repo, 'side work', { 'g.txt': 'g\n' });
+    git(repo, 'checkout', '-q', 'main');
+    const mainWork = commit(repo, 'main work', { 'f.txt': 'b\n' });
+    const merged = merge(repo, 'side', 'merge side');
+
+    const parser = new GitDiffParser(repo);
+
+    expect(
+      await parser.listReviewCommits({ baseCommitish: 'side', targetCommitish: merged }),
+    ).toEqual([
+      entry(mainWork, git(repo, 'rev-parse', 'HEAD~1~1'), 'main work'),
+      {
+        ...entry(merged, mainWork, 'merge side'),
+        isMerge: true,
+      },
     ]);
   });
 
@@ -749,8 +775,13 @@ describe('listReviewCommits against a real repository', () => {
         {
           ...entry(mergeOne, base, 'merge one'),
           merged: [mergedEntry(oneFirst, 'one first'), mergedEntry(oneSecond, 'one second')],
+          isMerge: true,
         },
-        { ...entry(mergeTwo, mergeOne, 'merge two'), merged: [mergedEntry(twoWork, 'two work')] },
+        {
+          ...entry(mergeTwo, mergeOne, 'merge two'),
+          merged: [mergedEntry(twoWork, 'two work')],
+          isMerge: true,
+        },
         entry(after, mergeTwo, 'after'),
       ],
     );

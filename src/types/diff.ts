@@ -68,6 +68,8 @@ export interface ReviewCommit {
   // oldest first; the oldest beyond a limit are only counted in `mergedOmitted`.
   merged?: MergedCommit[];
   mergedOmitted?: number;
+  // Set on a merge even when it brings in nothing `merged` would list.
+  isMerge?: true;
 }
 
 export interface ReviewScope {
