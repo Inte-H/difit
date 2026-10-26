@@ -489,6 +489,97 @@ describe('the commit each fixup folds into against a real repository', () => {
   });
 });
 
+describe('messages of amend! commits against a real repository', () => {
+  it('gives an amend! commit the message of the commit it amends and the one folding leaves', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    commit(repo, 'add feture\n\nExplains it.', { 'g.txt': 'g\n' });
+    const target = commit(repo, 'next', { 'h.txt': 'h\n' });
+    commit(repo, 'amend! add feture\n\nadd feature\n\nExplains it.\n\nReview-Thread: t1');
+    commit(repo, `fixup! ${target}\n\nReview-Thread: t2`, { 'h.txt': 'i\n' });
+
+    const [amend, fixup] = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(amend?.files).toEqual([]);
+    expect(amend?.amendedMessage).toEqual({
+      before: 'add feture\n\nExplains it.',
+      after: 'add feature\n\nExplains it.\n\nReview-Thread: t1',
+    });
+    expect(fixup?.amendedMessage).toBeUndefined();
+  });
+
+  it('finds the amended commit by its id', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const target = commit(repo, 'wrong', { 'g.txt': 'g\n' });
+    commit(repo, `amend! ${target.slice(0, 12)}\n\nright\n\nReview-Thread: t1`);
+
+    const [amend] = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(amend?.amendedMessage).toEqual({ before: 'wrong', after: 'right\n\nReview-Thread: t1' });
+  });
+  it('takes each amend! from the message the one before it leaves', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const target = commit(repo, 'add feture', { 'g.txt': 'g\n' });
+    commit(repo, 'amend! add feture\n\nadd featur\n\nReview-Thread: t1');
+    commit(repo, 'amend! add feture\n\nadd feature\n\nReview-Thread: t2');
+
+    const [first, second] = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(first?.amendedMessage).toEqual({
+      before: 'add feture',
+      after: 'add featur\n\nReview-Thread: t1',
+    });
+    expect(second?.amendedMessage).toEqual({
+      before: 'add featur\n\nReview-Thread: t1',
+      after: 'add feature\n\nReview-Thread: t2',
+    });
+  });
+
+  it('drops the whole first paragraph of an amend! commit, as git does', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const target = commit(repo, 'add feture', { 'g.txt': 'g\n' });
+    commit(repo, 'amend! add\nfeture\n\nadd feature\n\nReview-Thread: t1');
+
+    const [amend] = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(amend?.amendedMessage?.after).toBe('add feature\n\nReview-Thread: t1');
+  });
+
+  it('leaves the message out after a squash! and for an amend! with nothing past its subject', async () => {
+    const repo = createRepo();
+    const base = commit(repo, 'base', { 'f.txt': 'a\n' });
+    const first = commit(repo, 'add a', { 'a.txt': 'a\n' });
+    const target = commit(repo, 'add b', { 'b.txt': 'b\n' });
+    commit(repo, 'squash! add a\n\nmore');
+    commit(repo, 'amend! add a\n\nadd A\n\nReview-Thread: t1');
+    commit(repo, 'amend! add b');
+    commit(repo, 'amend! add b\n\nadd B\n\nReview-Thread: t2');
+
+    const fixups = await new GitDiffParser(repo).listFixupsForScreen({
+      targetCommitish: target,
+      baseCommitish: base,
+    });
+
+    expect(fixups.map((fixup) => fixup.foldTargetSha)).toEqual([first, target]);
+    expect(fixups.map((fixup) => fixup.amendedMessage)).toEqual([undefined, undefined]);
+  });
+});
+
 describe('findNewerTarget against a real repository', () => {
   it('stays quiet while only fixups follow the target', async () => {
     const repo = createRepo();
