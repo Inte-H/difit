@@ -76,6 +76,11 @@ interface DiffChunkProps {
   foldedLines?: readonly FoldedLines[];
 }
 
+// A comment range counts lines on one side, so a line without a number there is outside it.
+function lineNumberOn(line: DiffLine, side: DiffSide): number | undefined {
+  return side === 'old' ? line.oldLineNumber : line.newLineNumber;
+}
+
 export const DiffChunk = memo(function DiffChunk({
   chunk,
   chunkIndex,
@@ -288,14 +293,13 @@ export const DiffChunk = memo(function DiffChunk({
     [commentingLine, onAddComment, getSelectedCodeContent],
   );
 
-  const getThreadsForLine = (lineNumber: number, side: DiffSide) => {
+  // An unchanged line carries both numbers, so a thread from either side can end on it.
+  const getThreadsForLine = (line: DiffLine, rowSide: DiffSide) => {
     return threads
       .filter((thread) => {
-        const lineMatches = Array.isArray(thread.line)
-          ? thread.line[1] === lineNumber
-          : thread.line === lineNumber;
-        const sideMatches = !thread.side || thread.side === side;
-        return lineMatches && sideMatches;
+        const lineNumber = lineNumberOn(line, thread.side ?? rowSide);
+        const lastLine = Array.isArray(thread.line) ? thread.line[1] : thread.line;
+        return lineNumber !== undefined && lineNumber === lastLine;
       })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   };
@@ -316,23 +320,20 @@ export const DiffChunk = memo(function DiffChunk({
     }
   };
 
-  const getSelectedLineStyle = (lineNumber: number | undefined, side: DiffSide): string => {
-    if (!lineNumber) {
-      return '';
-    }
-
+  const getSelectedLineStyle = (line: DiffLine): string => {
     // Show selection during drag
-    if (isDragging && startLine && endLine) {
+    const draggedNumber = dragSide && lineNumberOn(line, dragSide);
+    if (isDragging && startLine && endLine && draggedNumber) {
       const min = Math.min(startLine, endLine);
       const max = Math.max(startLine, endLine);
-      if (lineNumber >= min && lineNumber <= max) {
+      if (draggedNumber >= min && draggedNumber <= max) {
         let classes = 'drag-selected';
         // Add top border for first line
-        if (lineNumber === min) {
+        if (draggedNumber === min) {
           classes += ' drag-selected-first';
         }
         // Add bottom border for last line
-        if (lineNumber === max) {
+        if (draggedNumber === max) {
           classes += ' drag-selected-last';
         }
         return classes;
@@ -340,7 +341,8 @@ export const DiffChunk = memo(function DiffChunk({
     }
 
     // Show selection for existing comment
-    if (commentingLine && commentingLine.side === side) {
+    const lineNumber = commentingLine && lineNumberOn(line, commentingLine.side);
+    if (commentingLine && lineNumber) {
       const start = Array.isArray(commentingLine.lineNumber)
         ? commentingLine.lineNumber[0]
         : commentingLine.lineNumber;
@@ -491,8 +493,6 @@ export const DiffChunk = memo(function DiffChunk({
                 </React.Fragment>
               ) : null;
             }
-            const currentLineNumber = line.newLineNumber || line.oldLineNumber || 0;
-            const currentLineSide: DiffSide = line.type === 'delete' ? 'old' : 'new';
             const formTargetLineNumber = commentingLine
               ? Array.isArray(commentingLine.lineNumber)
                 ? commentingLine.lineNumber[1]
@@ -505,9 +505,7 @@ export const DiffChunk = memo(function DiffChunk({
             const commentLineNumber =
               line.type === 'delete' ? line.oldLineNumber : line.newLineNumber;
             const commentSide: DiffSide = line.type === 'delete' ? 'old' : 'new';
-            const lineThreads = commentLineNumber
-              ? getThreadsForLine(commentLineNumber, commentSide)
-              : [];
+            const lineThreads = getThreadsForLine(line, commentSide);
             // Generate ID for all lines to match the format used in useKeyboardNavigation
             const lineId = `file-${fileIndex}-chunk-${chunkIndex}-line-${index}`;
             const isCurrentLine =
@@ -525,17 +523,14 @@ export const DiffChunk = memo(function DiffChunk({
                   lineId={lineId}
                   isCurrentLine={isCurrentLine || false}
                   hoveredLineIndex={hoveredLine}
-                  selectedLineStyle={getSelectedLineStyle(
-                    line.newLineNumber || line.oldLineNumber,
-                    line.type === 'delete' ? 'old' : 'new',
-                  )}
+                  selectedLineStyle={getSelectedLineStyle(line)}
                   onMouseEnter={() => {
                     setHoveredLine(index);
                   }}
                   onMouseLeave={() => setHoveredLine(null)}
                   onMouseMove={() => {
-                    if (isDragging && startLine) {
-                      const lineNumber = line.newLineNumber || line.oldLineNumber;
+                    if (isDragging && startLine && dragSide) {
+                      const lineNumber = lineNumberOn(line, dragSide);
                       if (lineNumber) {
                         setEndLine(lineNumber);
                       }
@@ -675,8 +670,7 @@ export const DiffChunk = memo(function DiffChunk({
                   )}
 
                 {commentingLine &&
-                  commentingLine.side === currentLineSide &&
-                  formTargetLineNumber === currentLineNumber && (
+                  lineNumberOn(line, commentingLine.side) === formTargetLineNumber && (
                     <tr className="bg-[var(--bg-secondary)]">
                       <td colSpan={3} className="p-0">
                         <div

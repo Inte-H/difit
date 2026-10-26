@@ -1070,6 +1070,8 @@ function renderChunk(
     onOpenInEditor?: () => void;
     commentable?: boolean;
     commentTrigger?: { fileIndex: number; chunkIndex: number; lineIndex: number };
+    chunk?: DiffChunkData;
+    threads?: CommentThread[];
   } = {},
 ) {
   const onAddComment = vi.fn().mockResolvedValue(undefined);
@@ -1167,6 +1169,75 @@ describe.each<ChunkMode>(['unified', 'split'])('commenting on picked code (%s)',
         'new',
       );
     });
+  });
+
+  // The added lines reuse the numbers of the deleted lines on the other side.
+  const renumbered: DiffChunkData = {
+    header: '@@ -18,5 +18,7 @@',
+    oldStart: 18,
+    oldLines: 5,
+    newStart: 18,
+    newLines: 7,
+    lines: [
+      { type: 'add', content: 'added();', newLineNumber: 20 },
+      { type: 'add', content: 'alsoAdded();', newLineNumber: 21 },
+      { type: 'normal', content: 'kept();', oldLineNumber: 18, newLineNumber: 22 },
+      { type: 'delete', content: '// first note', oldLineNumber: 19 },
+      { type: 'delete', content: '// second note', oldLineNumber: 20 },
+      { type: 'normal', content: 'guard();', oldLineNumber: 21, newLineNumber: 23 },
+      { type: 'normal', content: 'after();', oldLineNumber: 22, newLineNumber: 24 },
+    ],
+  };
+
+  it('keeps a drag from a deleted line to the old side', async () => {
+    const { onAddComment, rows } = renderChunk(mode, { chunk: renumbered });
+    const DRAGGED = '.drag-selected, [class*="after:bg-blue-100"]';
+    const contentOf = (row: Element) =>
+      renumbered.lines.map((line) => line.content).find((text) => row.textContent?.includes(text));
+    const rowOf = (content: string) => rows.find((row) => contentOf(row) === content)!;
+    const dragged = () =>
+      rows.filter((row) => row.matches(DRAGGED) || row.querySelector(DRAGGED)).map(contentOf);
+
+    // Both layouts start a row with the old line number.
+    fireEvent.mouseDown(rowOf('// first note').children[0]!);
+    fireEvent.mouseMove(codeCell(mode, rowOf('guard();')));
+
+    expect(dragged()).toEqual(['// first note', '// second note', 'guard();']);
+    fireEvent.mouseUp(document);
+    fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'Keep these' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    await waitFor(() => {
+      expect(onAddComment).toHaveBeenCalledWith(
+        [19, 21],
+        'Keep these',
+        ['// first note', '// second note', 'guard();'].join('\n'),
+        'old',
+      );
+    });
+  });
+
+  it('shows an old-side comment that ends on an unchanged line', () => {
+    const thread: CommentThread = {
+      id: 't-old',
+      file: 'src/example.ts',
+      line: [19, 21],
+      side: 'old',
+      createdAt: '2026-10-26T00:00:00.000Z',
+      updatedAt: '2026-10-26T00:00:00.000Z',
+      messages: [
+        {
+          id: 'm-old',
+          body: 'Why drop these notes?',
+          createdAt: '2026-10-26T00:00:00.000Z',
+          updatedAt: '2026-10-26T00:00:00.000Z',
+        },
+      ],
+    };
+
+    renderChunk(mode, { chunk: renumbered, threads: [thread] });
+
+    expect(screen.getAllByText('Why drop these notes?')).toHaveLength(1);
   });
 
   it('opens no comment for a click on a line number', async () => {
