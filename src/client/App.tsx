@@ -1861,7 +1861,7 @@ function App() {
       revealFixupFile(placed.fixupSha, thread.file);
       return;
     }
-    const files = diffData.files;
+    const files = navigableFiles;
     setCollapsedFiles((prev) => {
       if (!prev.has(thread.file)) return prev;
       const next = new Set(prev);
@@ -1870,12 +1870,11 @@ function App() {
     });
     const moveCursor = () => {
       const position = findCommentPosition(thread, files);
-      if (!position) return;
-      setCursorPosition(position);
+      if (position) setCursorPosition(position);
       scrollFileIntoDiffContainer(
         thread.file,
         `comment-thread-${thread.id}`,
-        getElementId(position, diffMode),
+        position ? getElementId(position, diffMode) : undefined,
       );
     };
     if (afterRender) requestAnimationFrame(moveCursor);

@@ -166,9 +166,9 @@ describe('useLazyDiffRendering', () => {
       return section;
     }
 
-    function setupWithHeaders() {
+    function setupWithHeaders(containerHeight?: number) {
       const container = document.createElement('div');
-      stubRect(container, 0);
+      stubRect(container, 0, containerHeight);
       const scrollTo = vi.fn();
       container.scrollTo = scrollTo as typeof container.scrollTo;
       reviewFileWithHeader('a.ts', 100, 60);
@@ -198,6 +198,20 @@ describe('useLazyDiffRendering', () => {
       await vi.waitFor(() => expect(scrollTo).toHaveBeenCalled());
       const [{ top }] = scrollTo.mock.calls.at(-1) as [{ top: number }];
       expect(top).toBeLessThanOrEqual(520 - 60);
+    });
+
+    it("keeps the line above the element below that file's sticky header", async () => {
+      const { scroll, scrollTo, drawBox, container } = setupWithHeaders(1000);
+      Object.defineProperty(container, 'scrollTop', { value: 500 });
+      drawBox(100);
+      const line = document.createElement('div');
+      line.id = 'line';
+      stubRect(line, 30);
+      document.body.appendChild(line);
+
+      scroll('b.ts', 'box', 'line');
+
+      await vi.waitFor(() => expect(scrollTo).toHaveBeenCalledWith({ top: 500 + 30 - 68 }));
     });
 
     it('lands the file itself with its header at the container top', async () => {
