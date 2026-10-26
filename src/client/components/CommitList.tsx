@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 import {
   Fragment,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -143,6 +144,22 @@ export function CommitList({
   const { commits } = review;
   const [isOpen, setIsOpen] = useState(true);
   const [rewording, setRewording] = useState<string | null>(null);
+  const [isSavingMessage, setIsSavingMessage] = useState(false);
+  const guardedReword = useMemo<RewordControls | undefined>(
+    () =>
+      reword && {
+        load: reword.load,
+        save: async (request) => {
+          setIsSavingMessage(true);
+          try {
+            return await reword.save(request);
+          } finally {
+            setIsSavingMessage(false);
+          }
+        },
+      },
+    [reword],
+  );
   const [drag, setDrag] = useState<Drag | null>(null);
   const isDragging = drag !== null;
   const listRef = useRef<HTMLUListElement>(null);
@@ -446,23 +463,26 @@ export function CommitList({
                       )}
                       {openCountOf(commit.sha)}
                     </button>
-                    {reword && (
+                    {guardedReword && commit.merged === undefined && (
                       <button
                         type="button"
                         aria-label="메시지 고치기"
                         title="메시지 고치기"
                         aria-expanded={rewording === commit.sha}
-                        onClick={() => setRewording(commit.sha)}
+                        disabled={isSavingMessage}
+                        onClick={() =>
+                          setRewording((current) => (current === commit.sha ? null : commit.sha))
+                        }
                         className={`shrink-0 px-2 text-github-text-muted hover:text-github-text-primary hover:bg-github-bg-tertiary focus:opacity-100 ${inDrawer || rewording === commit.sha ? '' : 'opacity-0 group-hover:opacity-100'}`}
                       >
                         <Pencil size={12} />
                       </button>
                     )}
                   </div>
-                  {reword && rewording === commit.sha && (
+                  {guardedReword && rewording === commit.sha && (
                     <CommitMessageForm
                       sha={commit.sha}
-                      controls={reword}
+                      controls={guardedReword}
                       onClose={() => setRewording(null)}
                     />
                   )}

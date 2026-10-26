@@ -970,7 +970,7 @@ describe('commitDirectReword', () => {
   });
 
   it('refuses a merge, which folding flattens away', async () => {
-    const { repo, base, later } = repoWithTarget();
+    const { repo, base } = repoWithTarget();
     git(repo, 'checkout', '-q', '-b', 'side', base);
     commit(repo, 'side', { 's.ts': 's\n' });
     git(repo, 'checkout', '-q', 'main');
@@ -985,7 +985,6 @@ describe('commitDirectReword', () => {
 
     expect(result).toEqual({ ok: false, reason: 'merge-commit' });
     expect(git(repo, 'rev-parse', 'HEAD')).toBe(merge);
-    expect(later).not.toBe(merge);
   });
 
   it('refuses a message left empty', async () => {

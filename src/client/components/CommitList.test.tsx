@@ -364,7 +364,7 @@ describe('CommitList', () => {
       expect(save).not.toHaveBeenCalled();
     });
 
-    it('stays open while saving, so a refusal still shows', async () => {
+    it('keeps every pencil still while saving, so a refusal still shows', async () => {
       let refuse: (failure: { message: string }) => void = () => {};
       renderRewordable({
         save: vi.fn(() => new Promise<{ message: string }>((resolve) => (refuse = resolve))),
@@ -374,11 +374,40 @@ describe('CommitList', () => {
       fireEvent.change(editor, { target: { value: 'better' } });
       fireEvent.click(screen.getByRole('button', { name: '저장' }));
 
-      fireEvent.keyDown(editor, { key: 'Escape' });
-      fireEvent.click(editButtonOf(/2222222/));
+      expect(editButtonOf(/2222222/)).toBeDisabled();
+      expect(editButtonOf(/3333333/)).toBeDisabled();
       await act(async () => refuse({ message: 'refused' }));
 
       expect(screen.getByRole('alert')).toHaveTextContent('refused');
+      expect(editButtonOf(/3333333/)).toBeEnabled();
+    });
+
+    it('closes the editor when its pencil is pressed again', async () => {
+      renderRewordable();
+      fireEvent.click(editButtonOf(/2222222/));
+      await screen.findByRole('textbox', { name: '커밋 메시지' });
+
+      fireEvent.click(editButtonOf(/2222222/));
+
+      expect(screen.queryByRole('textbox', { name: '커밋 메시지' })).not.toBeInTheDocument();
+    });
+
+    it('offers no editing on a merge, whose message folding cannot change', () => {
+      const merge = {
+        ...COMMITS[1]!,
+        merged: [{ sha: '9'.repeat(40), shortSha: '9999999', subject: 'side' }],
+      };
+      render(
+        <CommitList
+          review={{ ...REVIEW, commits: [COMMITS[0]!, merge] }}
+          shown={{ kind: 'all' }}
+          onSelect={vi.fn()}
+          reword={{ load: vi.fn(async () => ''), save: vi.fn(async () => null) }}
+        />,
+      );
+
+      expect(within(itemOf(/2222222/)).queryByRole('button', { name: '메시지 고치기' })).toBeNull();
+      expect(editButtonOf(/1111111/)).toBeInTheDocument();
     });
 
     it('says so when the message cannot be read', async () => {
