@@ -126,7 +126,7 @@ const buildDiffPayload = (diff: DiffResponse): DiffResponse => ({
 
 export const installStaticApiBridge = (dataset: StaticDiffDataset): StaticApiBridge => {
   const originalFetch = window.fetch.bind(window);
-  const OriginalEventSource = window.EventSource;
+  const OriginalWebSocket = window.WebSocket;
   const originalSendBeacon = navigator.sendBeacon?.bind(navigator);
   const staticBlobWindow = window as Window & StaticBlobWindow;
   const originalStaticBlobUrls = staticBlobWindow.__DIFIT_STATIC_BLOB_URLS__;
@@ -233,45 +233,46 @@ export const installStaticApiBridge = (dataset: StaticDiffDataset): StaticApiBri
     return originalFetch(input, init);
   }) as typeof window.fetch;
 
-  class StaticEventSource {
+  class StaticLiveSocket {
     static readonly CONNECTING = 0;
     static readonly OPEN = 1;
-    static readonly CLOSED = 2;
+    static readonly CLOSING = 2;
+    static readonly CLOSED = 3;
 
     readonly CONNECTING = 0;
     readonly OPEN = 1;
-    readonly CLOSED = 2;
+    readonly CLOSING = 2;
+    readonly CLOSED = 3;
 
     readonly url: string;
-    readonly withCredentials = false;
-    readyState = StaticEventSource.CONNECTING;
-    onopen: ((this: EventSource, ev: Event) => unknown) | null = null;
-    onmessage: ((this: EventSource, ev: MessageEvent) => unknown) | null = null;
-    onerror: ((this: EventSource, ev: Event) => unknown) | null = null;
+    readyState = StaticLiveSocket.CONNECTING;
+    onopen: ((this: WebSocket, ev: Event) => unknown) | null = null;
+    onmessage: ((this: WebSocket, ev: MessageEvent) => unknown) | null = null;
+    onclose: ((this: WebSocket, ev: CloseEvent) => unknown) | null = null;
+    onerror: ((this: WebSocket, ev: Event) => unknown) | null = null;
 
     constructor(url: string | URL) {
       this.url = String(url);
       queueMicrotask(() => {
-        if (this.readyState === StaticEventSource.CLOSED) return;
-        this.readyState = StaticEventSource.OPEN;
-        this.onopen?.call(this as unknown as EventSource, new Event('open'));
+        if (this.readyState === StaticLiveSocket.CLOSED) return;
+        this.readyState = StaticLiveSocket.OPEN;
+        this.onopen?.call(this as unknown as WebSocket, new Event('open'));
 
-        if (this.url.endsWith('/api/watch')) {
-          const payload = JSON.stringify({
-            type: 'connected',
-            diffMode: DiffMode.SPECIFIC,
-            changeType: 'commit',
-            timestamp: new Date().toISOString(),
-            message: 'Static snapshot mode',
-          });
-          this.onmessage?.call(
-            this as unknown as EventSource,
-            new MessageEvent('message', { data: payload }),
-          );
-        }
+        const payload = JSON.stringify({
+          type: 'connected',
+          diffMode: DiffMode.SPECIFIC,
+          changeType: 'commit',
+          timestamp: new Date().toISOString(),
+          message: 'Static snapshot mode',
+        });
+        this.onmessage?.call(
+          this as unknown as WebSocket,
+          new MessageEvent('message', { data: payload }),
+        );
       });
     }
 
+    send(): void {}
     addEventListener(): void {}
     removeEventListener(): void {}
     dispatchEvent(): boolean {
@@ -279,11 +280,18 @@ export const installStaticApiBridge = (dataset: StaticDiffDataset): StaticApiBri
     }
 
     close() {
-      this.readyState = StaticEventSource.CLOSED;
+      this.readyState = StaticLiveSocket.CLOSED;
     }
   }
 
-  window.EventSource = StaticEventSource as unknown as typeof EventSource;
+  window.WebSocket = new Proxy(OriginalWebSocket, {
+    construct(target, args: ConstructorParameters<typeof WebSocket>) {
+      const [url] = args;
+      return String(url).endsWith('/api/live')
+        ? (new StaticLiveSocket(url) as unknown as WebSocket)
+        : new target(...args);
+    },
+  });
 
   Object.defineProperty(navigator, 'sendBeacon', {
     configurable: true,
@@ -304,7 +312,7 @@ export const installStaticApiBridge = (dataset: StaticDiffDataset): StaticApiBri
     dataset,
     restore: () => {
       window.fetch = originalFetch;
-      window.EventSource = OriginalEventSource;
+      window.WebSocket = OriginalWebSocket;
       Object.defineProperty(navigator, 'sendBeacon', {
         configurable: true,
         writable: true,

@@ -1,23 +1,24 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CLIENT_GONE_GRACE_MS } from '../../server/client-presence.js';
 import { DiffMode } from '../../types/watch.js';
 
 import { useFileWatch } from './useFileWatch.js';
 
-// Mock EventSource
-class MockEventSource {
+class MockWebSocket {
   public onopen: ((event: Event) => void) | null = null;
   public onmessage: ((event: MessageEvent) => void) | null = null;
-  public onerror: ((event: Event) => void) | null = null;
+  public onclose: ((event: CloseEvent) => void) | null = null;
   public readyState: number = 0;
-  public close = vi.fn();
+  // A real socket reports its own close() through onclose too.
+  public close = vi.fn(() => {
+    setTimeout(() => this.dispatchClose(), 0);
+  });
 
   constructor(public url: string) {
-    // Store instance for access in tests
-    MockEventSource.instances.push(this);
+    MockWebSocket.instances.push(this);
 
-    // Simulate connection after a short delay
     setTimeout(() => {
       this.readyState = 1; // OPEN
       if (this.onopen) {
@@ -32,20 +33,20 @@ class MockEventSource {
     }
   }
 
-  dispatchError() {
-    if (this.onerror) {
-      this.onerror(new Event('error'));
+  dispatchClose() {
+    this.readyState = 3; // CLOSED
+    if (this.onclose) {
+      this.onclose(new CloseEvent('close'));
     }
   }
 
-  static instances: MockEventSource[] = [];
+  static instances: MockWebSocket[] = [];
   static clearInstances() {
-    MockEventSource.instances = [];
+    MockWebSocket.instances = [];
   }
 }
 
-// Mock EventSource globally
-vi.stubGlobal('EventSource', MockEventSource);
+vi.stubGlobal('WebSocket', MockWebSocket);
 
 // Mock console methods
 vi.stubGlobal('console', {
@@ -58,7 +59,7 @@ describe('useFileWatch', () => {
     vi.clearAllMocks();
     vi.clearAllTimers();
     vi.unstubAllEnvs();
-    MockEventSource.clearInstances();
+    MockWebSocket.clearInstances();
   });
 
   describe('initial state', () => {
@@ -80,11 +81,11 @@ describe('useFileWatch', () => {
     });
   });
 
-  describe('SSE connection', () => {
-    it('uses the proxied watch endpoint by default', () => {
+  describe('live connection', () => {
+    it('connects to the page origin by default', () => {
       renderHook(() => useFileWatch());
 
-      expect(MockEventSource.instances[0]?.url).toBe('/api/watch');
+      expect(MockWebSocket.instances[0]?.url).toBe(`ws://${window.location.host}/api/live`);
     });
 
     it('uses the direct API url when configured for development', () => {
@@ -92,7 +93,7 @@ describe('useFileWatch', () => {
 
       renderHook(() => useFileWatch());
 
-      expect(MockEventSource.instances[0]?.url).toBe('http://localhost:4969/api/watch');
+      expect(MockWebSocket.instances[0]?.url).toBe('ws://localhost:4969/api/live');
     });
 
     it('should establish connection on mount', async () => {
@@ -112,11 +113,10 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      // Get the EventSource instance and dispatch a connected event
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       act(() => {
-        eventSource.dispatchMessage(
+        socket.dispatchMessage(
           JSON.stringify({
             type: 'connected',
             diffMode: DiffMode.WORKING,
@@ -140,10 +140,10 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       act(() => {
-        eventSource.dispatchMessage(
+        socket.dispatchMessage(
           JSON.stringify({
             type: 'reload',
             diffMode: DiffMode.DOT,
@@ -167,10 +167,10 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       act(() => {
-        eventSource.dispatchMessage(
+        socket.dispatchMessage(
           JSON.stringify({
             type: 'error',
             diffMode: DiffMode.DEFAULT,
@@ -193,10 +193,10 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       act(() => {
-        eventSource.dispatchMessage('invalid json');
+        socket.dispatchMessage('invalid json');
       });
 
       // Should not throw or crash
@@ -217,7 +217,7 @@ describe('useFileWatch', () => {
 
       rerender({ onCommentsChanged: second });
       act(() => {
-        MockEventSource.instances[0]!.dispatchMessage(
+        MockWebSocket.instances[0]!.dispatchMessage(
           JSON.stringify({
             type: 'commentsChanged',
             version: 2,
@@ -226,8 +226,8 @@ describe('useFileWatch', () => {
         );
       });
 
-      expect(MockEventSource.instances).toHaveLength(1);
-      expect(MockEventSource.instances[0]!.close).not.toHaveBeenCalled();
+      expect(MockWebSocket.instances).toHaveLength(1);
+      expect(MockWebSocket.instances[0]!.close).not.toHaveBeenCalled();
       expect(first).not.toHaveBeenCalled();
       expect(second).toHaveBeenCalledTimes(1);
     });
@@ -237,7 +237,7 @@ describe('useFileWatch', () => {
       renderHook(() => useFileWatch(undefined, undefined, onSymbolIndexChanged));
 
       act(() => {
-        MockEventSource.instances[0]!.dispatchMessage(
+        MockWebSocket.instances[0]!.dispatchMessage(
           JSON.stringify({
             type: 'symbolIndexChanged',
             commit: 'a'.repeat(40),
@@ -248,7 +248,7 @@ describe('useFileWatch', () => {
       });
 
       expect(onSymbolIndexChanged).toHaveBeenCalledWith('a'.repeat(40), 'ready');
-      expect(MockEventSource.instances).toHaveLength(1);
+      expect(MockWebSocket.instances).toHaveLength(1);
     });
 
     it('reconnects after giving up when the comments callback changes', () => {
@@ -260,19 +260,19 @@ describe('useFileWatch', () => {
         );
 
         for (let attempt = 0; attempt <= 5; attempt += 1) {
-          const eventSource = MockEventSource.instances.at(-1)!;
-          eventSource.onopen = null;
+          const socket = MockWebSocket.instances.at(-1)!;
+          socket.onopen = null;
           act(() => {
-            eventSource.dispatchError();
-            vi.advanceTimersByTime(3000);
+            socket.dispatchClose();
+            vi.advanceTimersByTime(1000);
           });
         }
-        expect(MockEventSource.instances).toHaveLength(6);
+        expect(MockWebSocket.instances).toHaveLength(6);
         expect(result.current.error).toBe('Lost connection to file watch service');
 
         rerender({ onCommentsChanged: vi.fn(async () => {}) });
 
-        expect(MockEventSource.instances).toHaveLength(7);
+        expect(MockWebSocket.instances).toHaveLength(7);
       } finally {
         vi.useRealTimers();
       }
@@ -289,9 +289,9 @@ describe('useFileWatch', () => {
       });
 
       // Set shouldReload state first
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
       act(() => {
-        eventSource.dispatchMessage(
+        socket.dispatchMessage(
           JSON.stringify({
             type: 'reload',
             diffMode: DiffMode.DEFAULT,
@@ -331,9 +331,9 @@ describe('useFileWatch', () => {
       });
 
       // Set shouldReload state first
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
       act(() => {
-        eventSource.dispatchMessage(
+        socket.dispatchMessage(
           JSON.stringify({
             type: 'reload',
             diffMode: DiffMode.DEFAULT,
@@ -369,9 +369,9 @@ describe('useFileWatch', () => {
       });
 
       // Set shouldReload state first
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
       act(() => {
-        eventSource.dispatchMessage(
+        socket.dispatchMessage(
           JSON.stringify({
             type: 'reload',
             diffMode: DiffMode.DEFAULT,
@@ -405,6 +405,39 @@ describe('useFileWatch', () => {
   });
 
   describe('reconnection logic', () => {
+    it('reconnects before the server gives up on the page', () => {
+      vi.useFakeTimers();
+      try {
+        renderHook(() => useFileWatch());
+
+        act(() => {
+          MockWebSocket.instances[0]!.dispatchClose();
+          vi.advanceTimersByTime(CLIENT_GONE_GRACE_MS / 2);
+        });
+
+        expect(MockWebSocket.instances).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not reconnect once unmounted', () => {
+      vi.useFakeTimers();
+      try {
+        const { unmount } = renderHook(() => useFileWatch());
+
+        unmount();
+        act(() => {
+          vi.advanceTimersByTime(CLIENT_GONE_GRACE_MS * 2);
+        });
+
+        expect(MockWebSocket.instances).toHaveLength(1);
+        expect(MockWebSocket.instances[0]!.close).toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('should set reconnecting status on connection error', async () => {
       const { result } = renderHook(() => useFileWatch());
 
@@ -412,11 +445,11 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       // Simulate connection error
       act(() => {
-        eventSource.dispatchError();
+        socket.dispatchClose();
       });
 
       // Should show reconnecting status
@@ -430,11 +463,11 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       // Simulate connection error
       act(() => {
-        eventSource.dispatchError();
+        socket.dispatchClose();
       });
 
       // Should show reconnecting status initially
@@ -450,11 +483,11 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       unmount();
 
-      expect(eventSource.close).toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalled();
     });
 
     it('should clear timeouts on unmount', async () => {
@@ -464,12 +497,12 @@ describe('useFileWatch', () => {
         expect(result.current.isConnected).toBe(true);
       });
 
-      const eventSource = MockEventSource.instances[0]!;
+      const socket = MockWebSocket.instances[0]!;
 
       unmount();
 
       // Should close the connection
-      expect(eventSource.close).toHaveBeenCalled();
+      expect(socket.close).toHaveBeenCalled();
     });
   });
 });

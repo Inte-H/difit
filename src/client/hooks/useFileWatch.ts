@@ -6,7 +6,7 @@ import {
   type SymbolIndexStatus,
   type WatchEvent,
 } from '../../types/watch.js';
-import { resolveEventSourceUrl } from '../utils/eventSourceUrl';
+import { resolveLiveSocketUrl } from '../utils/liveSocketUrl';
 
 interface FileWatchHook {
   shouldReload: boolean;
@@ -21,7 +21,7 @@ export function useFileWatch(
   onCommentsChanged?: () => Promise<void>,
   onSymbolIndexChanged?: (commit: string, status: SymbolIndexStatus) => void,
 ): FileWatchHook {
-  const eventSourceRef = useRef<EventSource | null>(null);
+  const socketRef = useRef<WebSocket | null>(null);
   // Read through a ref so a new callback identity never closes and reopens the connection,
   // which would drop events sent while reconnecting.
   const onCommentsChangedRef = useRef(onCommentsChanged);
@@ -32,7 +32,9 @@ export function useFileWatch(
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 5;
-  const reconnectDelay = 3000; // 3 seconds
+  // Well inside the server's grace period, so a dropped connection is back before the server
+  // treats the page as closed.
+  const reconnectDelay = 1000;
 
   const [watchState, setWatchState] = useState<ClientWatchState>({
     isWatchEnabled: false,
@@ -47,15 +49,15 @@ export function useFileWatch(
   const [error, setError] = useState<string | null>(null);
 
   const connectToWatch = useCallback(() => {
-    if (eventSourceRef.current) {
+    if (socketRef.current) {
       return; // Already connected
     }
 
     try {
-      const eventSource = new EventSource(resolveEventSourceUrl('/api/watch'));
-      eventSourceRef.current = eventSource;
+      const socket = new WebSocket(resolveLiveSocketUrl());
+      socketRef.current = socket;
 
-      eventSource.onopen = () => {
+      socket.onopen = () => {
         console.log('Connected to file watch service');
         setWatchState((prev) => ({
           ...prev,
@@ -65,7 +67,7 @@ export function useFileWatch(
         setError(null);
       };
 
-      eventSource.onmessage = (event) => {
+      socket.onmessage = (event) => {
         try {
           // oxlint-disable-next-line typescript/no-unsafe-assignment
           const data: WatchEvent = JSON.parse(event.data as string);
@@ -108,18 +110,13 @@ export function useFileWatch(
         }
       };
 
-      eventSource.onerror = () => {
+      socket.onclose = () => {
         console.log('File watch connection lost');
         setWatchState((prev) => ({
           ...prev,
           connectionStatus: 'disconnected',
         }));
-
-        // Close the current connection
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-          eventSourceRef.current = null;
-        }
+        socketRef.current = null;
 
         // Attempt to reconnect
         if (reconnectAttemptsRef.current < maxReconnectAttempts) {
@@ -183,9 +180,10 @@ export function useFileWatch(
   }, [onReload, watchState.isReloading]);
 
   const cleanup = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
+    if (socketRef.current) {
+      socketRef.current.onclose = null;
+      socketRef.current.close();
+      socketRef.current = null;
     }
 
     if (reconnectTimeoutRef.current) {
@@ -204,7 +202,7 @@ export function useFileWatch(
   useEffect(() => {
     onCommentsChangedRef.current = onCommentsChanged;
     // Only a closed connection is reopened here, so one that ran out of retries still recovers.
-    if (!eventSourceRef.current) {
+    if (!socketRef.current) {
       cleanup();
       connectToWatch();
     }

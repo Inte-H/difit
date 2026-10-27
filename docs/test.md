@@ -213,8 +213,8 @@ describe('API endpoints', () => {
     expect(res.ok).toBe(true);
   });
 
-  test('GET /api/heartbeat (SSE)', async () => {
-    // Test Server-Sent Events connection
+  test('WebSocket /api/live', async () => {
+    // Test watch events and tab close detection
   });
 });
 ```

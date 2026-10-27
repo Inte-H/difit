@@ -49,6 +49,7 @@ import { commitDirectEdit, commitDirectReword } from './direct-edit.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
+import { acceptLiveSockets } from './live-socket.js';
 import { runGit } from './run-git.js';
 import { ScipIndexBuilder } from './scip-build.js';
 import { type SymbolPosition, answerFromScipIndex, commitFiles, isJavaPath } from './scip-peek.js';
@@ -1929,22 +1930,6 @@ export async function startServer(options: ServerOptions): Promise<{
     }
   }
 
-  // SSE endpoint for file watching
-  app.get('/api/watch', (req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    });
-
-    fileWatcher.addClient(res, [...indexEvents.values()]);
-
-    req.on('close', () => {
-      fileWatcher.removeClient(res);
-    });
-  });
-
   app.get('/api/comments-wait', (req, res) => {
     const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
     res.writeHead(200, {
@@ -1993,37 +1978,6 @@ export async function startServer(options: ServerOptions): Promise<{
     })();
   }, CLIENT_GONE_GRACE_MS);
 
-  // SSE endpoint to detect when tab is closed
-  app.get('/api/heartbeat', (req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      Connection: 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-    });
-
-    // Send initial heartbeat
-    res.write('data: connected\n\n');
-
-    // Send heartbeat every 5 seconds
-    const heartbeatInterval = setInterval(() => {
-      res.write('data: heartbeat\n\n');
-    }, 5000);
-
-    const leave = options.keepAlive ? undefined : clientPresence.join();
-
-    // When client disconnects (tab closed, navigation, etc.)
-    req.on('close', () => {
-      clearInterval(heartbeatInterval);
-      if (leave) {
-        leave();
-      } else {
-        console.log('Client disconnected, but server is staying alive (--keep-alive)');
-        console.log('Press Ctrl+C to stop the server');
-      }
-    });
-  });
-
   // Always runs in production mode when distributed as a CLI tool
   const isProduction =
     process.env.NODE_ENV === 'production' || process.env.NODE_ENV !== 'development';
@@ -2058,6 +2012,19 @@ export async function startServer(options: ServerOptions): Promise<{
     options.host || 'localhost',
   );
   server.on('close', () => clientPresence.stop());
+  acceptLiveSockets(server, (socket) => {
+    fileWatcher.addClient(socket, [...indexEvents.values()]);
+    const leave = options.keepAlive ? undefined : clientPresence.join();
+    socket.on('close', () => {
+      fileWatcher.removeClient(socket);
+      if (leave) {
+        leave();
+      } else {
+        console.log('Client disconnected, but server is staying alive (--keep-alive)');
+        console.log('Press Ctrl+C to stop the server');
+      }
+    });
+  });
 
   // Security warning for non-localhost binding
   if (options.host && !LOOPBACK_ADDRESSES.has(options.host)) {
