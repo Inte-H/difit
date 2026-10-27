@@ -429,6 +429,89 @@ describe('symbol peek of a commit review', () => {
     expect(cached()).toEqual([head, target].sort());
   });
 
+  describe('on the base side of the diff', () => {
+    const reviewOnTopOfHead = () => {
+      const next = git('commit-tree', `${head}^{tree}`, '-p', head, '-m', 'next');
+      const after = git('commit-tree', `${head}^{tree}`, '-p', next, '-m', 'after');
+      return { next, after };
+    };
+
+    posixOnly('builds the base index once its side is clicked', async () => {
+      const gate = join(home, 'gate');
+      cleanups.push(() => rmSync(gate, { force: true }));
+      const { next } = reviewOnTopOfHead();
+      const tool = fakeScipJava(gate);
+      const { peek, settleSymbolIndex } = await openReview({
+        selection: createDiffSelection(head, next),
+      });
+      writeFileSync(gate, '');
+      await settleSymbolIndex?.();
+      expect(tool.pids()).toHaveLength(1);
+      rmSync(gate);
+
+      const first = await peek({ ...FIND_BY_ID, ref: head.slice(0, 7) });
+      expect(first.body.source).toBe('name');
+      expect(first.body.indexing).toBe(head);
+      writeFileSync(gate, '');
+
+      const answer = await waitFor(async () => {
+        const { body } = await peek({ ...FIND_BY_ID, ref: head.slice(0, 7) });
+        return body.source === 'index' ? body : undefined;
+      });
+      expect(answer.definitions).toEqual([{ path: PORT, line: 6, text: sourceLine(PORT, 6) }]);
+      expect((await peek({ ...FIND_BY_ID, ref: next })).body.source).toBe('index');
+      expect(tool.pids()).toHaveLength(2);
+    });
+
+    posixOnly('builds nothing for a commit that is not the base of the review', async () => {
+      const { next, after } = reviewOnTopOfHead();
+      const tool = fakeScipJava();
+      const { peek, settleSymbolIndex } = await openReview({
+        selection: createDiffSelection(next, after),
+      });
+      await settleSymbolIndex?.();
+
+      const { body } = await peek({ ...FIND_BY_ID, ref: head });
+      await settleSymbolIndex?.();
+
+      expect(body.source).toBe('name');
+      expect(body.indexing).toBeUndefined();
+      expect(tool.pids()).toHaveLength(1);
+    });
+
+    posixOnly('answers from an index an earlier run stored, without building', async () => {
+      const { next, after } = reviewOnTopOfHead();
+      const tool = fakeScipJava();
+      const earlier = await openReview({ selection: createDiffSelection(base, head) });
+      await earlier.settleSymbolIndex?.();
+      await earlier.stopSymbolIndex?.();
+      expect(tool.pids()).toHaveLength(1);
+
+      const asBase = await openReview({ selection: createDiffSelection(head, next) });
+      expect((await asBase.peek({ ...FIND_BY_ID, ref: head })).body.source).toBe('index');
+      const elsewhere = await openReview({ selection: createDiffSelection(next, after) });
+      expect((await elsewhere.peek({ ...FIND_BY_ID, ref: head })).body.source).toBe('index');
+      await asBase.settleSymbolIndex?.();
+      await elsewhere.settleSymbolIndex?.();
+      expect(tool.pids()).toHaveLength(3);
+    });
+
+    posixOnly(
+      'builds nothing for the HEAD that uncommitted changes are compared with',
+      async () => {
+        const tool = fakeScipJava();
+        const { peek, settle } = await openReview({ selection: createDiffSelection('HEAD', '.') });
+
+        const { body } = await peek({ ...FIND_BY_ID, ref: head });
+        await settle();
+
+        expect(body.source).toBe('name');
+        expect(body.indexing).toBeUndefined();
+        expect(tool.pids()).toEqual([]);
+      },
+    );
+  });
+
   it('builds nothing and searches by name without scip-java', async () => {
     process.env.DIFIT_SCIP_JAVA = join(home, 'missing-scip-java');
     const { peek, settle } = await openReview();

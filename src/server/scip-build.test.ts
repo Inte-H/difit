@@ -354,6 +354,76 @@ describe('ScipIndexBuilder', () => {
     ]);
   });
 
+  posixOnly('builds a commit someone waits on before the ones queued earlier', async () => {
+    const repo = createRepo();
+    const running = commit(repo, JAVA_PROJECT);
+    const queued = commit(repo, { 'src/main/java/demo/B.java': 'package demo;\nclass B {}\n' });
+    const later = commit(repo, { 'src/main/java/demo/C.java': 'package demo;\nclass C {}\n' });
+    const other = commit(repo, { 'src/main/java/demo/E.java': 'package demo;\nclass E {}\n' });
+    const waited = commit(repo, { 'src/main/java/demo/D.java': 'package demo;\nclass D {}\n' });
+    const gate = join(tempDir('difit-scip-gate-'), 'open');
+    const fake = fakeScipJava(`while [ ! -f '${gate}' ]; do sleep 0.02; done\n${WRITES_INDEX}`);
+    const cache = tempDir('difit-scip-cache-');
+    const { builder } = newBuilder(repo, fake.path, cache);
+
+    const first = builder.request(running);
+    await waitFor(() => calls(fake.log).length > 0);
+    const rest = [
+      builder.request(queued),
+      builder.request(later),
+      builder.request(other),
+      builder.request(waited, { urgent: true }),
+    ];
+    await waitFor(() =>
+      [queued, later, other, waited].every((sha) => builder.state(sha).status === 'building'),
+    );
+    void builder.request(later, { urgent: true });
+    builder.hurry(other);
+    writeFileSync(gate, '');
+    await Promise.all([first, ...rest]);
+
+    const order = calls(fake.log).map((line) => /\/([0-9a-f]{40})\/work-/.exec(line)?.[1]);
+    expect(order).toEqual([running, waited, later, other, queued]);
+  });
+
+  posixOnly('tells whether a commit is ready, being built or not buildable', async () => {
+    const repo = createRepo();
+    const plain = commit(repo, { 'README.md': 'hi\n' });
+    const sha = commit(repo, JAVA_PROJECT);
+    const gate = join(tempDir('difit-scip-gate-'), 'open');
+    const fake = fakeScipJava(`while [ ! -f '${gate}' ]; do sleep 0.02; done\n${WRITES_INDEX}`);
+    const { builder } = newBuilder(repo, fake.path, tempDir('difit-scip-cache-'));
+
+    await expect(builder.start(plain)).resolves.toEqual({ status: 'none' });
+    await expect(builder.start(sha)).resolves.toEqual({ status: 'building' });
+    await expect(builder.start(sha)).resolves.toEqual({ status: 'building' });
+    writeFileSync(gate, '');
+    await builder.request(sha);
+    await expect(builder.start(sha)).resolves.toEqual({ status: 'ready' });
+    expect(calls(fake.log)).toHaveLength(1);
+  });
+
+  posixOnly('uses an index an earlier run stored without building one', async () => {
+    const repo = createRepo();
+    const stored = commit(repo, JAVA_PROJECT);
+    const missing = commit(repo, {
+      'src/main/java/demo/B.java': 'package demo;\nclass B {}\n',
+    });
+    const cache = tempDir('difit-scip-cache-');
+    const fake = fakeScipJava(WRITES_INDEX);
+    await newBuilder(repo, fake.path, cache).builder.request(stored);
+
+    const { builder, events } = newBuilder(repo, fake.path, cache);
+    await expect(builder.useStored(missing)).resolves.toBe(false);
+    await expect(builder.useStored(stored)).resolves.toBe(true);
+
+    expect(builder.state(stored)).toEqual({ status: 'ready' });
+    expect(builder.state(missing)).toEqual({ status: 'none' });
+    expect(await builder.getIndex(stored)).not.toBeNull();
+    expect(events).toEqual([[stored, 'ready']]);
+    expect(calls(fake.log)).toHaveLength(1);
+  });
+
   posixOnly('reports a failed build and keeps the tail of its log', async () => {
     const repo = createRepo();
     const sha = commit(repo, JAVA_PROJECT);

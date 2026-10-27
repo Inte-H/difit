@@ -352,6 +352,13 @@ export async function startServer(options: ServerOptions): Promise<{
     const commits = await Promise.all(refs.map((ref) => resolveCommit(ref)));
     return commits.filter((commit): commit is string => commit !== null);
   };
+  const isShownBase = async (commit: string): Promise<boolean> => {
+    for (const selection of [currentSelection, currentCommentSelection]) {
+      if (!isCommitTarget(selection.targetCommitish)) continue;
+      if ((await resolveCommit(selection.baseCommitish)) === commit) return true;
+    }
+    return false;
+  };
   const symbolIndex = options.stdinDiff
     ? undefined
     : new ScipIndexBuilder({ repoPath: repositoryPath, inUse: shownCommits });
@@ -691,6 +698,10 @@ export async function startServer(options: ServerOptions): Promise<{
     try {
       const commit =
         symbolIndex && path !== undefined && isJavaPath(path) ? await resolveCommit(ref) : null;
+      if (commit && at && symbolIndex) {
+        if (await isShownBase(commit)) await symbolIndex.start(commit, { urgent: true });
+        else if (!(await symbolIndex.useStored(commit))) symbolIndex.hurry(commit);
+      }
       let askedIndex = false;
       const fromIndex = async () => {
         if (!commit || !at) return null;
