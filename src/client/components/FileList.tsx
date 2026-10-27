@@ -10,6 +10,7 @@ import {
   Search,
   ChevronsDownUp,
   ChevronsUpDown,
+  EyeOff,
 } from 'lucide-react';
 import {
   memo,
@@ -285,6 +286,7 @@ export const FileList = memo(function FileList({
     () => new Set(getAllDirectoryPaths(fileTree)),
   );
   const [filterText, setFilterText] = useState('');
+  const [onlyUnviewed, setOnlyUnviewed] = useState(false);
 
   const commentCountMap = useMemo(() => {
     const counts = new Map<string, number>();
@@ -313,17 +315,20 @@ export const FileList = memo(function FileList({
       ),
     [files],
   );
+  const unviewedCount = useMemo(
+    () => files.filter((file) => !reviewedFiles.has(file.path)).length,
+    [files, reviewedFiles],
+  );
   const reviewedDirectoryPaths = useMemo(
     () => getReviewedDirectoryPaths(fileTree, reviewedFiles),
     [fileTree, reviewedFiles],
   );
 
-  // Filter the file tree based on search text
   const filteredFileTree = useMemo(() => {
     const normalizedFilter = filterText.trim().toLowerCase();
 
     const filterTreeNode = (node: TreeNode): TreeNode | null => {
-      if (!normalizedFilter) return node;
+      if (!normalizedFilter && !onlyUnviewed) return node;
 
       if (node.isDirectory && node.children) {
         const filteredChildren = node.children
@@ -335,6 +340,7 @@ export const FileList = memo(function FileList({
         }
         return null;
       } else if (node.file) {
+        if (onlyUnviewed && reviewedFiles.has(node.file.path)) return null;
         // Check if file name matches filter
         if (node.file.path.toLowerCase().includes(normalizedFilter)) {
           return node;
@@ -351,7 +357,7 @@ export const FileList = memo(function FileList({
         children: [],
       }
     );
-  }, [fileTree, filterText]);
+  }, [fileTree, filterText, onlyUnviewed, reviewedFiles]);
 
   const filteredFixupOnly = useMemo(() => {
     const normalizedFilter = filterText.trim().toLowerCase();
@@ -721,7 +727,9 @@ export const FileList = memo(function FileList({
       <div className="px-4 py-3 border-b border-github-border bg-github-bg-tertiary">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-github-text-primary m-0">
-            Files changed ({files.length})
+            {onlyUnviewed
+              ? `미확인 파일 (${unviewedCount} / ${files.length})`
+              : `Files changed (${files.length})`}
           </h3>
           <div className="ml-auto flex items-center gap-2">
             <span
@@ -732,6 +740,20 @@ export const FileList = memo(function FileList({
               <span className="text-github-accent">+{diffTotals.additions}</span>
               <span className="text-github-danger">-{diffTotals.deletions}</span>
             </span>
+            <button
+              type="button"
+              onClick={() => setOnlyUnviewed((on) => !on)}
+              aria-pressed={onlyUnviewed}
+              className={`p-1 rounded transition-colors ${
+                onlyUnviewed ? 'bg-github-bg-primary' : 'hover:bg-github-bg-primary'
+              }`}
+              title={onlyUnviewed ? '전체 파일 보기' : '확인 안 한 파일만 보기'}
+            >
+              <EyeOff
+                size={16}
+                className={onlyUnviewed ? 'text-github-accent' : 'text-github-text-secondary'}
+              />
+            </button>
             <button
               onClick={toggleAllDirectories}
               className="p-1 hover:bg-github-bg-primary rounded transition-colors"
@@ -767,6 +789,9 @@ export const FileList = memo(function FileList({
         tabIndex={-1}
       >
         {filteredFileTree.children?.map((child) => renderTreeNode(child))}
+        {onlyUnviewed && unviewedCount === 0 && (
+          <p className="m-0 px-4 py-3 text-sm text-github-text-muted">모든 파일을 확인했습니다</p>
+        )}
         {filteredFixupOnly.map(({ fixup, files: fixupFiles }) => (
           <section
             key={fixup.sha}

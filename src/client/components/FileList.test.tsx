@@ -404,6 +404,75 @@ describe('FileList', () => {
   });
 });
 
+describe('FileList unviewed filter', () => {
+  const files = [
+    createFile('README.md'),
+    createFile('docs/guide.md'),
+    createFile('src/a.ts'),
+    createFile('src/b.ts'),
+  ];
+  const renderList = (reviewedFiles: Set<string>) => {
+    const props = {
+      files,
+      onScrollToFile: vi.fn(),
+      comments: [],
+      resolvedThreadIds: new Set<string>(),
+      onToggleReviewed: vi.fn(),
+      onToggleFolderReviewed: vi.fn(),
+      selectedFileIndex: null,
+    };
+    const view = render(<FileList {...props} reviewedFiles={reviewedFiles} />);
+    return {
+      rerender: (next: Set<string>) => view.rerender(<FileList {...props} reviewedFiles={next} />),
+    };
+  };
+  const toggle = () =>
+    screen.getByRole('button', { name: /확인 안 한 파일만 보기|전체 파일 보기/ });
+
+  it('shows only the files not viewed, with the count left, and the whole list again when off', () => {
+    renderList(new Set(['README.md', 'docs/guide.md', 'src/a.ts']));
+
+    fireEvent.click(toggle());
+
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('heading', { name: '미확인 파일 (1 / 4)' })).toBeInTheDocument();
+    expect(screen.getByTitle('src/b.ts')).toBeInTheDocument();
+    expect(screen.queryByTitle('src/a.ts')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('README.md')).not.toBeInTheDocument();
+    expect(screen.queryByText('docs')).not.toBeInTheDocument();
+
+    fireEvent.click(toggle());
+
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('heading', { name: 'Files changed (4)' })).toBeInTheDocument();
+    expect(screen.getByTitle('README.md')).toBeInTheDocument();
+    expect(screen.getByTitle('src/a.ts')).toBeInTheDocument();
+  });
+
+  it('applies the file filter to the files not viewed', () => {
+    renderList(new Set(['src/a.ts']));
+    fireEvent.click(toggle());
+
+    fireEvent.change(screen.getByPlaceholderText('Filter files...'), { target: { value: 'src' } });
+
+    expect(screen.getByTitle('src/b.ts')).toBeInTheDocument();
+    expect(screen.queryByTitle('src/a.ts')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('README.md')).not.toBeInTheDocument();
+  });
+
+  it('drops a file once it is marked viewed and says when none are left', () => {
+    const { rerender } = renderList(new Set(['README.md', 'docs/guide.md', 'src/a.ts']));
+    fireEvent.click(toggle());
+    expect(screen.queryByText('모든 파일을 확인했습니다')).not.toBeInTheDocument();
+
+    rerender(new Set(files.map((file) => file.path)));
+
+    expect(screen.queryByTitle('src/b.ts')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '미확인 파일 (0 / 4)' })).toBeInTheDocument();
+    expect(screen.getByText('모든 파일을 확인했습니다')).toBeInTheDocument();
+  });
+});
+
 describe('FileList keys', () => {
   const files = [createFile('src/a.ts'), createFile('src/b.ts'), createFile('README.md')];
   const documentKeys: string[] = [];
