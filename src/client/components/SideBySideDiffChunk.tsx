@@ -810,6 +810,13 @@ export function SideBySideDiffChunk({
                           <WordLevelDiffHighlighter
                             segments={sideLine.wordLevelDiff.oldSegments}
                             className="flex-1 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text"
+                            syntaxTheme={syntaxTheme}
+                            filename={filename}
+                            lineTokens={
+                              sideLine.oldLine.oldLineNumber != null
+                                ? (getOldTokens?.(sideLine.oldLine.oldLineNumber) ?? null)
+                                : null
+                            }
                           />
                         ) : (
                           <EnhancedPrismSyntaxHighlighter
@@ -864,6 +871,13 @@ export function SideBySideDiffChunk({
                           <WordLevelDiffHighlighter
                             segments={sideLine.wordLevelDiff.newSegments}
                             className="flex-1 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text"
+                            syntaxTheme={syntaxTheme}
+                            filename={filename}
+                            lineTokens={
+                              sideLine.newLine.newLineNumber != null
+                                ? (getNewTokens?.(sideLine.newLine.newLineNumber) ?? null)
+                                : null
+                            }
                           />
                         ) : (
                           <EnhancedPrismSyntaxHighlighter

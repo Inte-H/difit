@@ -1342,11 +1342,11 @@ describe('DiffChunk symbol positions', () => {
 
   async function wordsIn(side: 'old' | 'new', line: number, word: string) {
     return waitFor(() => {
-      const found = Array.from(
-        document.querySelectorAll(
-          `[data-symbol-side="${side}"][data-symbol-line="${line}"] .word-token[data-word="${word}"]`,
-        ),
+      const row = document.querySelector(
+        `[data-symbol-side="${side}"][data-symbol-line="${line}"]`,
       );
+      expect(row?.querySelector('.token:not(.plain)')).toBeTruthy();
+      const found = Array.from(row!.querySelectorAll(`.word-token[data-word="${word}"]`));
       expect(found.length).toBeGreaterThan(0);
       return found;
     });
@@ -1403,6 +1403,89 @@ describe('DiffChunk symbol positions', () => {
       });
       expect(emojiLine.indexOf('name')).toBe(19);
     });
+  });
+});
+
+describe('syntax colors on lines with changed parts marked', () => {
+  const enumChunk: DiffChunkData = {
+    header: '@@ -1,2 +1,3 @@',
+    oldStart: 1,
+    oldLines: 2,
+    newStart: 1,
+    newLines: 3,
+    lines: [
+      { type: 'normal', content: '    BAR("bar"),', oldLineNumber: 1, newLineNumber: 1 },
+      { type: 'delete', content: '    BAZ("baz");', oldLineNumber: 2 },
+      { type: 'add', content: '    BAZ("baz"),', newLineNumber: 2 },
+      { type: 'add', content: '    QUX("qux");', newLineNumber: 3 },
+    ],
+  };
+
+  const lineOf = (side: 'old' | 'new', line: number) =>
+    document.querySelector<HTMLElement>(`[data-symbol-side="${side}"][data-symbol-line="${line}"]`);
+
+  describe.each(['unified', 'split'] as const)('in the %s view', (mode) => {
+    it.each(['vsDark', 'github'] as const)(
+      'colors both BAZ lines like the unchanged line, with %s',
+      async (syntaxTheme) => {
+        renderWithProviders(
+          <DiffChunk
+            chunk={enumChunk}
+            chunkIndex={0}
+            threads={[]}
+            mode={mode}
+            onAddComment={asyncNoop}
+            onResolveThread={noop}
+            onReplyToThread={asyncNoop}
+            onRemoveMessage={noop}
+            onUpdateMessage={noop}
+            filename="src/Kind.java"
+            syntaxTheme={syntaxTheme}
+          />,
+        );
+
+        const barString = await waitFor(() => {
+          const found = lineOf('new', 1)?.querySelector<HTMLElement>('.token.string');
+          expect(found).toBeTruthy();
+          return found!;
+        });
+        const barNameToken = lineOf('new', 1)!
+          .querySelector('.word-token[data-word="BAR"]')!
+          .closest<HTMLElement>('.token')!;
+        expect(barNameToken.className).not.toContain('plain');
+
+        const cases = [
+          { side: 'old', mark: '.word-diff-removed', changed: ';' },
+          { side: 'new', mark: '.word-diff-added', changed: ',' },
+        ] as const;
+        for (const { side, mark, changed } of cases) {
+          const bazString = await waitFor(() => {
+            const found = lineOf(side, 2)?.querySelector<HTMLElement>('.token.string');
+            expect(found?.textContent).toBe('"baz"');
+            return found!;
+          });
+          expect(bazString.style.color).toBe(barString.style.color);
+          expect(bazString.style.color).not.toBe('');
+
+          const line = lineOf(side, 2)!;
+          expect(line.textContent).toContain(side === 'old' ? 'BAZ("baz");' : 'BAZ("baz"),');
+
+          const changedPart = line.querySelector(mark);
+          expect(changedPart?.textContent).toBe(changed);
+          expect(changedPart?.querySelector('.token.punctuation')?.textContent).toBe(changed);
+
+          const name = line.querySelector('.word-token[data-word="BAZ"]');
+          const nameToken = name?.closest<HTMLElement>('.token');
+          expect(nameToken?.className).toBe(barNameToken.className);
+          expect(nameToken?.style.color).toBe(barNameToken.style.color);
+          expect(symbolRequestFromTarget(name, { base: 'b', target: 't' })).toMatchObject({
+            name: 'BAZ',
+            line: 2,
+            column: 4,
+          });
+        }
+      },
+    );
   });
 });
 

@@ -1,45 +1,118 @@
-import React, { useMemo } from 'react';
+import { Highlight, type Token } from 'prism-react-renderer';
+import React from 'react';
 
+import { useHighlightedCode } from '../hooks/useHighlightedCode';
+import { getPrismLanguageFromFilename } from '../utils/languageDetection';
+import Prism from '../utils/prism';
+import { getSyntaxTheme } from '../utils/syntaxThemes';
 import { isWordToken } from '../utils/wordDetection';
 import { type DiffSegment } from '../utils/wordLevelDiff';
+
+import type { AppearanceSettings } from './SettingsModal';
 
 interface WordLevelDiffHighlighterProps {
   segments: DiffSegment[];
   className?: string;
+  syntaxTheme?: AppearanceSettings['syntaxTheme'];
+  filename?: string;
+  lineTokens?: Token[] | null;
 }
 
-/**
- * Renders code with word-level diff highlighting.
- * Each segment is marked as unchanged, added, or removed with appropriate styling.
- */
+type GetTokenProps = (options: { token: Token }) => Record<string, unknown>;
+
+const textOf = (tokens: Token[]) => tokens.map((token) => token.content).join('');
+
+function tokensPerSegment(tokens: Token[], segments: DiffSegment[]): Token[][] {
+  let offset = 0;
+  const placed = tokens.map((token) => {
+    const start = offset;
+    offset += token.content.length;
+    return { token, start };
+  });
+  let segmentStart = 0;
+  return segments.map((segment) => {
+    const start = segmentStart;
+    const end = start + segment.value.length;
+    segmentStart = end;
+    return placed.flatMap(({ token, start: tokenStart }) => {
+      const content = token.content.slice(
+        Math.max(0, start - tokenStart),
+        Math.max(0, end - tokenStart),
+      );
+      return content ? [{ ...token, content }] : [];
+    });
+  });
+}
+
+function renderWords(text: string) {
+  return text.split(/(\w+)/).map((part, partIndex) =>
+    isWordToken(part) ? (
+      <span key={partIndex} className="word-token" data-word={part}>
+        {part}
+      </span>
+    ) : (
+      part
+    ),
+  );
+}
+
+function diffClassOf(segment: DiffSegment) {
+  if (segment.type === 'added') return 'word-diff-added';
+  if (segment.type === 'removed') return 'word-diff-removed';
+  return '';
+}
+
 export const WordLevelDiffHighlighter = React.memo(function WordLevelDiffHighlighter({
   segments,
   className = '',
+  syntaxTheme = 'vsDark',
+  filename = '',
+  lineTokens,
 }: WordLevelDiffHighlighterProps) {
-  const renderedContent = useMemo(() => {
-    return segments.map((segment, index) => {
-      const diffClass =
-        segment.type === 'added'
-          ? 'word-diff-added'
-          : segment.type === 'removed'
-            ? 'word-diff-removed'
-            : '';
+  const code = segments.map((segment) => segment.value).join('');
+  const { actualLang } = useHighlightedCode(
+    filename ? getPrismLanguageFromFilename(filename) : 'text',
+  );
+  const usablePrecomputed = lineTokens && textOf(lineTokens) === code ? lineTokens : null;
 
+  const renderSegments = (shown: Token[] | null, getTokenProps: GetTokenProps) => {
+    const pieces = shown ? tokensPerSegment(shown, segments) : null;
+    return segments.map((segment, index) => {
+      const segmentTokens = pieces?.[index];
       return (
-        <span key={index} className={diffClass}>
-          {segment.value.split(/(\w+)/).map((part, partIndex) =>
-            isWordToken(part) ? (
-              <span key={partIndex} className="word-token" data-word={part}>
-                {part}
-              </span>
-            ) : (
-              part
-            ),
-          )}
+        <span key={index} className={diffClassOf(segment)}>
+          {segmentTokens
+            ? segmentTokens.map((token, tokenIndex) => (
+                <span key={tokenIndex} {...getTokenProps({ token })}>
+                  {renderWords(token.content)}
+                </span>
+              ))
+            : renderWords(segment.value)}
         </span>
       );
     });
-  }, [segments]);
+  };
 
-  return <span className={className}>{renderedContent}</span>;
+  return (
+    <Highlight
+      code={usablePrecomputed ? '' : code}
+      language={actualLang}
+      theme={getSyntaxTheme(syntaxTheme)}
+      prism={Prism}
+    >
+      {({ style, tokens, getTokenProps }) => {
+        const highlighted = tokens[0];
+        const shownTokens =
+          usablePrecomputed ?? (highlighted && textOf(highlighted) === code ? highlighted : null);
+        return (
+          <span
+            className={className}
+            style={{ ...style, background: 'transparent', backgroundColor: 'transparent' }}
+          >
+            {renderSegments(shownTokens, getTokenProps)}
+          </span>
+        );
+      }}
+    </Highlight>
+  );
 });

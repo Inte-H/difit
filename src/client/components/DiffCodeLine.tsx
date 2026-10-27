@@ -44,19 +44,20 @@ export function DiffCodeLine({
   showPrefixBorder = true,
 }: DiffCodeLineProps) {
   const { getOldTokens, getNewTokens } = useFileLevelTokensLookup();
-  const getPrecomputedTokens = () => {
+  const getLineTokens = () => {
     const oldSideTokens =
       line.oldLineNumber != null ? (getOldTokens?.(line.oldLineNumber) ?? null) : null;
     // Deleted lines exist only on the old side.
     if (line.type === 'delete') {
-      return oldSideTokens ? [oldSideTokens] : null;
+      return oldSideTokens;
     }
     // Other lines use the new side, falling back to the old side when there is
     // no new line number.
-    const lineTokens =
-      line.newLineNumber != null ? (getNewTokens?.(line.newLineNumber) ?? null) : oldSideTokens;
-    return lineTokens ? [lineTokens] : null;
+    return line.newLineNumber != null
+      ? (getNewTokens?.(line.newLineNumber) ?? null)
+      : oldSideTokens;
   };
+  const lineTokens = getLineTokens();
 
   return (
     <div className="flex items-center relative min-h-[16px]">
@@ -72,6 +73,9 @@ export function DiffCodeLine({
         <WordLevelDiffHighlighter
           segments={diffSegments}
           className="flex-1 px-3 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text"
+          syntaxTheme={syntaxTheme}
+          filename={filename}
+          lineTokens={lineTokens}
         />
       ) : (
         <EnhancedPrismSyntaxHighlighter
@@ -79,7 +83,7 @@ export function DiffCodeLine({
           className="flex-1 px-3 text-github-text-primary whitespace-pre-wrap break-all overflow-wrap-break-word select-text [&_pre]:m-0 [&_pre]:p-0 [&_pre]:!bg-transparent [&_pre]:font-inherit [&_pre]:text-inherit [&_pre]:leading-inherit [&_code]:!bg-transparent [&_code]:font-inherit [&_code]:text-inherit [&_code]:leading-inherit"
           syntaxTheme={syntaxTheme}
           filename={filename}
-          precomputedTokens={getPrecomputedTokens()}
+          precomputedTokens={lineTokens ? [lineTokens] : null}
         />
       )}
     </div>
