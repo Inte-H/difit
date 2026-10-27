@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { CommentThread, DiffFile } from '../../../types/diff';
 
-import { findCommentPosition } from './positionHelpers';
+import { findCommentPosition, findLinePlacePosition, linePlaceAt } from './positionHelpers';
 
 const mockFiles: DiffFile[] = [
   {
@@ -56,5 +56,36 @@ describe('findCommentPosition', () => {
       lineIndex: 1,
       side: 'right',
     });
+  });
+});
+
+describe('linePlaceAt', () => {
+  const at = (lineIndex: number, side: 'left' | 'right') =>
+    linePlaceAt({ fileIndex: 0, chunkIndex: 0, lineIndex, side }, mockFiles);
+
+  it('names the old line on the left and the new line on the right', () => {
+    expect(at(2, 'left')).toEqual({ file: 'file1.js', line: 2, side: 'old' });
+    expect(at(2, 'right')).toEqual({ file: 'file1.js', line: 2, side: 'new' });
+  });
+
+  it('falls back to the number the line has', () => {
+    expect(at(0, 'right')).toEqual({ file: 'file1.js', line: 1, side: 'old' });
+    expect(at(1, 'left')).toEqual({ file: 'file1.js', line: 1, side: 'new' });
+  });
+
+  it('finds the same position again from the place', () => {
+    for (const [lineIndex, side] of [
+      [0, 'left'],
+      [1, 'right'],
+      [2, 'right'],
+    ] as const) {
+      const place = at(lineIndex, side)!;
+      expect(findLinePlacePosition(place, mockFiles)).toEqual({
+        fileIndex: 0,
+        chunkIndex: 0,
+        lineIndex,
+        side,
+      });
+    }
   });
 });

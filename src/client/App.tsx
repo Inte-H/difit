@@ -99,7 +99,9 @@ import { useKeyboardNavigation } from './hooks/useKeyboardNavigation';
 import { useChunkChangeKinds } from './hooks/useChunkChangeKinds';
 import { useLazyDiffRendering } from './hooks/useLazyDiffRendering';
 import {
-  reviewTargetRestoredByHistory,
+  type ReviewHistoryEntry,
+  type ReviewPlace,
+  reviewEntryRestoredByHistory,
   useReviewTargetHistory,
 } from './hooks/useReviewTargetHistory';
 import { useScrollVisibleFile } from './hooks/useScrollVisibleFile';
@@ -112,7 +114,11 @@ import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
 import { fixupFileElementId, getFileElementId } from './utils/domUtils';
 import { getElementId } from './utils/navigation/domHelpers';
-import { findCommentPosition } from './utils/navigation/positionHelpers';
+import {
+  findCommentPosition,
+  findLinePlacePosition,
+  linePlaceAt,
+} from './utils/navigation/positionHelpers';
 import {
   EMPTY_MERGED_CHUNKS_STATE,
   buildMergedChunksState,
@@ -357,7 +363,8 @@ function App() {
 
   // Revision selector state
   const [revisionOptions, setRevisionOptions] = useState<RevisionsResponse | null>(null);
-  const [restoredReviewTarget] = useState(reviewTargetRestoredByHistory);
+  const [restoredEntry] = useState(reviewEntryRestoredByHistory);
+  const restoredReviewTarget = restoredEntry?.selection ?? null;
   const [selectedRevision, setSelectedRevision] = useState<DiffSelection>(
     restoredReviewTarget ?? createDiffSelection('', ''),
   );
@@ -369,8 +376,10 @@ function App() {
   const selectedRevisionRef = useRef(selectedRevision);
   selectedRevisionRef.current = selectedRevision;
   const diffRequestIdRef = useRef(0);
-  const pendingCommentNavigationRef = useRef<string | null>(null);
-  const pendingFixupRevealRef = useRef<FixupFileRef | null>(null);
+  // Where to go once the review being switched to has loaded; restoring stops at a folded file.
+  const pendingPlaceRef = useRef<{ place: ReviewPlace; restoring: boolean } | null>(
+    restoredEntry?.place ? { place: restoredEntry.place, restoring: true } : null,
+  );
   const activeDiffAbortControllerRef = useRef<AbortController | null>(null);
   const resolvedSelection = useMemo<DiffSelection | null>(() => {
     if (!diffData?.baseCommitish || !diffData?.targetCommitish) {
@@ -1108,6 +1117,10 @@ function App() {
         onPreviousCommit: () => selectView({ kind: 'previous' }),
         onNextCommit: () => selectView({ kind: 'next' }),
       }),
+      onJump: (to) => {
+        const line = linePlaceAt(to, navigableFiles);
+        if (line) jumpWithinReview({ kind: 'line', ...line, cursor: true });
+      },
     });
 
   // Viewed button in the diff header: silently remember the toggled file as
@@ -1436,8 +1449,7 @@ function App() {
       if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
 
       hasUserSelectedRevisionRef.current = true;
-      pendingCommentNavigationRef.current = null;
-      pendingFixupRevealRef.current = null;
+      pendingPlaceRef.current = null;
       selectedRevisionRef.current = nextSelection;
       setSelectedRevision(nextSelection);
       refocusCommentsPanelAfterLoadRef.current = commentsPanelRef.current?.hasFocus() ?? false;
@@ -1449,19 +1461,71 @@ function App() {
     [fetchDiffData, selectedRevision],
   );
 
-  const recordReviewJump = useReviewTargetHistory(
-    (selection) => void handleRevisionChange(selection),
+  // The cursor line while it is on screen, otherwise the first line showing under the file header.
+  const currentPlace = (): ReviewPlace | null => {
+    const container = diffScrollContainerRef.current;
+    const files = navigableFilesRef.current;
+    if (!container) return null;
+    const containerRect = container.getBoundingClientRect();
+    const onScreen = (element: HTMLElement | null, below: number) => {
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      return rect.top >= below - 1 && rect.top < containerRect.bottom;
+    };
+    if (
+      cursor &&
+      onScreen(document.getElementById(getElementId(cursor, diffMode)), containerRect.top)
+    ) {
+      const line = linePlaceAt(cursor, files);
+      if (line) return { kind: 'line', ...line, cursor: true };
+    }
+    const fileIndex = scrollVisibleFileIndex ?? 0;
+    const file = files[fileIndex];
+    if (!file) return null;
+    if (collapsedFiles.has(file.path)) return { kind: 'file', file: file.path };
+    const header = document
+      .getElementById(getFileElementId(file.path))
+      ?.querySelector<HTMLElement>('[data-file-header]');
+    const below = Math.max(containerRect.top, header?.getBoundingClientRect().bottom ?? 0);
+    for (const [chunkIndex, chunk] of file.chunks.entries()) {
+      for (const lineIndex of chunk.lines.keys()) {
+        for (const side of ['right', 'left'] as const) {
+          const position = { fileIndex, chunkIndex, lineIndex, side };
+          if (!onScreen(document.getElementById(getElementId(position, diffMode)), below)) continue;
+          const line = linePlaceAt(position, files);
+          if (line) return { kind: 'line', ...line, cursor: false };
+        }
+      }
+    }
+    return { kind: 'file', file: file.path };
+  };
+  const restoreEntryRef = useRef<(entry: ReviewHistoryEntry) => void>(() => {});
+  const recordJump = useReviewTargetHistory({
+    current: () => ({ selection: selectedRevisionRef.current, place: currentPlace() }),
+    restore: (entry) => restoreEntryRef.current(entry),
+  });
+  const jumpWithinReview = useCallback(
+    (place: ReviewPlace) => recordJump({ selection: selectedRevisionRef.current, place }),
+    [recordJump],
   );
   const showDiff = useCallback(
-    (nextSelection: DiffSelection) => {
+    (nextSelection: DiffSelection, place: ReviewPlace | null = null) => {
       if (diffSelectionsEqual(nextSelection, selectedRevision)) return;
-      recordReviewJump(selectedRevision, nextSelection);
+      recordJump({ selection: nextSelection, place });
       void handleRevisionChange(nextSelection);
+      if (place) pendingPlaceRef.current = { place, restoring: false };
     },
-    [handleRevisionChange, recordReviewJump, selectedRevision],
+    [handleRevisionChange, recordJump, selectedRevision],
+  );
+  const jumpToFile = useCallback(
+    (filePath: string) => {
+      jumpWithinReview({ kind: 'file', file: filePath });
+      scrollFileIntoDiffContainer(filePath);
+    },
+    [jumpWithinReview, scrollFileIntoDiffContainer],
   );
   const selectView = useCallback(
-    (action: ReviewViewAction) => {
+    (action: ReviewViewAction, place: ReviewPlace | null = null) => {
       if (!review) return;
       const chosen = selectReviewView(
         review,
@@ -1475,7 +1539,7 @@ function App() {
       );
       if (!chosen.selection) return;
       setIsCommitDrawerOpen(false);
-      showDiff(chosen.selection);
+      showDiff(chosen.selection, place);
     },
     [review, shownView, shownAnchor, rangeStart, showDiff],
   );
@@ -1601,43 +1665,20 @@ function App() {
   const [focusedFixupFile, setFocusedFixupFile] = useState<FixupFileRef | null>(null);
   const pickThreadRef = useRef<(threadId: string) => void>(() => {});
   const pickThread = useCallback((threadId: string) => pickThreadRef.current(threadId), []);
+  const showFixupFileRef = useRef<(ref: FixupFileRef, restoring: boolean) => void>(() => {});
   const revealFixupFile = useCallback(
     (fixupSha: string, path: string) => {
-      const ref = { fixupSha, path };
+      const place: ReviewPlace = { kind: 'fixup', fixupSha, path };
       if (showsPartOfReview) {
-        selectView({ kind: 'all' });
-        pendingFixupRevealRef.current = ref;
+        selectView({ kind: 'all' }, place);
         return;
       }
-      const place = fixupSpread.places.get(fixupFileKey(ref));
-      if (!place) return;
-      setFocusedFixupFile(ref);
-      if (place.kind === 'card') {
-        pickThreadRef.current(place.threadId);
-        return;
-      }
-      if (place.kind === 'box') {
-        setCollapsedFiles((prev) => {
-          if (!prev.has(place.reviewPath)) return prev;
-          const next = new Set(prev);
-          next.delete(place.reviewPath);
-          return next;
-        });
-      }
-      scrollFileIntoDiffContainer(
-        place.kind === 'box' ? place.reviewPath : path,
-        fixupFileElementId(fixupSha, path),
-      );
+      if (!fixupSpread.places.has(fixupFileKey(place))) return;
+      jumpWithinReview(place);
+      showFixupFileRef.current(place, false);
     },
-    [showsPartOfReview, selectView, fixupSpread, scrollFileIntoDiffContainer],
+    [showsPartOfReview, selectView, fixupSpread, jumpWithinReview],
   );
-  useEffect(() => {
-    const ref = pendingFixupRevealRef.current;
-    if (!ref || showsPartOfReview || !fixupSpread.places.has(fixupFileKey(ref))) return;
-    if (!collapsedInitializedRef.current && !hasLoadedInitialViewedFiles) return;
-    pendingFixupRevealRef.current = null;
-    revealFixupFile(ref.fixupSha, ref.path);
-  }, [showsPartOfReview, fixupSpread, hasLoadedInitialViewedFiles, revealFixupFile]);
   const fixupOverlay = useMemo<FixupOverlayState>(
     () => ({
       enabled: showFixupOverlay,
@@ -1917,27 +1958,32 @@ function App() {
   const pickComment = (thread: CommentThread) => {
     if (!diffData) return;
     setPickedThreadId(thread.id);
+    const place: ReviewPlace = { kind: 'thread', threadId: thread.id };
     const placedHere =
       !hiddenThreadIds.has(thread.id) &&
       !thread.isOutdated &&
       diffData.files.some(({ path }) => path === thread.file);
     if (!placedHere && showsPartOfReview && review) {
-      showDiff(thread.madeView ?? review.requested);
-      pendingCommentNavigationRef.current = thread.id;
+      showDiff(thread.madeView ?? review.requested, place);
       return;
     }
 
-    jumpToThread(thread, collapsedFiles.has(thread.file));
+    jumpWithinReview(place);
+    jumpToThread(thread, collapsedFiles.has(thread.file), false);
   };
   pickThreadRef.current = (threadId) => {
     const thread = normalizedThreads.find(({ id }) => id === threadId);
     if (thread) pickComment(thread);
   };
-  const jumpToThread = (thread: CommentThread, afterRender: boolean) => {
+  const jumpToThread = (thread: CommentThread, afterRender: boolean, restoring: boolean) => {
     if (!diffData) return;
     const placed = fixupSpread.outsidePlacements.get(thread.id);
     if (placed) {
-      revealFixupFile(placed.fixupSha, thread.file);
+      showFixupFile({ fixupSha: placed.fixupSha, path: thread.file }, restoring);
+      return;
+    }
+    if (restoring && collapsedFiles.has(thread.file)) {
+      scrollFileIntoDiffContainer(thread.file);
       return;
     }
     setCollapsedFiles((prev) => {
@@ -1968,23 +2014,99 @@ function App() {
     if (afterRender) requestAnimationFrame(moveCursor);
     else moveCursor();
   };
-  const jumpToThreadRef = useRef(jumpToThread);
-  jumpToThreadRef.current = jumpToThread;
+  const showFixupFile = (ref: FixupFileRef, restoring: boolean) => {
+    const place = fixupSpread.places.get(fixupFileKey(ref));
+    if (!place) return;
+    setFocusedFixupFile(ref);
+    if (place.kind === 'card') {
+      const thread = normalizedThreads.find(({ id }) => id === place.threadId);
+      if (!thread) return;
+      setPickedThreadId(thread.id);
+      jumpToThread(thread, collapsedFiles.has(thread.file), restoring);
+      return;
+    }
+    if (place.kind === 'box' && collapsedFiles.has(place.reviewPath)) {
+      if (restoring) {
+        scrollFileIntoDiffContainer(place.reviewPath);
+        return;
+      }
+      setCollapsedFiles((prev) => {
+        const next = new Set(prev);
+        next.delete(place.reviewPath);
+        return next;
+      });
+    }
+    scrollFileIntoDiffContainer(
+      place.kind === 'box' ? place.reviewPath : ref.path,
+      fixupFileElementId(ref.fixupSha, ref.path),
+    );
+  };
+  showFixupFileRef.current = showFixupFile;
+
+  const showPlace = (place: ReviewPlace, restoring: boolean, afterRender: boolean) => {
+    if (place.kind === 'thread') {
+      const thread = normalizedThreads.find(({ id }) => id === place.threadId);
+      if (!thread) return;
+      setPickedThreadId(thread.id);
+      jumpToThread(thread, afterRender || collapsedFiles.has(thread.file), restoring);
+      return;
+    }
+    if (place.kind === 'fixup') {
+      showFixupFile(place, restoring);
+      return;
+    }
+    if (place.kind === 'file' || collapsedFiles.has(place.file)) {
+      scrollFileIntoDiffContainer(place.file);
+      return;
+    }
+    const moveTo = () => {
+      const position = findLinePlacePosition(place, navigableFilesRef.current);
+      if (!position) {
+        scrollFileIntoDiffContainer(place.file);
+        return;
+      }
+      if (place.cursor) setCursorPosition(position);
+      scrollFileIntoDiffContainer(place.file, getElementId(position, diffMode));
+    };
+    if (afterRender) requestAnimationFrame(moveTo);
+    else moveTo();
+  };
+  restoreEntryRef.current = ({ selection, place }) => {
+    if (!diffSelectionsEqual(selection, selectedRevisionRef.current)) {
+      void handleRevisionChange(selection);
+      pendingPlaceRef.current = place && { place, restoring: true };
+      return;
+    }
+    if (place) showPlace(place, true, false);
+  };
+  const showPlaceRef = useRef(showPlace);
+  showPlaceRef.current = showPlace;
   useEffect(() => {
-    const threadId = pendingCommentNavigationRef.current;
-    if (!threadId || !diffData || !hasLoadedComments || hiddenThreadIds.has(threadId)) return;
+    const pending = pendingPlaceRef.current;
+    if (!pending || loading || !diffData) return;
     // A new view folds its viewed files once they load; jumping before that would be folded again.
     if (!collapsedInitializedRef.current && !hasLoadedInitialViewedFiles) return;
-    pendingCommentNavigationRef.current = null;
-    const thread = normalizedThreads.find(({ id }) => id === threadId);
-    if (!thread) return;
-    jumpToThreadRef.current(thread, true);
+    const { place } = pending;
+    if (place.kind === 'thread' && (!hasLoadedComments || hiddenThreadIds.has(place.threadId))) {
+      return;
+    }
+    if (
+      place.kind === 'fixup' &&
+      (showsPartOfReview || !fixupSpread.places.has(fixupFileKey(place)))
+    ) {
+      return;
+    }
+    pendingPlaceRef.current = null;
+    showPlaceRef.current(place, pending.restoring, true);
   }, [
+    loading,
     diffData,
     hasLoadedComments,
     hasLoadedInitialViewedFiles,
     normalizedThreads,
     hiddenThreadIds,
+    showsPartOfReview,
+    fixupSpread,
   ]);
 
   const handleOpenInEditor = useCallback(
@@ -2393,7 +2515,7 @@ function App() {
             selectedFileIndex={cursor?.fileIndex ?? null}
             scrollVisibleFileIndex={scrollVisibleFileIndex}
             pickedCommentFilePath={pickedThread?.file ?? null}
-            onScrollToFile={scrollFileIntoDiffContainer}
+            onScrollToFile={jumpToFile}
           />
         )}
         {revisionOptions && (
@@ -2501,7 +2623,7 @@ function App() {
                 <FileList
                   ref={fileListRef}
                   files={diffData.files}
-                  onScrollToFile={scrollFileIntoDiffContainer}
+                  onScrollToFile={jumpToFile}
                   onFileSelected={isMobile ? handleMobileFileSelected : undefined}
                   comments={drawnThreads}
                   resolvedThreadIds={resolvedThreadIds}

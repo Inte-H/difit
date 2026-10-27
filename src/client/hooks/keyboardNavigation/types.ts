@@ -48,6 +48,8 @@ export interface UseKeyboardNavigationProps {
   onNextCommit?: () => void;
   isModalOpen?: boolean;
   getHoveredFileIndex?: () => number | null;
+  // Called before a file or comment jump moves the cursor, with where it lands.
+  onJump?: (to: CursorPosition) => void;
 }
 
 /**
