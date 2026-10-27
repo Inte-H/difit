@@ -139,6 +139,26 @@ describe('SymbolPeekModal', () => {
     expect(await screen.findByText('src/use.ts')).toBeInTheDocument();
   });
 
+  it('marks the uses that go through a getter or a builder method', async () => {
+    respond({
+      ...found,
+      references: [
+        { path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' },
+        { path: 'src/use.ts', line: 2, text: 'foo.getAddOne();', via: 'getter' },
+        { path: 'src/use.ts', line: 3, text: 'Foo.builder().addOne(1);', via: 'builder' },
+      ],
+    });
+    renderModal();
+
+    const list = await screen.findByRole('navigation');
+    await waitFor(() => expect(within(list).getByText('쓰인 곳 3')).toBeInTheDocument());
+    const row = (path: string) =>
+      within(within(list).getByRole('button', { name: new RegExp(path) }));
+    expect(row('src/use.ts:1').queryByText(/게터|빌더/)).toBeNull();
+    expect(row('src/use.ts:2').getByText('게터')).toBeInTheDocument();
+    expect(row('src/use.ts:3').getByText('빌더')).toBeInTheDocument();
+  });
+
   it('moves to another line of the shown file without downloading it again', async () => {
     respond({
       ...found,

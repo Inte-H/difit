@@ -201,6 +201,11 @@ function Notice({ children }: { children: React.ReactNode }) {
   return <p className="px-4 py-3 text-sm text-github-text-secondary">{children}</p>;
 }
 
+const VIA_LABELS: Record<NonNullable<SymbolMatch['via']>, string> = {
+  getter: '게터',
+  builder: '빌더',
+};
+
 interface MatchListProps {
   result: SymbolSearchResponse;
   selected: SymbolMatch | null;
@@ -238,8 +243,15 @@ function MatchList({ result, selected, onSelect }: MatchListProps) {
                   aria-current={isSelected}
                   className={`block w-full px-4 py-1.5 text-left transition-colors hover:bg-github-bg-tertiary ${isSelected ? 'bg-github-bg-tertiary' : ''}`}
                 >
-                  <span className="block truncate text-xs text-github-text-secondary">
-                    {match.path}:{match.line}
+                  <span className="flex items-center gap-1.5 text-xs text-github-text-secondary">
+                    <span className="min-w-0 truncate">
+                      {match.path}:{match.line}
+                    </span>
+                    {match.via && (
+                      <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
+                        {VIA_LABELS[match.via]}
+                      </span>
+                    )}
                   </span>
                   <code className="block truncate font-mono text-xs text-github-text-primary">
                     {match.text.trim()}
