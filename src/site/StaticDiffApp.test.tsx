@@ -2,6 +2,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { HotkeysProvider } from 'react-hotkeys-hook';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { resolveLiveSocketUrl } from '../client/utils/liveSocketUrl';
 import StaticDiffApp from './StaticDiffApp';
 import type { StaticDiffDataset, StaticDiffManifest, StaticDiffSnapshot } from './types/staticDiff';
 
@@ -220,6 +221,28 @@ describe('StaticDiffApp', () => {
     const response = await fetch('/api/blob/src%2Ffirst.ts?ref=2222222');
     expect(response.ok).toBe(true);
     await expect(response.text()).resolves.toBe('const version = 2;\n');
+  });
+
+  it('answers the live connection from the snapshot instead of the network', async () => {
+    render(
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <StaticDiffApp />
+      </HotkeysProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('src/first.ts')).toBeInTheDocument();
+    });
+
+    const socket = new window.WebSocket(resolveLiveSocketUrl());
+    const onMessage = vi.fn();
+    socket.onmessage = onMessage;
+
+    await waitFor(() => expect(onMessage).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(String(onMessage.mock.calls[0]![0].data))).toMatchObject({
+      type: 'connected',
+    });
+    socket.close();
   });
 
   it('serves snapshot-specific static comments', async () => {
