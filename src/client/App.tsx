@@ -376,7 +376,6 @@ function App() {
   const selectedRevisionRef = useRef(selectedRevision);
   selectedRevisionRef.current = selectedRevision;
   const diffRequestIdRef = useRef(0);
-  // Where to go once the review being switched to has loaded; restoring stops at a folded file.
   const pendingPlaceRef = useRef<{ place: ReviewPlace; restoring: boolean } | null>(
     restoredEntry?.place ? { place: restoredEntry.place, restoring: true } : null,
   );
@@ -1248,6 +1247,7 @@ function App() {
         if (diffRequestIdRef.current !== requestId) {
           return;
         }
+        pendingPlaceRef.current = null;
         setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
         if (activeDiffAbortControllerRef.current === controller) {
@@ -1483,19 +1483,38 @@ function App() {
     const file = files[fileIndex];
     if (!file) return null;
     if (collapsedFiles.has(file.path)) return { kind: 'file', file: file.path };
-    const header = document
-      .getElementById(getFileElementId(file.path))
-      ?.querySelector<HTMLElement>('[data-file-header]');
+    const section = document.getElementById(getFileElementId(file.path));
+    if (section?.dataset.rendered !== 'true') return { kind: 'file', file: file.path };
+    const header = section.querySelector<HTMLElement>('[data-file-header]');
     const below = Math.max(containerRect.top, header?.getBoundingClientRect().bottom ?? 0);
-    for (const [chunkIndex, chunk] of file.chunks.entries()) {
-      for (const lineIndex of chunk.lines.keys()) {
-        for (const side of ['right', 'left'] as const) {
-          const position = { fileIndex, chunkIndex, lineIndex, side };
-          if (!onScreen(document.getElementById(getElementId(position, diffMode)), below)) continue;
-          const line = linePlaceAt(position, files);
-          if (line) return { kind: 'line', ...line, cursor: false };
+    const positions = file.chunks.flatMap((chunk, chunkIndex) =>
+      chunk.lines.map((_, lineIndex) => ({ fileIndex, chunkIndex, lineIndex })),
+    );
+    const sides = diffMode === 'split' ? (['right', 'left'] as const) : (['right'] as const);
+    const drawnAt = (index: number) => {
+      for (let next = index; next < positions.length; next++) {
+        const at = positions[next];
+        if (!at) break;
+        for (const side of sides) {
+          const position = { ...at, side };
+          const element = document.getElementById(getElementId(position, diffMode));
+          if (element) return { position, element };
         }
       }
+      return null;
+    };
+    let low = 0;
+    let high = positions.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const drawn = drawnAt(middle);
+      if (!drawn || drawn.element.getBoundingClientRect().top >= below - 1) high = middle;
+      else low = middle + 1;
+    }
+    const first = drawnAt(low);
+    if (first && onScreen(first.element, below)) {
+      const line = linePlaceAt(first.position, files);
+      if (line) return { kind: 'line', ...line, cursor: false };
     }
     return { kind: 'file', file: file.path };
   };
@@ -1505,7 +1524,10 @@ function App() {
     restore: (entry) => restoreEntryRef.current(entry),
   });
   const jumpWithinReview = useCallback(
-    (place: ReviewPlace) => recordJump({ selection: selectedRevisionRef.current, place }),
+    (place: ReviewPlace) => {
+      pendingPlaceRef.current = null;
+      recordJump({ selection: selectedRevisionRef.current, place });
+    },
     [recordJump],
   );
   const showDiff = useCallback(

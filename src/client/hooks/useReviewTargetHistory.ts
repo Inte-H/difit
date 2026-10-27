@@ -6,7 +6,6 @@ import { createDiffSelection } from '../../utils/diffSelection';
 const HISTORY_STATE_KEY = 'difitReviewTarget';
 const PLACE_STATE_KEY = 'difitPlace';
 
-// Places name files and line numbers, not cursor indexes, so they survive a reload of the diff.
 // A line place with cursor puts the keyboard cursor back; without it, it only scrolls there.
 export type ReviewPlace =
   | { kind: 'file'; file: string }

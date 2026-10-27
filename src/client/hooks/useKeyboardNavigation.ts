@@ -42,6 +42,8 @@ export function useKeyboardNavigation({
 }: UseKeyboardNavigationProps): UseKeyboardNavigationReturn {
   const [cursor, setCursor] = useState<CursorPosition | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const onJumpRef = useRef(onJump);
+  onJumpRef.current = onJump;
 
   // Remember the last cursor so navigation resumes from it after the cursor
   // is cleared (e.g. by a mouse click) instead of restarting from the top
@@ -94,7 +96,7 @@ export function useKeyboardNavigation({
       return (direction: NavigationDirection) => {
         const result = navigate(direction, filter);
         if (result.position) {
-          if (isJump) onJump?.(result.position);
+          if (isJump) onJumpRef.current?.(result.position);
           setCursor(result.position);
           if (result.scrollTarget) {
             scrollToElement(result.scrollTarget);
@@ -102,7 +104,7 @@ export function useKeyboardNavigation({
         }
       };
     },
-    [navigate, scrollToElement, onJump],
+    [navigate, scrollToElement],
   );
 
   // Navigation commands
@@ -361,13 +363,13 @@ export function useKeyboardNavigation({
           lineIndex: 0,
           side: viewMode === 'split' ? 'left' : 'right',
         };
-        onJump?.(position);
+        onJumpRef.current?.(position);
         setCursor(position);
         scrollToElement(getElementId(position, viewMode));
       }
     },
     { ...hotkeyOptions, useKey: true },
-    [files, viewMode, scrollToElement, onJump],
+    [files, viewMode, scrollToElement],
   );
 
   useHotkeys(
@@ -383,14 +385,14 @@ export function useKeyboardNavigation({
             lineIndex: 0,
             side: viewMode === 'split' ? 'left' : 'right',
           };
-          onJump?.(position);
+          onJumpRef.current?.(position);
           setCursor(position);
           scrollToElement(getElementId(position, viewMode));
         }
       }
     },
     { ...hotkeyOptions, useKey: true },
-    [files, viewMode, scrollToElement, onJump],
+    [files, viewMode, scrollToElement],
   );
 
   useHotkeys(
