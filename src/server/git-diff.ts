@@ -14,6 +14,7 @@ import {
   type DiffLine,
   type DiffResponse,
   type DiffSelection,
+  type MessageAmendment,
   type NewerTarget,
   type PlainFileChange,
   type ReviewCommit,
@@ -28,7 +29,7 @@ import {
 } from '../utils/diffSelection.js';
 
 import { classifyChunks, isClassifiablePath } from './change-kind.js';
-import { autosquashGroups } from './autosquash.js';
+import { autosquashGroups, type TodoCommit } from './autosquash.js';
 import { runGit } from './run-git.js';
 import { isGeneratedFile } from './generated-file-check.js';
 
@@ -88,6 +89,11 @@ function parseFixupLog(raw: string): FixupLogEntry[] {
       diff: raw.slice(header.index + header[0].length, headers[index + 1]?.index ?? raw.length),
     };
   });
+}
+
+function withoutFirstParagraph(message: string): string {
+  const paragraphEnd = message.search(/\n[ \t]*\n/);
+  return paragraphEnd < 0 ? '' : message.slice(paragraphEnd).replace(/^\s*\n/, '');
 }
 
 export class GitDiffParser {
@@ -693,31 +699,38 @@ export class GitDiffParser {
 
   async listFixupsForScreen(selection: DiffSelection): Promise<ThreadFixup[]> {
     const { targetHash, fixups } = await this.readThreadFixups(selection);
-    const [classified, plainChangesBySha, foldTargetBySha] = await Promise.all([
-      this.classifyFixups(fixups),
-      this.readPlainChanges(targetHash, fixups),
-      this.readFoldTargets(selection, targetHash, fixups),
-    ]);
+    const [classified, plainChangesBySha, { foldTargetBySha, amendedMessageBySha }] =
+      await Promise.all([
+        this.classifyFixups(fixups),
+        this.readPlainChanges(targetHash, fixups),
+        this.readFolding(selection, targetHash, fixups),
+      ]);
     return classified.map((fixup) => {
       const plainChangesBefore = plainChangesBySha.get(fixup.sha);
       const foldTargetSha = foldTargetBySha.get(fixup.sha);
+      const amendedMessage = amendedMessageBySha.get(fixup.sha);
       if (!plainChangesBefore && !foldTargetSha) return fixup;
       return {
         ...fixup,
         ...(plainChangesBefore ? { plainChangesBefore } : {}),
         ...(foldTargetSha ? { foldTargetSha } : {}),
+        ...(amendedMessage ? { amendedMessage } : {}),
       };
     });
   }
 
   // Follows each fixup the way autosquash does, through fixups of fixups, to a reviewed commit.
-  private async readFoldTargets(
+  private async readFolding(
     selection: DiffSelection,
     targetHash: string,
     fixups: ThreadFixup[],
-  ): Promise<Map<string, string>> {
-    const bySha = new Map<string, string>();
-    if (fixups.length === 0) return bySha;
+  ): Promise<{
+    foldTargetBySha: Map<string, string>;
+    amendedMessageBySha: Map<string, MessageAmendment>;
+  }> {
+    const foldTargetBySha = new Map<string, string>();
+    let amendedMessageBySha = new Map<string, MessageAmendment>();
+    if (fixups.length === 0) return { foldTargetBySha, amendedMessageBySha };
     try {
       const base = await this.resolveBaseCommitish(selection);
       const [log, reviewedList] = await Promise.all([
@@ -733,16 +746,65 @@ export class GitDiffParser {
         this.git.raw(['rev-list', '--first-parent', `${base}..${targetHash}`, '--']),
       ]);
       const reviewed = new Set(reviewedList.split('\n').filter((sha) => sha.length > 0));
-      const foldsInto = new Map<string, string>();
-      for (const [root, ...folded] of autosquashGroups(parseFixupLog(log))) {
-        if (root) for (const commit of folded) foldsInto.set(commit.sha, root.sha);
+      const threadShas = new Set(fixups.map(({ sha }) => sha));
+      const reviewedGroups = autosquashGroups(parseFixupLog(log)).filter(
+        ([root]) => root !== undefined && reviewed.has(root.sha),
+      );
+      for (const [root, ...folded] of reviewedGroups) {
+        for (const commit of folded) {
+          if (root && threadShas.has(commit.sha)) foldTargetBySha.set(commit.sha, root.sha);
+        }
       }
-      for (const fixup of fixups) {
-        const foldTarget = foldsInto.get(fixup.sha);
-        if (foldTarget && reviewed.has(foldTarget)) bySha.set(fixup.sha, foldTarget);
-      }
+      amendedMessageBySha = await this.readAmendedMessages(reviewedGroups, threadShas);
     } catch (error) {
       console.error('Error finding the commits fixups fold into:', error);
+    }
+    return { foldTargetBySha, amendedMessageBySha };
+  }
+
+  // Replays the messages of each group in autosquash order: an amend! commit replaces the message
+  // with its own past the first paragraph. Left out from a squash! on, which git merges by hand.
+  private async readAmendedMessages(
+    groups: TodoCommit[][],
+    threadShas: ReadonlySet<string>,
+  ): Promise<Map<string, MessageAmendment>> {
+    const bySha = new Map<string, MessageAmendment>();
+    const amending = groups.filter((group) =>
+      group.some(({ sha, subject }) => threadShas.has(sha) && subject.startsWith('amend! ')),
+    );
+    if (amending.length === 0) return bySha;
+    try {
+      const read = amending.flatMap(([root, ...folded]) => [
+        ...(root ? [root.sha] : []),
+        ...folded.filter(({ subject }) => subject.startsWith('amend! ')).map(({ sha }) => sha),
+      ]);
+      const fields = (
+        await this.git.raw([
+          'log',
+          '--no-walk=unsorted',
+          '--no-show-signature',
+          '--format=%x00%H%x00%B',
+          ...read,
+          '--',
+        ])
+      ).split('\0');
+      const messageOf = new Map<string, string>();
+      for (let at = 1; at + 1 < fields.length; at += 2) {
+        messageOf.set(fields[at] ?? '', (fields[at + 1] ?? '').trimEnd());
+      }
+      for (const [root, ...folded] of amending) {
+        let message = root && messageOf.get(root.sha);
+        for (const commit of folded) {
+          if (message === undefined || commit.subject.startsWith('squash! ')) break;
+          if (!commit.subject.startsWith('amend! ')) continue;
+          const after = withoutFirstParagraph(messageOf.get(commit.sha) ?? '');
+          if (after.length === 0) break;
+          if (threadShas.has(commit.sha)) bySha.set(commit.sha, { before: message, after });
+          message = after;
+        }
+      }
+    } catch (error) {
+      console.error('Error reading the messages of amend! commits:', error);
     }
     return bySha;
   }

@@ -594,6 +594,28 @@ describe('DiffChunk fixup overlay', () => {
     expect(card).not.toHaveTextContent('이 fixup에서 수정한 다른 파일');
   });
 
+  it('shows the message an amend! commit replaces next to the one it leaves', () => {
+    const amend: ThreadFixup = {
+      ...fixup,
+      subject: 'amend! add feture',
+      files: [],
+      amendedMessage: { before: 'add feture', after: 'add feature\n\nReview-Thread: t1' },
+    };
+    renderWithOverlay([thread], new Map([['t1', [amend]]]));
+
+    const message = within(screen.getByTestId('fixup-overlay-card')).getByTestId(
+      'fixup-amended-message',
+    );
+    expect(message).toHaveTextContent('지금 메시지add feture');
+    expect(message).toHaveTextContent('바뀔 메시지add feature');
+  });
+
+  it('shows no message on a fixup that amends none', () => {
+    renderWithOverlay([thread]);
+
+    expect(screen.queryByTestId('fixup-amended-message')).not.toBeInTheDocument();
+  });
+
   it('lists no other files on a fixup that changed only this file', () => {
     renderWithOverlay([thread]);
 

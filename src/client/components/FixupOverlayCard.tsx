@@ -1,6 +1,12 @@
 import { useState } from 'react';
 
-import type { CommentThread, DiffChunk, DiffLine, ThreadFixup } from '../../types/diff';
+import type {
+  CommentThread,
+  DiffChunk,
+  DiffLine,
+  MessageAmendment,
+  ThreadFixup,
+} from '../../types/diff';
 import {
   combineChangeKinds,
   LEAVES_CODE_ALONE_LABEL,
@@ -105,6 +111,31 @@ function FixupChunksTable({
   );
 }
 
+function AmendedMessage({ message, separated }: { message: MessageAmendment; separated: boolean }) {
+  const sides = [
+    { label: '지금 메시지', text: message.before },
+    { label: '바뀔 메시지', text: message.after },
+  ];
+  return (
+    <div
+      data-testid="fixup-amended-message"
+      className={`grid grid-cols-2 max-md:grid-cols-1 border-github-border ${separated ? 'border-b' : ''}`}
+    >
+      {sides.map(({ label, text }) => (
+        <div
+          key={label}
+          className="px-3 py-1.5 min-w-0 border-github-border [&+&]:border-l max-md:[&+&]:border-l-0 max-md:[&+&]:border-t"
+        >
+          <div className="text-xs text-github-text-secondary">{label}</div>
+          <pre className="m-0 whitespace-pre-wrap break-words font-mono text-sm text-github-text-primary">
+            {text}
+          </pre>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverlayCardProps) {
   const { revealFixupFile, fixupReviewPaths, fixupPlaces } = useFixupOverlay();
   const keyOf = (file: FixupFile) => fixupFileKey({ fixupSha: fixup.sha, path: file.path });
@@ -138,6 +169,9 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
           </span>
         )}
       </div>
+      {fixup.amendedMessage && (
+        <AmendedMessage message={fixup.amendedMessage} separated={thisFiles.length > 0} />
+      )}
       {thisFiles.map((file) => (
         <FixupChunksTable
           key={file.path}

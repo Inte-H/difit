@@ -2818,6 +2818,38 @@ describe('App Component - Commits of the review', () => {
     expect(countOn(/1111111/)).toHaveAttribute('title', '열린 지적 2개');
   });
 
+  it('shows on a commit the subject an amend! will give it until the amend! is rejected', async () => {
+    const amend = {
+      sha: 'f'.repeat(40),
+      shortSha: 'fffffff',
+      patchId: 'patch-1',
+      authoredAt: '2026-01-01T00:00:00Z',
+      subject: 'amend! first step',
+      threadIds: ['c1'],
+      files: [],
+      foldTargetSha: COMMITS[0]!.sha,
+      amendedMessage: { before: 'first step', after: 'first step, renamed' },
+    };
+    fixupsFor.current = [amend];
+    const app = () => (
+      <HotkeysProvider initiallyActiveScopes={['navigation']}>
+        <App />
+      </HotkeysProvider>
+    );
+
+    const { rerender } = renderApp();
+    await waitFor(() =>
+      expect(within(commitButton(/1111111/)).getByText('first step, renamed')).toBeInTheDocument(),
+    );
+    expect(within(commitButton(/1111111/)).getByText('first step').tagName).toBe('DEL');
+
+    mockDecisions = [
+      { threadId: 'c1', kind: 'rejected', fixupSha: amend.sha, at: '2026-01-02T00:00:00Z' },
+    ];
+    rerender(app());
+    expect(within(commitButton(/1111111/)).queryByText('first step, renamed')).toBeNull();
+  });
+
   it('lists no commits for a review of one commit or one that is not pinned', async () => {
     review = { ...REVIEW, commits: COMMITS.slice(1) };
     const { unmount } = renderApp();

@@ -360,6 +360,14 @@ export interface ThreadFixup {
   // review target for the first; left out when it was not read.
   plainChangesBefore?: PlainFileChange[];
   foldTargetSha?: string;
+  // On an amend! commit: the message the commits folded before it leave on its target, and the one
+  // it leaves there.
+  amendedMessage?: MessageAmendment;
+}
+
+export interface MessageAmendment {
+  before: string;
+  after: string;
 }
 
 export interface PlainFileChange {
