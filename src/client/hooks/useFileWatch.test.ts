@@ -241,13 +241,23 @@ describe('useFileWatch', () => {
           JSON.stringify({
             type: 'symbolIndexChanged',
             commit: 'a'.repeat(40),
-            status: 'ready',
+            state: {
+              status: 'failed',
+              reason: 'timeout',
+              detail: 'scip-java timed out',
+              hasLog: true,
+            },
             timestamp: new Date().toISOString(),
           }),
         );
       });
 
-      expect(onSymbolIndexChanged).toHaveBeenCalledWith('a'.repeat(40), 'ready');
+      expect(onSymbolIndexChanged).toHaveBeenCalledWith('a'.repeat(40), {
+        status: 'failed',
+        reason: 'timeout',
+        detail: 'scip-java timed out',
+        hasLog: true,
+      });
       expect(MockWebSocket.instances).toHaveLength(1);
     });
 

@@ -1,4 +1,4 @@
-import { ArrowLeft, LoaderCircle, X } from 'lucide-react';
+import { ArrowLeft, X } from 'lucide-react';
 import type { Token } from 'prism-react-renderer';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
@@ -18,6 +18,7 @@ import {
 
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import type { AppearanceSettings } from './SettingsModal';
+import { SymbolIndexStatusLine } from './SymbolIndexStatusLine';
 
 // Larger files are shown only around the selected line so the view stays responsive.
 const MAX_SHOWN_LINES = 2000;
@@ -47,10 +48,11 @@ interface SymbolPeekModalProps {
   indexUpdates?: SymbolIndexUpdates;
 }
 
+// `seq` is the count of index changes heard when the search started.
 type SearchState =
   | { status: 'loading' }
   | { status: 'failed' }
-  | { status: 'done'; result: SymbolSearchResponse };
+  | { status: 'done'; result: SymbolSearchResponse; seq: number };
 
 export function SymbolPeekModal({
   request,
@@ -76,11 +78,12 @@ export function SymbolPeekModal({
     const controller = new AbortController();
     setSearch({ status: 'loading' });
     setSelected(null);
-    searchedAtSeq.current = latestUpdateSeq.current;
+    const seq = latestUpdateSeq.current;
+    searchedAtSeq.current = seq;
     fetchSymbol(request, controller.signal).then(
       (result) => {
         if (controller.signal.aborted) return;
-        setSearch({ status: 'done', result });
+        setSearch({ status: 'done', result, seq });
         setSelected(reselect(null, result));
       },
       () => {
@@ -90,35 +93,27 @@ export function SymbolPeekModal({
     return () => controller.abort();
   }, [request]);
 
-  // When the index this answer waited for is done, search again and swap the answer in,
-  // keeping the selected line if it is still there.
-  const indexing = search.status === 'done' ? search.result.indexing : undefined;
-  const indexUpdate = indexing ? indexUpdates.byCommit.get(indexing) : undefined;
+  // A change heard after the search started is newer than the answer's own word on the index.
+  const answered = search.status === 'done' ? search : undefined;
+  const indexCommit = answered?.result.index?.commit;
+  const indexUpdate = indexCommit ? indexUpdates.byCommit.get(indexCommit) : undefined;
+  const index =
+    indexCommit && indexUpdate && answered && indexUpdate.seq > answered.seq
+      ? { commit: indexCommit, ...indexUpdate.state }
+      : answered?.result.index;
+
   useEffect(() => {
-    if (
-      !indexUpdate ||
-      indexUpdate.status === 'building' ||
-      indexUpdate.seq <= searchedAtSeq.current
-    ) {
-      return;
-    }
+    if (indexUpdate?.state.status !== 'ready' || indexUpdate.seq <= searchedAtSeq.current) return;
     const controller = new AbortController();
-    searchedAtSeq.current = latestUpdateSeq.current;
+    const seq = latestUpdateSeq.current;
+    searchedAtSeq.current = seq;
     fetchSymbol(request, controller.signal).then(
       (result) => {
         if (controller.signal.aborted) return;
-        setSearch({ status: 'done', result });
+        setSearch({ status: 'done', result, seq });
         setSelected((current) => reselect(current, result));
       },
-      () => {
-        if (controller.signal.aborted) return;
-        // The build is over either way, so keep the answer shown but stop saying it is coming.
-        setSearch((current) =>
-          current.status === 'done'
-            ? { status: 'done', result: withoutIndexing(current.result) }
-            : current,
-        );
-      },
+      () => {},
     );
     return () => controller.abort();
   }, [indexUpdate, request]);
@@ -158,14 +153,12 @@ export function SymbolPeekModal({
             <X size={18} />
           </button>
         </div>
-        {indexing && (
-          <div
-            role="status"
-            className="flex shrink-0 items-start gap-2 border-b border-github-border bg-github-bg-secondary px-4 py-2 text-xs leading-[18px] text-github-warning"
-          >
-            <LoaderCircle size={14} className="mt-0.5 shrink-0 animate-spin" aria-hidden="true" />
-            <span>색인을 만드는 중</span>
-          </div>
+        {answered && (
+          <SymbolIndexStatusLine
+            index={index}
+            unindexed={answered.result.unindexed}
+            gitRef={request.ref}
+          />
         )}
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -191,10 +184,6 @@ export function SymbolPeekModal({
       </div>
     </div>
   );
-}
-
-function withoutIndexing({ indexing: _, ...result }: SymbolSearchResponse): SymbolSearchResponse {
-  return result;
 }
 
 function Notice({ children }: { children: React.ReactNode }) {

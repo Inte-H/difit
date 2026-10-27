@@ -54,7 +54,7 @@ import { GitDiffParser } from './git-diff.js';
 import { type LineChanges, lineChangesBetween } from './line-changes.js';
 import { acceptLiveSockets, isLiveSocketRequest } from './live-socket.js';
 import { runGit } from './run-git.js';
-import { ScipIndexBuilder } from './scip-build.js';
+import { ScipIndexBuilder, indexStateForClient, readBuildLog } from './scip-build.js';
 import { type SymbolPosition, answerFromScipIndex, commitFiles, isJavaPath } from './scip-peek.js';
 import { searchSymbol } from './symbol-search.js';
 import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from './user-config.js';
@@ -82,6 +82,7 @@ import {
   type RewordRejection,
   type RewordRequest,
   type RewordResponse,
+  type SymbolIndexLogResponse,
   type SymbolSearchResponse,
   type ThreadAwaitingAgent,
   type ThreadFixup,
@@ -444,7 +445,7 @@ export async function startServer(options: ServerOptions): Promise<{
     const event: WatchEvent = {
       type: 'symbolIndexChanged',
       commit,
-      status: state.status,
+      state: indexStateForClient(state),
       timestamp: new Date().toISOString(),
     };
     indexEvents.set(commit, event);
@@ -785,8 +786,8 @@ export async function startServer(options: ServerOptions): Promise<{
     });
 
     try {
-      const commit =
-        symbolIndex && path !== undefined && isJavaPath(path) ? await resolveCommit(ref) : null;
+      const clickedJava = path !== undefined && isJavaPath(path);
+      const commit = symbolIndex && clickedJava ? await resolveCommit(ref) : null;
       if (commit && at && symbolIndex) {
         if ((await isShownBase(commit)) && !(await borrowsIndex(commit))) {
           await symbolIndex.start(commit, { urgent: true });
@@ -865,22 +866,47 @@ export async function startServer(options: ServerOptions): Promise<{
         path,
         disconnected.signal,
       );
-      const state = commit ? symbolIndex?.state(commit).status : undefined;
+      const state = commit ? symbolIndex?.state(commit) : undefined;
       // The index may have finished while the name search ran.
-      const late = !askedIndex && state === 'ready' ? await fromIndex() : null;
+      const late = !askedIndex && state?.status === 'ready' ? await fromIndex() : null;
       if (late) {
         res.json(late);
-      } else if (commit && at && state === 'building') {
-        res.json({ ...response, indexing: commit });
-      } else if (borrowed?.waitingFor) {
-        res.json({ ...response, indexing: borrowed.waitingFor });
-      } else {
-        res.json(response);
+        return;
       }
+      const shown = borrowed?.waitingFor ?? commit;
+      if (shown && at && symbolIndex) {
+        response.index = { commit: shown, ...indexStateForClient(symbolIndex.state(shown)) };
+      } else if (symbolIndex && at) {
+        const unindexed = clickedJava ? 'not-commit' : 'not-java';
+        const checked = isCommitTarget(ref)
+          ? await resolveCommit(ref)
+          : await resolveCommit('HEAD');
+        if (checked && (await symbolIndex.indexable(checked)) === 'indexable') {
+          response.unindexed = unindexed;
+        }
+      }
+      res.json(response);
     } catch (error) {
       if (disconnected.signal.aborted) return;
       console.error('Error searching symbol:', error);
       res.status(404).json({ error: 'Could not search this revision' });
+    }
+  });
+
+  app.get('/api/symbol-index/:commit/log', async (req, res) => {
+    const state = symbolIndex?.state(req.params.commit);
+    if (state?.status !== 'failed' || !state.logPath) {
+      res.status(404).json({ error: 'No build log for this commit' });
+      return;
+    }
+    try {
+      const body: SymbolIndexLogResponse = {
+        path: state.logPath,
+        text: await readBuildLog(state.logPath),
+      };
+      res.json(body);
+    } catch {
+      res.status(404).json({ error: 'No build log for this commit' });
     }
   });
 

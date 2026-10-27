@@ -18,8 +18,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   type ScipBuildState,
   ScipIndexBuilder,
+  commitIndexability,
   findScipJava,
-  isIndexableCommit,
+  indexStateForClient,
+  plainLogText,
+  readBuildLog,
   scipIndexCacheRoot,
   selectEvictions,
   toolSpawnSpec,
@@ -223,7 +226,7 @@ describe('scipIndexCacheRoot', () => {
   });
 });
 
-describe('isIndexableCommit', () => {
+describe('commitIndexability', () => {
   it('needs Java sources and a build file at the root of the tree', async () => {
     const repo = createRepo();
     const docsOnly = commit(repo, { 'README.md': 'hi\n', 'build.gradle': '' });
@@ -237,36 +240,103 @@ describe('isIndexableCommit', () => {
     const noRootBuild = git(repo, 'rev-parse', 'HEAD');
     const maven = commit(repo, { 'pom.xml': '<project/>\n' });
 
-    await expect(isIndexableCommit(repo, docsOnly)).resolves.toBe(false);
-    await expect(isIndexableCommit(repo, nestedBuild)).resolves.toBe(true);
-    await expect(isIndexableCommit(repo, noRootBuild)).resolves.toBe(false);
-    await expect(isIndexableCommit(repo, maven)).resolves.toBe(true);
-    await expect(isIndexableCommit(repo, '0'.repeat(40))).resolves.toBe(false);
+    await expect(commitIndexability(repo, docsOnly)).resolves.toBe('no-java');
+    await expect(commitIndexability(repo, nestedBuild)).resolves.toBe('indexable');
+    await expect(commitIndexability(repo, noRootBuild)).resolves.toBe('no-build-file');
+    await expect(commitIndexability(repo, maven)).resolves.toBe('indexable');
+    await expect(commitIndexability(repo, '0'.repeat(40))).resolves.toBe('no-java');
+  });
+});
+
+describe('plainLogText', () => {
+  it('drops terminal codes and keeps what a carriage return left on the line', () => {
+    const esc = String.fromCharCode(27);
+    const bel = String.fromCharCode(7);
+    const log = [
+      `${esc}[90m2026.10.27 12:00:01${esc}[0m ${esc}[1;31mERROR${esc}[m Cannot run program "gradle"`,
+      `${esc}]0;gradle${bel}> Task :compileJava\r`,
+      `  10% EXECUTING\r  87% EXECUTING\r> Task :jar`,
+      `${esc}[2K${esc}[1A${esc}7done`,
+    ].join('\n');
+
+    expect(plainLogText(log).split('\n')).toEqual([
+      '2026.10.27 12:00:01 ERROR Cannot run program "gradle"',
+      '> Task :compileJava',
+      '> Task :jar',
+      'done',
+    ]);
+  });
+});
+
+describe('indexStateForClient', () => {
+  it('says whether a failed build left a log without giving its path', () => {
+    const failed: ScipBuildState = {
+      status: 'failed',
+      reason: 'exit-code',
+      exitCode: 1,
+      detail: 'scip-java exited with code 1',
+      logPath: '/cache/sha/build.log',
+    };
+    expect(indexStateForClient(failed)).toEqual({
+      status: 'failed',
+      reason: 'exit-code',
+      exitCode: 1,
+      detail: 'scip-java exited with code 1',
+      hasLog: true,
+    });
+    expect(indexStateForClient({ ...failed, logPath: null })).toMatchObject({ hasLog: false });
+    expect(indexStateForClient({ status: 'queued', after: 'a' })).toEqual({
+      status: 'queued',
+      after: 'a',
+    });
   });
 });
 
 describe('ScipIndexBuilder', () => {
-  it('builds nothing when scip-java is missing', async () => {
+  it('builds nothing when scip-java is missing, and says so', async () => {
     const repo = createRepo();
     const sha = commit(repo, JAVA_PROJECT);
     const cache = tempDir('difit-scip-cache-');
     const { builder, events } = newBuilder(repo, undefined, cache);
 
-    await expect(builder.request(sha)).resolves.toEqual({ status: 'none' });
-    expect(builder.state(sha)).toEqual({ status: 'none' });
-    expect(events).toEqual([]);
+    const missing = { status: 'unavailable', reason: 'no-scip-java' };
+    await expect(builder.request(sha)).resolves.toEqual(missing);
+    expect(builder.state(sha)).toEqual(missing);
+    expect(events).toEqual([[sha, 'unavailable']]);
     expect(readdirSync(cache)).toEqual([]);
+  });
+
+  it('tells a commit without Java from one without scip-java', async () => {
+    const repo = createRepo();
+    const sha = commit(repo, { 'README.md': 'hi\n' });
+    const { builder } = newBuilder(repo, undefined, tempDir('difit-scip-cache-'));
+
+    await expect(builder.request(sha)).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'no-java',
+    });
   });
 
   posixOnly('leaves commits without Java or a root build file alone', async () => {
     const repo = createRepo();
     const sha = commit(repo, { 'README.md': 'hi\n' });
+    const noBuildFile = commit(repo, { 'src/A.java': 'class A {}\n' });
     const fake = fakeScipJava(WRITES_INDEX);
     const { builder, events } = newBuilder(repo, fake.path, tempDir('difit-scip-cache-'));
 
-    await expect(builder.request(sha)).resolves.toEqual({ status: 'none' });
+    await expect(builder.request(sha)).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'no-java',
+    });
+    await expect(builder.request(noBuildFile)).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'no-build-file',
+    });
     await expect(builder.request('HEAD')).resolves.toEqual({ status: 'none' });
-    expect(events).toEqual([]);
+    expect(events).toEqual([
+      [sha, 'unavailable'],
+      [noBuildFile, 'unavailable'],
+    ]);
     expect(calls(fake.log)).toEqual([]);
   });
 
@@ -339,13 +409,20 @@ describe('ScipIndexBuilder', () => {
     const fake = fakeScipJava(
       `echo start >> "$LOG"\nsleep 0.3\necho end >> "$LOG"\n${WRITES_INDEX}`,
     );
-    const { builder } = newBuilder(repo, fake.path, tempDir('difit-scip-cache-'));
+    const { builder, events } = newBuilder(repo, fake.path, tempDir('difit-scip-cache-'));
 
-    const both = Promise.all([builder.request(first), builder.request(second)]);
+    const one = builder.request(first);
     await waitFor(() => calls(fake.log).length > 0);
-    // The second commit waits for the first and counts as building meanwhile.
-    expect(builder.state(second)).toEqual({ status: 'building' });
+    const both = Promise.all([one, builder.request(second)]);
+    await waitFor(() => builder.state(second).status === 'queued');
+    expect(builder.state(first)).toEqual({ status: 'building', startedAt: expect.any(Number) });
+    expect(builder.state(second)).toEqual({ status: 'queued', after: first });
     await expect(both).resolves.toEqual([{ status: 'ready' }, { status: 'ready' }]);
+    expect(events.filter(([sha]) => sha === second).map(([, status]) => status)).toEqual([
+      'queued',
+      'building',
+      'ready',
+    ]);
     expect(calls(fake.log).filter((line) => !line.startsWith('run'))).toEqual([
       'start',
       'end',
@@ -368,17 +445,22 @@ describe('ScipIndexBuilder', () => {
 
     const first = builder.request(running);
     await waitFor(() => calls(fake.log).length > 0);
-    const rest = [
-      builder.request(queued),
-      builder.request(later),
-      builder.request(other),
-      builder.request(waited, { urgent: true }),
-    ];
-    await waitFor(() =>
-      [queued, later, other, waited].every((sha) => builder.state(sha).status === 'building'),
-    );
+    const rest: Array<Promise<unknown>> = [];
+    for (const sha of [queued, later, other]) {
+      rest.push(builder.request(sha));
+      await waitFor(() => builder.state(sha).status === 'queued');
+    }
+    rest.push(builder.request(waited, { urgent: true }));
+    await waitFor(() => builder.state(waited).status === 'queued');
+    expect(builder.state(waited)).toEqual({ status: 'queued', after: running });
     void builder.request(later, { urgent: true });
-    builder.hurry(other);
+    expect(builder.state(other)).toEqual({ status: 'queued', after: queued });
+    expect(await builder.start(other, { urgent: true })).toEqual({
+      status: 'queued',
+      after: later,
+    });
+    expect(builder.state(later)).toEqual({ status: 'queued', after: waited });
+    expect(builder.state(queued)).toEqual({ status: 'queued', after: other });
     writeFileSync(gate, '');
     await Promise.all([first, ...rest]);
 
@@ -394,9 +476,12 @@ describe('ScipIndexBuilder', () => {
     const fake = fakeScipJava(`while [ ! -f '${gate}' ]; do sleep 0.02; done\n${WRITES_INDEX}`);
     const { builder } = newBuilder(repo, fake.path, tempDir('difit-scip-cache-'));
 
-    await expect(builder.start(plain)).resolves.toEqual({ status: 'none' });
-    await expect(builder.start(sha)).resolves.toEqual({ status: 'building' });
-    await expect(builder.start(sha)).resolves.toEqual({ status: 'building' });
+    await expect(builder.start(plain)).resolves.toEqual({
+      status: 'unavailable',
+      reason: 'no-java',
+    });
+    await expect(builder.start(sha)).resolves.toMatchObject({ status: 'building' });
+    await expect(builder.start(sha)).resolves.toMatchObject({ status: 'building' });
     writeFileSync(gate, '');
     await builder.request(sha);
     await expect(builder.start(sha)).resolves.toEqual({ status: 'ready' });
@@ -432,7 +517,13 @@ describe('ScipIndexBuilder', () => {
     const { builder, events } = newBuilder(repo, fake.path, cache);
 
     const logPath = join(cache, sha, 'build.log');
-    const failed = { status: 'failed', reason: 'scip-java exited with code 1', logPath };
+    const failed = {
+      status: 'failed',
+      reason: 'exit-code',
+      exitCode: 1,
+      detail: 'scip-java exited with code 1',
+      logPath,
+    };
     await expect(builder.request(sha)).resolves.toEqual(failed);
     expect(builder.state(sha)).toEqual(failed);
     expect(events.map(([, status]) => status)).toEqual(['building', 'failed']);
@@ -445,13 +536,41 @@ describe('ScipIndexBuilder', () => {
     expect(calls(fake.log)).toHaveLength(1);
   });
 
+  posixOnly('tells a build that found no Gradle from other failures', async () => {
+    const repo = createRepo();
+    const sha = commit(repo, JAVA_PROJECT);
+    const esc = String.fromCharCode(27);
+    const cache = tempDir('difit-scip-cache-');
+    const fake = fakeScipJava(
+      `printf '${esc}[90mjava.io.IOException: Cannot run program "gradle": error=2${esc}[0m\\n'\nexit 1`,
+    );
+    const { builder } = newBuilder(repo, fake.path, cache);
+
+    const result = await builder.request(sha);
+
+    expect(result).toEqual({
+      status: 'failed',
+      reason: 'no-gradle',
+      exitCode: 1,
+      detail: 'scip-java exited with code 1',
+      logPath: join(cache, sha, 'build.log'),
+    });
+    if (result.status !== 'failed' || !result.logPath) throw new Error('expected a log');
+    expect(readFileSync(result.logPath, 'utf8')).toContain(esc);
+    expect((await readBuildLog(result.logPath)).split('\n').filter(Boolean)).toEqual([
+      'java.io.IOException: Cannot run program "gradle": error=2',
+      '[difit] scip-java exited with code 1',
+    ]);
+  });
+
   posixOnly('fails a build whose tool writes no index or runs past the time limit', async () => {
     const repo = createRepo();
     const sha = commit(repo, JAVA_PROJECT);
     const silent = newBuilder(repo, fakeScipJava('exit 0').path, tempDir('difit-scip-cache-'));
     await expect(silent.builder.request(sha)).resolves.toMatchObject({
       status: 'failed',
-      reason: 'scip-java wrote no index.scip',
+      reason: 'no-output',
+      detail: 'scip-java wrote no index.scip',
     });
 
     const slow = newBuilder(
@@ -461,7 +580,11 @@ describe('ScipIndexBuilder', () => {
       300,
     );
     const result = await slow.builder.request(sha);
-    expect(result).toMatchObject({ status: 'failed', reason: 'scip-java timed out' });
+    expect(result).toMatchObject({
+      status: 'failed',
+      reason: 'timeout',
+      detail: 'scip-java timed out',
+    });
     if (result.status !== 'failed' || !result.logPath) throw new Error('expected a log');
     expect(readFileSync(result.logPath, 'utf8')).toMatch(/compiling[\s\S]*scip-java timed out/);
   });
@@ -478,10 +601,14 @@ describe('ScipIndexBuilder', () => {
     try {
       const fake = fakeScipJava(WRITES_INDEX);
       const cache = tempDir('difit-scip-cache-');
+      mkdirSync(join(cache, sha));
+      writeFileSync(join(cache, sha, 'build.log'), 'output of an earlier run\n');
       const { builder } = newBuilder(repo, fake.path, cache);
       await expect(builder.request(sha)).resolves.toMatchObject({
         status: 'failed',
-        reason: expect.stringMatching(/^tar exited with code 2: .*tar: boom/),
+        reason: 'error',
+        detail: expect.stringMatching(/^tar exited with code 2: .*tar: boom/),
+        logPath: null,
       });
       expect(calls(fake.log)).toEqual([]);
       expect(readdirSync(join(cache, sha))).toEqual(['build.log']);

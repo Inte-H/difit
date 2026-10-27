@@ -18,7 +18,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 
 import { startServer } from './server.js';
-import type { SymbolSearchResponse } from '../types/diff.js';
+import type { SymbolIndexLogResponse, SymbolSearchResponse } from '../types/diff.js';
 import { createDiffSelection } from '../utils/diffSelection.js';
 
 // The repository under review holds the Java sources the fixture index.scip was made from, so a
@@ -98,10 +98,10 @@ afterEach(async () => {
   rmSync(join(home, 'difit'), { recursive: true, force: true });
 });
 
-// A stand-in for `scip-java index --output <path>`.
+// A stand-in for `scip-java index --output <path>`; `body` replaces copying the fixture index.
 function fakeScipJava(
   gate?: string,
-  { failFirst = false }: { failFirst?: boolean } = {},
+  { failFirst = false, body }: { failFirst?: boolean; body?: string } = {},
 ): { calls: string; pids: () => number[] } {
   const dir = mkdtempSync(join(tmpdir(), 'difit-fake-scip-java-'));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
@@ -110,7 +110,8 @@ function fakeScipJava(
   const wait = gate ? `while [ ! -f '${gate}' ]; do sleep 0.05; done\n` : '';
   const failed = join(dir, 'failed');
   const fail = failFirst ? `if [ ! -f '${failed}' ]; then : > '${failed}'; exit 1; fi\n` : '';
-  writeFileSync(tool, `#!/bin/sh\necho $$ >> '${calls}'\n${wait}${fail}cp '${FIXTURE}' "$3"\n`);
+  const work = body ?? `cp '${FIXTURE}' "$3"`;
+  writeFileSync(tool, `#!/bin/sh\necho $$ >> '${calls}'\n${wait}${fail}${work}\n`);
   chmodSync(tool, 0o755);
   process.env.DIFIT_SCIP_JAVA = tool;
   return {
@@ -243,16 +244,26 @@ describe('symbol peek of a commit review', () => {
     });
 
     const searches = [
-      { name: 'findById', ref: head, from: SERVICE },
-      { name: 'findById', ref: head, from: 'README.md', line: 1, column: 5 },
-      { ...FIND_BY_ID, ref: base },
-      { ...FIND_BY_ID, ref: 'working' },
-    ];
-    for (const query of searches) {
+      [{ name: 'findById', ref: head, from: SERVICE }, {}],
+      [
+        { name: 'findById', ref: head, from: 'README.md', line: 1, column: 5 },
+        { unindexed: 'not-java' },
+      ],
+      [
+        { ...FIND_BY_ID, ref: base },
+        { index: { commit: base, status: 'unavailable', reason: 'no-java' } },
+      ],
+      [{ ...FIND_BY_ID, ref: 'working' }, { unindexed: 'not-commit' }],
+    ] as const;
+    for (const [query, why] of searches) {
       const { status, body } = await peek(query);
       expect(status).toBe(200);
       expect(body.source).toBe('name');
-      expect(body.indexing).toBeUndefined();
+      expect({ index: body.index, unindexed: body.unindexed }).toEqual({
+        index: undefined,
+        unindexed: undefined,
+        ...why,
+      });
     }
     const byName = await peek({ name: 'findById', ref: head, from: SERVICE });
     expect(byName.body.references.map((match) => match.path)).toContain('README.md');
@@ -264,35 +275,43 @@ describe('symbol peek of a commit review', () => {
     fakeScipJava(gate);
     const { api, peek, openPage } = await openReview();
 
+    const asked = Date.now();
     const building = await waitFor(async () => {
       const { body } = await peek({ ...FIND_BY_ID, ref: head });
-      return body.indexing ? body : undefined;
+      return body.index?.status === 'building' ? body : undefined;
     });
     expect(building.source).toBe('name');
-    expect(building.indexing).toBe(head);
+    expect(building.index).toEqual({
+      commit: head,
+      status: 'building',
+      startedAt: expect.any(Number),
+    });
+    if (building.index?.status !== 'building') throw new Error('expected a build');
+    expect(building.index.startedAt).toBeGreaterThan(asked - 60_000);
+    expect(building.index.startedAt).toBeLessThanOrEqual(Date.now());
     expect(building.definitions.map((match) => match.path)).toContain(PORT);
     expect(
       (await peek({ name: 'findById', ref: head, from: 'README.md', line: 1, column: 5 })).body
-        .indexing,
+        .index,
     ).toBeUndefined();
-    expect(
-      (await peek({ name: 'findById', ref: head, from: SERVICE })).body.indexing,
-    ).toBeUndefined();
+    expect((await peek({ name: 'findById', ref: head, from: SERVICE })).body.index).toBeUndefined();
 
     const started = Date.now();
     const diff = await fetch(api('/api/diff?ignoreWhitespace=true'));
     expect(diff.ok).toBe(true);
     expect(Date.now() - started).toBeLessThan(2000);
-    expect((await peek({ ...FIND_BY_ID, ref: head })).body.indexing).toBe(head);
+    expect((await peek({ ...FIND_BY_ID, ref: head })).body.index?.status).toBe('building');
 
     const { heard } = await openPage((received) => received.includes('"status":"ready"'));
     writeFileSync(gate, '');
 
     const received = await heard;
-    expect(received).toContain(`"type":"symbolIndexChanged","commit":"${head}","status":"ready"`);
+    expect(received).toContain(
+      `"type":"symbolIndexChanged","commit":"${head}","state":{"status":"ready"}`,
+    );
     const done = await peek({ ...FIND_BY_ID, ref: head });
     expect(done.body.source).toBe('index');
-    expect(done.body.indexing).toBeUndefined();
+    expect(done.body.index).toBeUndefined();
   });
 
   posixOnly('tells a page that connects later how the index stands', async () => {
@@ -303,7 +322,46 @@ describe('symbol peek of a commit review', () => {
     const { heard } = await openPage((received) => received.includes('symbolIndexChanged'));
     const received = await heard;
 
-    expect(received).toContain(`"type":"symbolIndexChanged","commit":"${head}","status":"ready"`);
+    expect(received).toContain(
+      `"type":"symbolIndexChanged","commit":"${head}","state":{"status":"ready"}`,
+    );
+  });
+
+  posixOnly('says why a build failed and serves its log without color codes', async () => {
+    const esc = String.fromCharCode(27);
+    fakeScipJava(undefined, {
+      body: `printf '${esc}[90mjava.io.IOException: Cannot run program "gradle"${esc}[0m\\n'\nexit 1`,
+    });
+    const { api, peek, settle, openPage } = await openReview();
+    await settle();
+
+    const failed = {
+      status: 'failed',
+      reason: 'no-gradle',
+      exitCode: 1,
+      detail: 'scip-java exited with code 1',
+      hasLog: true,
+    };
+    const { body } = await peek({ ...FIND_BY_ID, ref: head });
+    expect(body.source).toBe('name');
+    expect(body.index).toEqual({ commit: head, ...failed });
+
+    const { heard } = await openPage((received) => received.includes('"status":"failed"'));
+    expect(await heard).toContain(`"commit":"${head}","state":${JSON.stringify(failed)}`);
+
+    const log = await fetch(api(`/api/symbol-index/${head}/log`));
+    expect(log.status).toBe(200);
+    const { path, text } = (await log.json()) as SymbolIndexLogResponse;
+    expect(path).toBe(join(home, 'difit', 'scip-index', head, 'build.log'));
+    expect(readFileSync(path, 'utf8')).toContain(esc);
+    expect(text.split('\n').filter(Boolean)).toEqual([
+      'java.io.IOException: Cannot run program "gradle"',
+      '[difit] scip-java exited with code 1',
+    ]);
+
+    for (const commit of [base, 'HEAD', '..%2F..%2Fetc']) {
+      expect((await fetch(api(`/api/symbol-index/${commit}/log`))).status).toBe(404);
+    }
   });
 
   posixOnly('follows a branch named like a short hash when it moves', async () => {
@@ -456,7 +514,7 @@ describe('symbol peek of a commit review', () => {
 
       const first = await peek({ ...FIND_BY_ID, ref: head.slice(0, 7) });
       expect(first.body.source).toBe('name');
-      expect(first.body.indexing).toBe(head);
+      expect(first.body.index).toMatchObject({ commit: head, status: 'building' });
       writeFileSync(gate, '');
 
       const answer = await waitFor(async () => {
@@ -466,6 +524,23 @@ describe('symbol peek of a commit review', () => {
       expect(answer.definitions).toEqual([{ path: PORT, line: 6, text: sourceLine(PORT, 6) }]);
       expect((await peek({ ...FIND_BY_ID, ref: next })).body.source).toBe('index');
       expect(tool.pids()).toHaveLength(2);
+    });
+
+    posixOnly('names the build a clicked base waits behind', async () => {
+      const gate = join(home, 'gate');
+      cleanups.push(() => rmSync(gate, { force: true }));
+      const { next } = reviewOnTopOfHead();
+      fakeScipJava(gate);
+      const { peek } = await openReview({ selection: createDiffSelection(head, next) });
+      await waitFor(async () => {
+        const { body } = await peek({ ...FIND_BY_ID, ref: next });
+        return body.index?.status === 'building' ? true : undefined;
+      });
+
+      const { body } = await peek({ ...FIND_BY_ID, ref: head });
+
+      expect(body.index).toEqual({ commit: head, status: 'queued', after: next });
+      writeFileSync(gate, '');
     });
 
     posixOnly('builds nothing for a commit that is not the base of the review', async () => {
@@ -480,7 +555,7 @@ describe('symbol peek of a commit review', () => {
       await settleSymbolIndex?.();
 
       expect(body.source).toBe('name');
-      expect(body.indexing).toBeUndefined();
+      expect(body.index).toEqual({ commit: head, status: 'none' });
       expect(tool.pids()).toHaveLength(1);
     });
 
@@ -511,7 +586,7 @@ describe('symbol peek of a commit review', () => {
         await settle();
 
         expect(body.source).toBe('name');
-        expect(body.indexing).toBeUndefined();
+        expect(body.index).toEqual({ commit: head, status: 'none' });
         expect(tool.pids()).toEqual([]);
       },
     );
@@ -567,7 +642,7 @@ describe('symbol peek of a commit review', () => {
       ]);
       const changed = await peek({ ...FIND_BY_ID, line: 19, ref: fixup });
       expect(changed.body.source).toBe('name');
-      expect(changed.body.indexing).toBeUndefined();
+      expect(changed.body.index).toEqual({ commit: fixup, status: 'none' });
       expect(tool.pids()).toHaveLength(1);
     });
 
@@ -581,7 +656,7 @@ describe('symbol peek of a commit review', () => {
 
       const waiting = await peek({ ...RENAMED_CALLER, ref: fixup });
       expect(waiting.body.source).toBe('name');
-      expect(waiting.body.indexing).toBe(head);
+      expect(waiting.body.index).toMatchObject({ commit: head, status: 'building' });
       writeFileSync(gate, '');
 
       await waitFor(async () => {
@@ -623,7 +698,7 @@ describe('symbol peek of a commit review', () => {
         rmSync(gate);
         expect((await fetch(api(`/api/diff?base=${next}&target=${fixup}`))).ok).toBe(true);
         await settleSymbolIndex?.();
-        expect((await peek({ ...FIND_BY_ID, ref: next })).body.indexing).toBe(next);
+        expect((await peek({ ...FIND_BY_ID, ref: next })).body.index?.commit).toBe(next);
         await waitFor(async () => (tool.pids().length > 1 ? true : undefined));
 
         const unchanged = await peek({ ...RENAMED_CALLER, ref: fixup });
@@ -633,10 +708,10 @@ describe('symbol peek of a commit review', () => {
           definitions: [{ path: SERVICE, line: 16 }],
           references: [{ path: SERVICE, line: 23 }],
         });
-        expect(unchanged.body.indexing).toBeUndefined();
+        expect(unchanged.body.index).toBeUndefined();
         const changed = await peek({ ...FIND_BY_ID, line: 19, ref: fixup });
         expect(changed.body.source).toBe('name');
-        expect(changed.body.indexing).toBe(next);
+        expect(changed.body.index?.commit).toBe(next);
         writeFileSync(gate, '');
       },
     );
@@ -653,16 +728,38 @@ describe('symbol peek of a commit review', () => {
     });
   });
 
-  it('builds nothing and searches by name without scip-java', async () => {
+    it('builds nothing without scip-java, and says so', async () => {
     process.env.DIFIT_SCIP_JAVA = join(home, 'missing-scip-java');
-    const { peek, settle } = await openReview();
-
-    const { body } = await peek({ ...FIND_BY_ID, ref: head });
+    const { api, peek, settle } = await openReview();
     await settle();
 
+    const { body } = await peek({ ...FIND_BY_ID, ref: head });
+
     expect(body.source).toBe('name');
-    expect(body.indexing).toBeUndefined();
+    expect(body.index).toEqual({ commit: head, status: 'unavailable', reason: 'no-scip-java' });
     expect(existsSync(join(home, 'difit', 'scip-index', head))).toBe(false);
+    expect((await fetch(api(`/api/symbol-index/${head}/log`))).status).toBe(404);
+  });
+
+  it('says nothing about an index in a repository it cannot index', async () => {
+    process.env.DIFIT_SCIP_JAVA = join(home, 'missing-scip-java');
+    const { peek, settle } = await openReview({ selection: createDiffSelection('HEAD', '.') });
+    await settle();
+    git('checkout', '-q', base);
+    cleanups.push(() => {
+      git('checkout', '-q', 'main');
+    });
+
+    for (const query of [
+      { name: 'findById', ref: '.', from: 'README.md', line: 1, column: 5 },
+      { ...FIND_BY_ID, ref: '.' },
+      { name: 'findById', ref: base, from: 'README.md', line: 1, column: 5 },
+    ]) {
+      const { body } = await peek(query);
+      expect(body.source).toBe('name');
+      expect(body.index).toBeUndefined();
+      expect(body.unindexed).toBeUndefined();
+    }
   });
 
   posixOnly.each([
@@ -677,7 +774,8 @@ describe('symbol peek of a commit review', () => {
     await settle();
 
     expect(body.source).toBe('name');
-    expect(body.indexing).toBeUndefined();
+    expect(body.index).toBeUndefined();
+    expect(body.unindexed).toBe('not-commit');
     expect(tool.pids()).toEqual([]);
   });
 

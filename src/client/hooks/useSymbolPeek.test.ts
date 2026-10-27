@@ -136,14 +136,14 @@ describe('useSymbolPeek', () => {
       useSymbolPeek({ base: 'aaa', target: 'bbb', enabled: true }),
     );
 
-    act(() => result.current.noteIndexChange('c1', 'building'));
-    act(() => result.current.noteIndexChange('c2', 'building'));
-    act(() => result.current.noteIndexChange('c1', 'ready'));
+    act(() => result.current.noteIndexChange('c1', { status: 'building', startedAt: 1 }));
+    act(() => result.current.noteIndexChange('c2', { status: 'queued', after: 'c1' }));
+    act(() => result.current.noteIndexChange('c1', { status: 'ready' }));
 
     expect(result.current.indexUpdates.seq).toBe(3);
     expect(Object.fromEntries(result.current.indexUpdates.byCommit)).toEqual({
-      c1: { status: 'ready', seq: 3 },
-      c2: { status: 'building', seq: 2 },
+      c1: { state: { status: 'ready' }, seq: 3 },
+      c2: { state: { status: 'queued', after: 'c1' }, seq: 2 },
     });
   });
 });

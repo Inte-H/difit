@@ -15,6 +15,12 @@ import {
 } from 'fs/promises';
 import { join, resolve } from 'path';
 
+import type {
+  SymbolIndexFailure,
+  SymbolIndexState,
+  SymbolIndexUnavailableReason,
+} from '../types/watch.js';
+
 import { runGit } from './run-git.js';
 import { type ScipIndex, convertScipIndex, readScipIndex, writeScipIndex } from './scip-index.js';
 import { getDifitConfigDir, readScipIndexCacheLimitBytes } from './user-config.js';
@@ -24,10 +30,14 @@ import { getDifitConfigDir, readScipIndexCacheLimitBytes } from './user-config.j
 // worktree list are never touched.
 
 export type ScipBuildState =
-  | { status: 'none' }
-  | { status: 'building' }
-  | { status: 'ready' }
-  | { status: 'failed'; reason: string; logPath: string | null };
+  | Exclude<SymbolIndexState, { status: 'failed' }>
+  | {
+      status: 'failed';
+      reason: SymbolIndexFailure;
+      exitCode?: number | null;
+      detail: string;
+      logPath: string | null;
+    };
 
 interface ScipIndexBuilderOptions {
   repoPath: string;
@@ -56,6 +66,8 @@ const ENDING_SIGNALS = ['SIGTERM', 'SIGHUP'] as const;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const WORK_DIR = /^work-(\d+)-/;
 const TEMP_FILE = /\.(\d+)\.tmp$/;
+// Printed by scip-java when the commit has no gradlew and no gradle is on PATH.
+const NO_GRADLE = /Cannot run program "gradle"/;
 const ROOT_BUILD_FILES = new Set([
   'build.gradle',
   'build.gradle.kts',
@@ -110,17 +122,49 @@ export async function findScipJava(
   return null;
 }
 
-export async function isIndexableCommit(repoPath: string, sha: string): Promise<boolean> {
+export type Indexability = 'indexable' | Exclude<SymbolIndexUnavailableReason, 'no-scip-java'>;
+
+export async function commitIndexability(repoPath: string, sha: string): Promise<Indexability> {
   const listing = await runGit(repoPath, ['ls-tree', '-r', '--name-only', '-z', sha]);
-  if (listing.code !== 0) return false;
+  if (listing.code !== 0) return 'no-java';
   let hasJava = false;
   let hasBuildFile = false;
   for (const path of listing.stdout.toString('utf8').split('\0')) {
     if (path.endsWith('.java')) hasJava = true;
     else if (ROOT_BUILD_FILES.has(path)) hasBuildFile = true;
-    if (hasJava && hasBuildFile) return true;
+    if (hasJava && hasBuildFile) return 'indexable';
   }
-  return false;
+  return hasJava ? 'no-build-file' : 'no-java';
+}
+
+const ESC = '\u001b';
+const BEL = '\u0007';
+// CSI sequences (colors, cursor moves), OSC sequences (titles, links) and two-byte escapes.
+const ANSI_ESCAPE = new RegExp(
+  `${ESC}(?:\\[[0-?]*[ -/]*[@-~]|\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)|[0-~])`,
+  'g',
+);
+
+// Of a line that carriage returns overwrote, keeps what a terminal would show.
+export function plainLogText(text: string): string {
+  return text
+    .replace(ANSI_ESCAPE, '')
+    .split('\n')
+    .map((line) => {
+      const shown = line.replace(/\r+$/, '');
+      return shown.slice(shown.lastIndexOf('\r') + 1);
+    })
+    .join('\n');
+}
+
+export async function readBuildLog(path: string): Promise<string> {
+  return plainLogText((await readFile(path)).toString('utf8'));
+}
+
+export function indexStateForClient(state: ScipBuildState): SymbolIndexState {
+  if (state.status !== 'failed') return state;
+  const { logPath, ...rest } = state;
+  return { ...rest, hasLog: logPath !== null };
 }
 
 interface SpawnSpec {
@@ -266,7 +310,15 @@ interface StoredEntry extends CacheEntry {
   building: boolean;
 }
 
-class BuildError extends Error {}
+class BuildError extends Error {
+  constructor(
+    readonly reason: SymbolIndexFailure,
+    message: string,
+    readonly exitCode?: number | null,
+  ) {
+    super(message);
+  }
+}
 
 interface QueuedBuild {
   sha: string;
@@ -298,7 +350,9 @@ export class ScipIndexBuilder {
   private tool: Promise<string | null> | null = null;
   private readonly waiting: QueuedBuild[] = [];
   private readonly urgent = new Set<string>();
+  private readonly indexability = new Map<string, Promise<Indexability>>();
   private building: Promise<void> | null = null;
+  private runningSha: string | null = null;
   private stopping: Promise<void> | null = null;
   private sweep: Promise<void> | null = null;
   private trimming: Promise<void> = Promise.resolve();
@@ -351,13 +405,10 @@ export class ScipIndexBuilder {
     return state;
   }
 
-  // Settles as soon as it is known whether the index is ready, being built or cannot be built.
   start(sha: string, options: IndexRequestOptions = {}): Promise<ScipBuildState> {
+    if (options.urgent) this.hurry(sha);
     const current = this.state(sha);
-    if (current.status === 'building' || current.status === 'ready') {
-      if (options.urgent) this.hurry(sha);
-      return Promise.resolve(current);
-    }
+    if (['queued', 'building', 'ready'].includes(current.status)) return Promise.resolve(current);
     return new Promise((resolvePromise) => {
       const settle = (state: ScipBuildState) => {
         stopListening();
@@ -368,6 +419,15 @@ export class ScipIndexBuilder {
       });
       this.request(sha, options).then(settle, () => settle(this.state(sha)));
     });
+  }
+
+  indexable(sha: string): Promise<Indexability> {
+    let known = this.indexability.get(sha);
+    if (!known) {
+      known = commitIndexability(this.repoPath, sha);
+      if (FULL_SHA.test(sha)) this.indexability.set(sha, known);
+    }
+    return known;
   }
 
   async useStored(sha: string): Promise<boolean> {
@@ -385,7 +445,8 @@ export class ScipIndexBuilder {
   }
 
   hurry(sha: string): void {
-    if (this.state(sha).status === 'building') this.markUrgent(sha);
+    const { status } = this.state(sha);
+    if (status === 'queued' || status === 'building') this.markUrgent(sha);
   }
 
   // The commit's index once it is ready, or null.
@@ -487,7 +548,7 @@ export class ScipIndexBuilder {
       return;
     }
     for (const [sha, state] of this.states) {
-      if (state.status === 'building') keep.add(sha);
+      if (state.status === 'building' || state.status === 'queued') keep.add(sha);
     }
     const entries = await this.storedEntries();
     for (const entry of entries) {
@@ -562,7 +623,7 @@ export class ScipIndexBuilder {
     }
     // A failed build is not retried within this run, even once its log is gone.
     const status = this.state(entry.sha).status;
-    if (!removedAll || status === 'failed' || status === 'building') return;
+    if (!removedAll || ['failed', 'building', 'queued'].includes(status)) return;
     if (status === 'ready' || this.jobs.get(entry.sha) === job) this.jobs.delete(entry.sha);
     this.loaded.delete(entry.sha);
     if (status !== 'none') this.setState(entry.sha, { status: 'none' });
@@ -581,10 +642,10 @@ export class ScipIndexBuilder {
     try {
       return await this.prepareAndBuild(sha);
     } catch (error) {
-      const reason = `index build failed: ${error instanceof Error ? error.message : String(error)}`;
+      const detail = `index build failed: ${error instanceof Error ? error.message : String(error)}`;
       const state: ScipBuildState = this.abort.signal.aborted
         ? { status: 'none' }
-        : { status: 'failed', reason, logPath: null };
+        : { status: 'failed', reason: 'error', detail, logPath: null };
       this.setState(sha, state);
       return state;
     }
@@ -597,30 +658,56 @@ export class ScipIndexBuilder {
       this.setState(sha, { status: 'ready' });
       return this.state(sha);
     }
+    const indexability = await this.indexable(sha);
+    if (this.abort.signal.aborted) return { status: 'none' };
+    if (indexability !== 'indexable') return this.unavailable(sha, indexability);
     this.tool ??= findScipJava(this.env, this.platform);
     const tool = await this.tool;
-    if (!tool || !(await isIndexableCommit(this.repoPath, sha)) || this.abort.signal.aborted) {
-      return { status: 'none' };
-    }
+    if (this.abort.signal.aborted) return { status: 'none' };
+    if (!tool) return this.unavailable(sha, 'no-scip-java');
 
-    this.setState(sha, { status: 'building' });
     const result = await this.enqueue(sha, () => this.build(sha, tool));
     this.setState(sha, result);
     return result;
   }
 
+  private unavailable(sha: string, reason: SymbolIndexUnavailableReason): ScipBuildState {
+    this.setState(sha, { status: 'unavailable', reason });
+    return this.state(sha);
+  }
+
   private enqueue(sha: string, build: () => Promise<ScipBuildState>): Promise<ScipBuildState> {
     return new Promise((resolvePromise, reject) => {
-      const queued: QueuedBuild = { sha, run: () => build().then(resolvePromise, reject) };
+      const queued: QueuedBuild = {
+        sha,
+        run: () => {
+          this.runningSha = sha;
+          this.setState(sha, { status: 'building', startedAt: Date.now() });
+          return build().then(resolvePromise, reject);
+        },
+      };
       if (this.urgent.has(sha)) this.waiting.splice(this.urgentCount(), 0, queued);
       else this.waiting.push(queued);
       this.building ??= this.drain();
+      this.announceQueue();
     });
   }
 
   private async drain(): Promise<void> {
     for (let next = this.waiting.shift(); next; next = this.waiting.shift()) await next.run();
     this.building = null;
+    this.runningSha = null;
+  }
+
+  private announceQueue(): void {
+    let ahead = this.runningSha;
+    for (const { sha } of this.waiting) {
+      const current = this.state(sha);
+      if (ahead && (current.status !== 'queued' || current.after !== ahead)) {
+        this.setState(sha, { status: 'queued', after: ahead });
+      }
+      ahead = sha;
+    }
   }
 
   private urgentCount(): number {
@@ -634,6 +721,7 @@ export class ScipIndexBuilder {
     const [queued] = at === -1 ? [] : this.waiting.splice(at, 1);
     if (queued) this.waiting.splice(this.urgentCount(), 0, queued);
     this.urgent.add(sha);
+    if (queued) this.announceQueue();
   }
 
   private async build(sha: string, tool: string): Promise<ScipBuildState> {
@@ -645,15 +733,19 @@ export class ScipIndexBuilder {
     if (this.abort.signal.aborted) return { status: 'none' };
 
     let work: string | null = null;
+    let indexStarted = false;
     try {
       await mkdir(dir, { recursive: true });
       work = await mkdtemp(join(dir, `work-${process.pid}-`));
       await this.extract(sha, work);
       await this.endChildren();
       const rawPath = join(work, 'index.scip');
+      indexStarted = true;
       await this.index(tool, work, rawPath, logPath);
       await this.endChildren();
-      if (!(await this.exists(rawPath))) throw new BuildError('scip-java wrote no index.scip');
+      if (!(await this.exists(rawPath))) {
+        throw new BuildError('no-output', 'scip-java wrote no index.scip');
+      }
       const index = await convertScipIndex(rawPath, { signal: this.abort.signal });
       await writeScipIndex(index, compactPath);
       this.remember(sha, index);
@@ -661,11 +753,25 @@ export class ScipIndexBuilder {
       return { status: 'ready' };
     } catch (error) {
       if (this.abort.signal.aborted) return { status: 'none' };
-      const reason =
+      const failure =
         error instanceof BuildError
-          ? error.message
-          : `index build failed: ${error instanceof Error ? error.message : String(error)}`;
-      return { status: 'failed', reason, logPath: await this.keepLogTail(logPath, reason) };
+          ? error
+          : new BuildError(
+              'error',
+              `index build failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+      const kept = indexStarted ? await this.keepLogTail(logPath, failure.message) : null;
+      const reason =
+        failure.reason === 'exit-code' && kept && NO_GRADLE.test(kept.tail)
+          ? 'no-gradle'
+          : failure.reason;
+      return {
+        status: 'failed',
+        reason,
+        ...(failure.exitCode === undefined ? {} : { exitCode: failure.exitCode }),
+        detail: failure.message,
+        logPath: kept?.path ?? null,
+      };
     } finally {
       await this.endChildren();
       if (work) await removeTree(work);
@@ -749,7 +855,7 @@ export class ScipIndexBuilder {
         if (--pending > 0) return;
         if (failure) {
           const detail = errors.join('').trim().split('\n').slice(-3).join(' ');
-          reject(new BuildError(detail ? `${failure}: ${detail}` : failure));
+          reject(new BuildError('error', detail ? `${failure}: ${detail}` : failure));
         } else {
           resolvePromise();
         }
@@ -774,7 +880,7 @@ export class ScipIndexBuilder {
   }
 
   private async index(tool: string, work: string, rawPath: string, logPath: string): Promise<void> {
-    if (this.abort.signal.aborted) throw new BuildError('stopped');
+    if (this.abort.signal.aborted) throw new BuildError('error', 'stopped');
     const log = await open(logPath, 'w');
     try {
       const spec = toolSpawnSpec(tool, ['index', '--output', rawPath], this.platform);
@@ -803,28 +909,34 @@ export class ScipIndexBuilder {
           });
         },
       );
-      if (outcome.error)
-        throw new BuildError(`scip-java could not start: ${outcome.error.message}`);
-      if (outcome.timedOut) throw new BuildError('scip-java timed out');
+      if (outcome.error) {
+        throw new BuildError('error', `scip-java could not start: ${outcome.error.message}`);
+      }
+      if (outcome.timedOut) throw new BuildError('timeout', 'scip-java timed out');
       if (outcome.code !== 0) {
-        throw new BuildError(`scip-java exited with code ${outcome.code ?? 'null'}`);
+        throw new BuildError(
+          'exit-code',
+          `scip-java exited with code ${outcome.code ?? 'null'}`,
+          outcome.code,
+        );
       }
     } finally {
       await log.close();
     }
   }
 
-  private async keepLogTail(logPath: string, reason: string): Promise<string | null> {
+  private async keepLogTail(
+    logPath: string,
+    reason: string,
+  ): Promise<{ path: string; tail: string } | null> {
     try {
       let log: Buffer = Buffer.alloc(0);
       try {
         log = await readFile(logPath);
-      } catch {
-        // No log when the build failed before scip-java started.
-      }
+      } catch {}
       const tail = log.subarray(Math.max(0, log.length - LOG_TAIL_BYTES));
       await writeFile(logPath, Buffer.concat([tail, Buffer.from(`\n[difit] ${reason}\n`)]));
-      return logPath;
+      return { path: logPath, tail: tail.toString('utf8') };
     } catch {
       return null;
     }
