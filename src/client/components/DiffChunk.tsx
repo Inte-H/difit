@@ -76,6 +76,10 @@ interface DiffChunkProps {
   foldedLines?: readonly FoldedLines[];
 }
 
+function lineNumberOn(line: DiffLine, side: DiffSide): number | undefined {
+  return side === 'old' ? line.oldLineNumber : line.newLineNumber;
+}
+
 export const DiffChunk = memo(function DiffChunk({
   chunk,
   chunkIndex,
@@ -113,6 +117,7 @@ export const DiffChunk = memo(function DiffChunk({
   } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const dragFromLineNumber = useRef(false);
+  const dragStartRow = useRef<DiffLine | null>(null);
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
   const canHover = useCanHover();
@@ -124,8 +129,8 @@ export const DiffChunk = memo(function DiffChunk({
     if (commentTrigger?.lineIndex !== undefined) {
       const line = chunk.lines[commentTrigger.lineIndex];
       if (line) {
-        const lineNumber = line.newLineNumber || line.oldLineNumber;
         const side: DiffSide = line.type === 'delete' ? 'old' : 'new';
+        const lineNumber = lineNumberOn(line, side);
         if (lineNumber) {
           setCommentingLine({ side, lineNumber });
           onCommentTriggerHandled?.();
@@ -160,9 +165,10 @@ export const DiffChunk = memo(function DiffChunk({
     setSelectionAnchor(selection);
   };
 
-  const startCommentDrag = (selection: LineSelection, fromLineNumber = false) => {
+  const startCommentDrag = (selection: LineSelection, row: DiffLine, fromLineNumber = false) => {
     if (!onAddComment) return;
     dragFromLineNumber.current = fromLineNumber;
+    dragStartRow.current = row;
     setSelectionAnchor(selection);
     setStartLine(selection.lineNumber);
     setEndLine(selection.lineNumber);
@@ -173,9 +179,11 @@ export const DiffChunk = memo(function DiffChunk({
   const handleCommentButtonMouseDown = ({
     isShiftClick,
     selection,
+    row,
   }: {
     isShiftClick: boolean;
     selection: LineSelection | null;
+    row: DiffLine;
   }) => {
     if (!selection) return;
 
@@ -184,7 +192,26 @@ export const DiffChunk = memo(function DiffChunk({
       return;
     }
 
-    startCommentDrag(selection);
+    startCommentDrag(selection, row);
+  };
+
+  // A drag from an unchanged line follows the side of the lines it reaches.
+  const extendCommentDrag = (row: DiffLine) => {
+    if (!dragSide) return;
+    const lineNumber = lineNumberOn(row, dragSide);
+    if (lineNumber) {
+      setEndLine(lineNumber);
+      return;
+    }
+    const otherSide: DiffSide = dragSide === 'old' ? 'new' : 'old';
+    const otherStart = dragStartRow.current && lineNumberOn(dragStartRow.current, otherSide);
+    const otherEnd = lineNumberOn(row, otherSide);
+    if (otherStart && otherEnd) {
+      setDragSide(otherSide);
+      setStartLine(otherStart);
+      setEndLine(otherEnd);
+      setSelectionAnchor({ side: otherSide, lineNumber: otherStart });
+    }
   };
 
   const handleRowClick = ({
@@ -260,15 +287,13 @@ export const DiffChunk = memo(function DiffChunk({
 
     if (typeof lineNumber === 'number') {
       // Single line
-      const line = lines.find((l) =>
-        side === 'old' ? l.oldLineNumber === lineNumber : l.newLineNumber === lineNumber,
-      );
+      const line = lines.find((l) => lineNumberOn(l, side) === lineNumber);
       return line?.content ?? '';
     } else {
       // Range of lines
       const [start, end] = lineNumber;
       const selectedLines = lines.filter((l) => {
-        const ln = side === 'old' ? l.oldLineNumber : l.newLineNumber;
+        const ln = lineNumberOn(l, side);
         return ln !== undefined && ln >= start && ln <= end;
       });
       return selectedLines.map((l) => l.content ?? '').join('\n');
@@ -288,14 +313,12 @@ export const DiffChunk = memo(function DiffChunk({
     [commentingLine, onAddComment, getSelectedCodeContent],
   );
 
-  const getThreadsForLine = (lineNumber: number, side: DiffSide) => {
+  const getThreadsForLine = (line: DiffLine) => {
     return threads
       .filter((thread) => {
-        const lineMatches = Array.isArray(thread.line)
-          ? thread.line[1] === lineNumber
-          : thread.line === lineNumber;
-        const sideMatches = !thread.side || thread.side === side;
-        return lineMatches && sideMatches;
+        const lineNumber = lineNumberOn(line, thread.side ?? 'new');
+        const lastLine = Array.isArray(thread.line) ? thread.line[1] : thread.line;
+        return lineNumber !== undefined && lineNumber === lastLine;
       })
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   };
@@ -316,23 +339,20 @@ export const DiffChunk = memo(function DiffChunk({
     }
   };
 
-  const getSelectedLineStyle = (lineNumber: number | undefined, side: DiffSide): string => {
-    if (!lineNumber) {
-      return '';
-    }
-
+  const getSelectedLineStyle = (line: DiffLine): string => {
     // Show selection during drag
-    if (isDragging && startLine && endLine) {
+    const draggedNumber = dragSide && lineNumberOn(line, dragSide);
+    if (isDragging && startLine && endLine && draggedNumber) {
       const min = Math.min(startLine, endLine);
       const max = Math.max(startLine, endLine);
-      if (lineNumber >= min && lineNumber <= max) {
+      if (draggedNumber >= min && draggedNumber <= max) {
         let classes = 'drag-selected';
         // Add top border for first line
-        if (lineNumber === min) {
+        if (draggedNumber === min) {
           classes += ' drag-selected-first';
         }
         // Add bottom border for last line
-        if (lineNumber === max) {
+        if (draggedNumber === max) {
           classes += ' drag-selected-last';
         }
         return classes;
@@ -340,7 +360,8 @@ export const DiffChunk = memo(function DiffChunk({
     }
 
     // Show selection for existing comment
-    if (commentingLine && commentingLine.side === side) {
+    const lineNumber = commentingLine && lineNumberOn(line, commentingLine.side);
+    if (commentingLine && lineNumber) {
       const start = Array.isArray(commentingLine.lineNumber)
         ? commentingLine.lineNumber[0]
         : commentingLine.lineNumber;
@@ -491,23 +512,16 @@ export const DiffChunk = memo(function DiffChunk({
                 </React.Fragment>
               ) : null;
             }
-            const currentLineNumber = line.newLineNumber || line.oldLineNumber || 0;
-            const currentLineSide: DiffSide = line.type === 'delete' ? 'old' : 'new';
             const formTargetLineNumber = commentingLine
               ? Array.isArray(commentingLine.lineNumber)
                 ? commentingLine.lineNumber[1]
                 : commentingLine.lineNumber
               : null;
 
-            // Determine which line number and side to use for fetching comments
-            // Delete lines: use oldLineNumber and 'old' side
-            // Add/normal lines: use newLineNumber and 'new' side
             const commentLineNumber =
               line.type === 'delete' ? line.oldLineNumber : line.newLineNumber;
             const commentSide: DiffSide = line.type === 'delete' ? 'old' : 'new';
-            const lineThreads = commentLineNumber
-              ? getThreadsForLine(commentLineNumber, commentSide)
-              : [];
+            const lineThreads = getThreadsForLine(line);
             // Generate ID for all lines to match the format used in useKeyboardNavigation
             const lineId = `file-${fileIndex}-chunk-${chunkIndex}-line-${index}`;
             const isCurrentLine =
@@ -525,21 +539,13 @@ export const DiffChunk = memo(function DiffChunk({
                   lineId={lineId}
                   isCurrentLine={isCurrentLine || false}
                   hoveredLineIndex={hoveredLine}
-                  selectedLineStyle={getSelectedLineStyle(
-                    line.newLineNumber || line.oldLineNumber,
-                    line.type === 'delete' ? 'old' : 'new',
-                  )}
+                  selectedLineStyle={getSelectedLineStyle(line)}
                   onMouseEnter={() => {
                     setHoveredLine(index);
                   }}
                   onMouseLeave={() => setHoveredLine(null)}
                   onMouseMove={() => {
-                    if (isDragging && startLine) {
-                      const lineNumber = line.newLineNumber || line.oldLineNumber;
-                      if (lineNumber) {
-                        setEndLine(lineNumber);
-                      }
-                    }
+                    if (isDragging && startLine) extendCommentDrag(line);
                   }}
                   onCommentButtonMouseDown={
                     onAddComment &&
@@ -551,6 +557,7 @@ export const DiffChunk = memo(function DiffChunk({
                       handleCommentButtonMouseDown({
                         isShiftClick: e.shiftKey,
                         selection,
+                        row: line,
                       });
                     })
                   }
@@ -563,7 +570,7 @@ export const DiffChunk = memo(function DiffChunk({
                   onLineNumberMouseDown={(e) => {
                     if (e.button !== 0 || e.shiftKey || !selection) return;
                     e.preventDefault();
-                    startCommentDrag(selection, true);
+                    startCommentDrag(selection, line, true);
                   }}
                   canHover={canHover}
                   onOpenInEditor={
@@ -675,8 +682,7 @@ export const DiffChunk = memo(function DiffChunk({
                   )}
 
                 {commentingLine &&
-                  commentingLine.side === currentLineSide &&
-                  formTargetLineNumber === currentLineNumber && (
+                  lineNumberOn(line, commentingLine.side) === formTargetLineNumber && (
                     <tr className="bg-[var(--bg-secondary)]">
                       <td colSpan={3} className="p-0">
                         <div
