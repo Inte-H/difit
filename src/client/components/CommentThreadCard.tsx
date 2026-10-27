@@ -6,11 +6,10 @@ import {
   type CommentThread,
   type DiffCommentMessage,
   REVIEWER_AUTHOR,
-  REVIEWER_EDIT_AUTHOR,
 } from '../../types/diff';
 import { formatCommentContent } from '../../utils/commentFormatting';
 import { isSameCommit } from '../../utils/diffSelection';
-import { isThreadResolved, reviewStateLabel } from '../../utils/reviewDecisions';
+import { appearsResolved, reviewStateLabel } from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { usePickedThreadId } from '../contexts/PickedThreadContext';
 import { useClickOutside } from '../hooks/useClickOutside';
@@ -247,8 +246,8 @@ export function CommentThreadCard({
   syntaxTheme,
 }: CommentThreadCardProps) {
   const [isReplying, setIsReplying] = useState(false);
-  const { decisions, recordDecision } = useFixupOverlay();
-  const isResolved = isThreadResolved(thread.id, decisions);
+  const { decisions, fixupsByThread, recordDecision } = useFixupOverlay();
+  const isResolved = appearsResolved(thread.id, fixupsByThread.get(thread.id) ?? [], decisions);
   const isFolded = decisions.some(
     (decision) => decision.threadId === thread.id && decision.kind === 'folded',
   );
@@ -264,7 +263,6 @@ export function CommentThreadCard({
     setWasPicked(isPicked);
     if (isPicked) setIsCollapsed(false);
   }
-  const answeredByEdit = thread.messages.some((message) => message.author === REVIEWER_EDIT_AUTHOR);
   const lineLabel = Array.isArray(thread.line)
     ? `${thread.line[0]}-${thread.line[1]}`
     : thread.line;
@@ -347,7 +345,7 @@ export function CommentThreadCard({
               {reviewStateLabel(review.state)}
             </span>
           )}
-          {review?.responding && !isResolved && (
+          {review?.responding && (
             <span
               data-testid="responding-chip"
               className="inline-flex h-5 shrink-0 items-center gap-1 rounded-full border border-github-accent px-2 text-[10px] font-medium text-github-accent"
@@ -458,31 +456,31 @@ export function CommentThreadCard({
           ))}
 
           {review &&
-            !isResolved &&
-            (review.state === 'awaiting-approval' || review.state === 'approved') && (
+            ((review.state === 'awaiting-approval' && !isResolved) ||
+              review.state === 'approved') && (
               <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
-                {review.state === 'awaiting-approval' && review.fixupSha && (
+                {review.state === 'awaiting-approval' && review.pendingFixups.length > 0 && (
                   <>
                     <button
                       type="button"
-                      onClick={() => review.onDecide(thread.id, 'approved', review.fixupSha ?? '')}
+                      onClick={() => review.onDecide(thread.id, 'approved', review.pendingFixups)}
                       className="min-h-10 flex-1 rounded border border-github-accent bg-github-accent/20 px-3 text-sm font-medium text-github-text-primary"
                     >
                       승인
                     </button>
                     <button
                       type="button"
-                      onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
+                      onClick={() => review.onDecide(thread.id, 'rejected', review.pendingFixups)}
                       className="min-h-10 flex-1 rounded border border-github-danger bg-github-danger/20 px-3 text-sm font-medium text-github-text-primary"
                     >
                       거절
                     </button>
                   </>
                 )}
-                {review.state === 'approved' && answeredByEdit && review.fixupSha && (
+                {review.state === 'approved' && review.revertibleFixups.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => review.onDecide(thread.id, 'rejected', review.fixupSha ?? '')}
+                    onClick={() => review.onDecide(thread.id, 'rejected', review.revertibleFixups)}
                     className="min-h-10 flex-1 rounded border border-github-danger bg-github-bg-secondary px-3 text-sm text-github-text-primary"
                   >
                     되돌리기

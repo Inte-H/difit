@@ -302,6 +302,8 @@ export interface ReviewDecision {
   at: string; // ISO 8601 format
 }
 
+export type FixupRef = Pick<ReviewDecision, 'fixupSha' | 'patchId'>;
+
 export type ThreadReviewState =
   | 'awaiting-fix'
   // No fixup yet, and the agent replied to the reviewer: the reviewer's turn.
@@ -334,7 +336,8 @@ export interface ThreadAwaitingAgent {
     'awaiting-fix' | 'awaiting-approval' | 'approved' | 'rejected' | 'withdrawn' | 'deleted'
   >;
   label?: string;
-  // A fixup still in the range that has to be dropped: rejected, or answering a deleted thread.
+  // Rejected, or answering a deleted thread.
+  rejectedFixupShas?: string[];
   rejectedFixupSha?: string;
   filePath: string;
   position: DiffCommentPosition;
@@ -356,6 +359,7 @@ export interface ThreadFixup {
   // What the commits answering no thread changed since the fixup before this one, or since the
   // review target for the first; left out when it was not read.
   plainChangesBefore?: PlainFileChange[];
+  foldTargetSha?: string;
 }
 
 export interface PlainFileChange {

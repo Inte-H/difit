@@ -516,7 +516,8 @@ describe('CommentThreadCard', () => {
             thread={mockThread}
             review={{
               state: 'awaiting-approval',
-              fixupSha: 'abc1234',
+              pendingFixups: [{ fixupSha: 'abc1234' }],
+              revertibleFixups: [],
               targetCommit: 'b7c2e10',
               responding: false,
               onDecide: vi.fn(),
@@ -582,6 +583,130 @@ describe('CommentThreadCard', () => {
       expect(screen.queryByText('해결됨')).not.toBeInTheDocument();
       expect(screen.getByText('Reply comment')).toBeInTheDocument();
       expect(screen.getByTitle('Resolve thread')).toBeInTheDocument();
+    });
+  });
+
+  describe('when approved', () => {
+    const at = (minute: number) => `2026-01-01T00:0${minute}:00Z`;
+    const record = (kind: ReviewDecision['kind'], minute: number): ReviewDecision => ({
+      threadId: 'thread-1',
+      kind,
+      fixupSha: kind === 'approved' ? 'aaaa' : '',
+      at: at(minute),
+    });
+    const overlayWith = (decisions: ReviewDecision[], recordDecision = vi.fn()) => ({
+      ...EMPTY_FIXUP_OVERLAY,
+      decisions,
+      recordDecision,
+    });
+    const review = (state: 'awaiting-approval' | 'approved', onUndoApproval = vi.fn()) => ({
+      state,
+      pendingFixups: [{ fixupSha: 'aaaa' }],
+      revertibleFixups: [{ fixupSha: 'aaaa' }],
+      targetCommit: 'b7c2e10',
+      responding: false,
+      onDecide: vi.fn(),
+      onUndoApproval,
+      onOpenReviewAt: vi.fn(),
+      onShowView: vi.fn(),
+    });
+    const card = (
+      decisions: ReviewDecision[],
+      state: 'awaiting-approval' | 'approved',
+      { recordDecision = vi.fn(), onUndoApproval = vi.fn(), onReplyToThread = vi.fn() } = {},
+    ) => (
+      <FixupOverlayProvider value={overlayWith(decisions, recordDecision)}>
+        <CommentThreadCard
+          thread={mockThread}
+          review={review(state, onUndoApproval)}
+          onResolveThread={vi.fn()}
+          onReplyToThread={onReplyToThread}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />
+      </FixupOverlayProvider>
+    );
+
+    it('collapses as resolved the moment the approval lands, with the check pressed', () => {
+      const { rerender } = render(card([], 'awaiting-approval'));
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+
+      rerender(card([record('approved', 0)], 'approved'));
+
+      expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+      expect(screen.getByTestId('resolved-chip')).toHaveTextContent('해결됨');
+      expect(screen.getByRole('button', { name: 'Reopen thread' })).toBeInTheDocument();
+    });
+
+    it('keeps undoing and reverting the approval reachable on the expanded card', async () => {
+      const user = userEvent.setup();
+      const onUndoApproval = vi.fn();
+      render(card([record('approved', 0)], 'approved', { onUndoApproval }));
+
+      await user.click(screen.getByRole('button', { name: 'Expand thread' }));
+      expect(screen.getByRole('button', { name: '되돌리기' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: '승인 취소' }));
+
+      expect(onUndoApproval).toHaveBeenCalledWith('thread-1');
+    });
+
+    it('reopens with an unresolved record when the check is pressed, keeping the approval', async () => {
+      const user = userEvent.setup();
+      const recordDecision = vi.fn();
+      const { rerender } = render(card([record('approved', 0)], 'approved', { recordDecision }));
+
+      await user.click(screen.getByRole('button', { name: 'Reopen thread' }));
+      expect(recordDecision).toHaveBeenCalledWith('thread-1', 'unresolved', '');
+
+      rerender(card([record('approved', 0), record('unresolved', 1)], 'approved'));
+      expect(screen.queryByTestId('resolved-chip')).not.toBeInTheDocument();
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+      expect(screen.getByTestId('review-state-chip')).toHaveTextContent('승인됨');
+      expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
+    });
+
+    it('opens again when the approval is undone', () => {
+      const { rerender } = render(card([record('approved', 0)], 'approved'));
+      expect(screen.queryByText('Reply comment')).not.toBeInTheDocument();
+
+      rerender(card([record('approved', 0), record('unapproved', 1)], 'awaiting-approval'));
+
+      expect(screen.queryByTestId('resolved-chip')).not.toBeInTheDocument();
+      expect(screen.getByText('Reply comment')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
+    });
+
+    it('still shows that the agent is answering a reply on an approved card', () => {
+      render(
+        <FixupOverlayProvider value={overlayWith([record('approved', 0)])}>
+          <CommentThreadCard
+            thread={mockThread}
+            review={{ ...review('approved'), responding: true }}
+            onResolveThread={vi.fn()}
+            onReplyToThread={vi.fn()}
+            onRemoveMessage={vi.fn()}
+            onUpdateMessage={vi.fn()}
+          />
+        </FixupOverlayProvider>,
+      );
+
+      expect(screen.getByTestId('resolved-chip')).toBeInTheDocument();
+      expect(screen.getByTestId('responding-chip')).toBeInTheDocument();
+    });
+
+    it('reopens the thread after sending a reply to it', async () => {
+      const user = userEvent.setup();
+      const recordDecision = vi.fn();
+      const onReplyToThread = vi.fn().mockResolvedValue(undefined);
+      render(card([record('approved', 0)], 'approved', { recordDecision, onReplyToThread }));
+
+      await user.click(screen.getByRole('button', { name: 'Expand thread' }));
+      await user.click(screen.getByRole('button', { name: '답글 달고 다시 열기...' }));
+      await user.type(screen.getByPlaceholderText('Write a reply...'), 'One more thing');
+      await user.click(screen.getByRole('button', { name: '답글 달고 다시 열기' }));
+
+      expect(onReplyToThread).toHaveBeenCalledWith('thread-1', 'One more thing');
+      expect(recordDecision).toHaveBeenCalledWith('thread-1', 'unresolved', '');
     });
   });
 
@@ -753,7 +878,8 @@ describe('CommentThreadCard', () => {
 
   const awaitingReview = {
     state: 'awaiting-approval' as const,
-    fixupSha: 'abc1234',
+    pendingFixups: [{ fixupSha: 'abc1234' }],
+    revertibleFixups: [] as Array<{ fixupSha: string }>,
     targetCommit: 'b7c2e10',
     responding: false,
     onDecide: vi.fn(),
@@ -762,12 +888,66 @@ describe('CommentThreadCard', () => {
     onShowView: vi.fn(),
   };
 
+  it('approves and rejects every fixup under judgment at once', async () => {
+    const user = userEvent.setup();
+    const onDecide = vi.fn();
+    const bundle = [{ fixupSha: 'aaaa', patchId: 'patch-a' }, { fixupSha: 'bbbb' }];
+    render(
+      <CommentThreadCard
+        thread={mockThread}
+        review={{ ...awaitingReview, pendingFixups: bundle, onDecide }}
+        onResolveThread={vi.fn()}
+        onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+        onRemoveMessage={vi.fn()}
+        onUpdateMessage={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: '승인' }));
+    await user.click(screen.getByRole('button', { name: '거절' }));
+
+    expect(onDecide.mock.calls).toEqual([
+      [mockThread.id, 'approved', bundle],
+      [mockThread.id, 'rejected', bundle],
+    ]);
+  });
+
+  it('reverts the fixup a reviewer edit made', async () => {
+    const user = userEvent.setup();
+    const onDecide = vi.fn();
+    const renderCard = (revertibleFixups: Array<{ fixupSha: string }>) =>
+      render(
+        <CommentThreadCard
+          thread={mockThread}
+          review={{
+            ...awaitingReview,
+            state: 'approved',
+            pendingFixups: [{ fixupSha: 'eeee' }],
+            revertibleFixups,
+            onDecide,
+          }}
+          onResolveThread={vi.fn()}
+          onReplyToThread={vi.fn().mockResolvedValue(undefined)}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />,
+      );
+
+    const { unmount } = renderCard([{ fixupSha: 'eeee' }]);
+    await user.click(screen.getByRole('button', { name: '되돌리기' }));
+    expect(onDecide).toHaveBeenCalledWith(mockThread.id, 'rejected', [{ fixupSha: 'eeee' }]);
+    unmount();
+    renderCard([]);
+    expect(screen.queryByRole('button', { name: '되돌리기' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
+  });
+
   it('shows that the agent is responding in place of the state chip', () => {
     const renderCard = (responding: boolean) =>
       render(
         <CommentThreadCard
           thread={mockThread}
-          review={{ ...awaitingReview, state: 'awaiting-fix', fixupSha: null, responding }}
+          review={{ ...awaitingReview, state: 'awaiting-fix', pendingFixups: [], responding }}
           onResolveThread={vi.fn()}
           onReplyToThread={vi.fn().mockResolvedValue(undefined)}
           onRemoveMessage={vi.fn()}
@@ -788,7 +968,7 @@ describe('CommentThreadCard', () => {
     render(
       <CommentThreadCard
         thread={mockThread}
-        review={{ ...awaitingReview, state: 'awaiting-fix', fixupSha: null, responding: true }}
+        review={{ ...awaitingReview, state: 'awaiting-fix', pendingFixups: [], responding: true }}
         onResolveThread={vi.fn()}
         onReplyToThread={vi.fn().mockResolvedValue(undefined)}
         onRemoveMessage={vi.fn()}

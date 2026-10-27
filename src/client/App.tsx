@@ -48,9 +48,9 @@ import {
 } from '../utils/diffSelection';
 import { countOpenThreadsByCommit } from '../utils/openCommentCounts';
 import {
+  appearsResolved,
   commentPanelStatus,
   isThreadDeleted,
-  isThreadResolved,
   mergeReviewDecisions,
   selectOpenThreads,
   type CommentPanelStatus,
@@ -82,7 +82,6 @@ import { SymbolPeekModal } from './components/SymbolPeekModal';
 import {
   type DirectEditControls,
   type DirectEditFailure,
-  recordWithPatchId,
   type FixupOverlayState,
 } from './contexts/FixupOverlayContext';
 import { PickedThreadProvider } from './contexts/PickedThreadContext';
@@ -440,6 +439,7 @@ function App() {
     replaceThreads,
     mergeDecisions,
     recordDecision,
+    recordFixupDecisions,
     undoApproval,
     addThread,
     replyToThread,
@@ -533,9 +533,13 @@ function App() {
   const resolvedThreadIds = useMemo(
     () =>
       new Set(
-        threads.filter((thread) => isThreadResolved(thread.id, decisions)).map(({ id }) => id),
+        threads
+          .filter((thread) =>
+            appearsResolved(thread.id, fixupsByThread.get(thread.id) ?? [], decisions),
+          )
+          .map(({ id }) => id),
       ),
-    [threads, decisions],
+    [threads, fixupsByThread, decisions],
   );
   if (resolvedThreadIds.size === 0 && !showResolvedThreads) setShowResolvedThreads(true);
   const commentPanelStatusById = useMemo(() => {
@@ -1568,7 +1572,8 @@ function App() {
       fixupsByThread,
       decisions,
       targetCommit,
-      recordDecision: recordWithPatchId(recordDecision, fixupsByThread),
+      recordDecision,
+      decideFixups: recordFixupDecisions,
       undoApproval,
       openReviewAt,
       showView: showDiff,
@@ -1587,6 +1592,7 @@ function App() {
       decisions,
       targetCommit,
       recordDecision,
+      recordFixupDecisions,
       undoApproval,
       openReviewAt,
       showDiff,
@@ -1790,9 +1796,11 @@ function App() {
     ): Promise<void> => {
       const group = fixupOnlyRef.current.find(({ fixup }) => fixup.sha === fixupSha);
       const fixupTarget =
+        group?.fixup.foldTargetSha ??
         (group?.threads ?? [])
           .map(({ id }) => threadsRef.current.find((thread) => thread.id === id)?.fixupTarget)
-          .find((target) => target !== undefined) ?? targetCommit;
+          .find((target) => target !== undefined) ??
+        targetCommit;
       const binding = fixupTarget ? { fixupTarget, snapshotCommit: fixupSha } : undefined;
       addThreadRef.current(newThread(file, line, body, codeContent, side, binding));
       return Promise.resolve();
@@ -2301,7 +2309,7 @@ function App() {
           <FileChips
             files={diffData.files}
             comments={drawnThreads}
-            decisions={decisions}
+            resolvedThreadIds={resolvedThreadIds}
             reviewedFiles={viewedFiles}
             selectedFileIndex={cursor?.fileIndex ?? null}
             scrollVisibleFileIndex={scrollVisibleFileIndex}
@@ -2415,7 +2423,7 @@ function App() {
                   onScrollToFile={scrollFileIntoDiffContainer}
                   onFileSelected={isMobile ? handleMobileFileSelected : undefined}
                   comments={drawnThreads}
-                  decisions={decisions}
+                  resolvedThreadIds={resolvedThreadIds}
                   reviewedFiles={viewedFiles}
                   onToggleReviewed={toggleFileReviewed}
                   onToggleFolderReviewed={toggleFolderReviewed}

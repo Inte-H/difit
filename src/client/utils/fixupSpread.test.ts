@@ -221,6 +221,20 @@ describe('spreadFixups', () => {
     expect(result.places.get('aaa1111:b.ts')).toEqual({ kind: 'card', threadId: 't2' });
   });
 
+  it('spreads every fixup a thread is waiting on, skipping the rejected one', () => {
+    const first = fixupOf('aaa1111', ['t1'], [file('a.ts', [replaceLine(5)])]);
+    const rejected = fixupOf('bbb2222', ['t1'], [file('c.ts', [replaceLine(7)])]);
+    const second = fixupOf('ccc3333', ['t1'], [file('b.ts', [replaceLine(3)])]);
+
+    const result = spread([first, rejected, second], [thread('t1', 'a.ts')], ['a.ts', 'b.ts'], {
+      decisions: [{ threadId: 't1', kind: 'rejected', fixupSha: 'bbb2222', at: '2026-01-02' }],
+    });
+
+    expect(result.places.get('aaa1111:a.ts')).toEqual({ kind: 'card', threadId: 't1' });
+    expect(result.places.get('ccc3333:b.ts')).toEqual({ kind: 'box', reviewPath: 'b.ts' });
+    expect(result.places.has('bbb2222:c.ts')).toBe(false);
+  });
+
   it('spreads nothing when overlaying is off or the fixup was rejected', () => {
     const fixup = fixupOf(
       'aaa1111',

@@ -225,6 +225,7 @@ npm i -g https://github.com/Inte-H/difit/releases/latest/download/difit.tgz
 
 - Resolve를 눌러도 지적을 지우지 않고 `해결됨`으로 접어 둔다. 눌린 ✓를 다시 누르거나 답글을 달면 다시 열린다. 도구 막대의 `해결된 지적 보기`를 끄면 diff에서 감춘다([이유](docs/adr/0007-resolve-keeps-the-thread.md))
 - 해결된 지적은 `Copy All`, 에이전트에게 넘기는 목록, 파일 목록의 댓글 수에서 빠진다
+- fixup을 승인한 지적도 Resolve를 따로 누르지 않아도 `해결됨`으로 접힌다. ✓를 눌러 다시 열어도 승인은 남고, 승인을 취소하면 Resolve로 따로 해결해 둔 지적이 아닌 한 다시 펼쳐진다. 승인한 지적에 단 답글은 그대로 에이전트에게 넘어간다
 - 댓글 입력창에서 Enter를 누르면 보내고 Shift+Enter로 줄을 바꾼다. 한글을 조합하는 중에 누른 Enter로는 보내지 않는다
 - 댓글 입력창에 `Add suggestion` 버튼이 없다
 - 지적 카드의 복사 버튼은 `경로:L42` 같은 위치 줄 없이 지적 글만 복사한다. 에이전트는 `difit comment get`으로 위치와 코드를 따로 받기 때문이다. 제안 블록을 풀어 복사하는 것과 `Copy All`이 위치 줄을 붙이는 것은 원래 difit과 같다

@@ -8,6 +8,7 @@ import {
   type DiffCommentThread,
   type DiffSide,
   type LegacyDiffComment,
+  type FixupRef,
   type ReviewDecision,
   type ReviewDecisionKind,
   REVIEWER_AUTHOR,
@@ -50,6 +51,12 @@ interface UseDiffCommentsReturn {
     kind: ReviewDecisionKind,
     fixupSha: string,
     patchId?: string,
+  ) => void;
+  // Records one decision per fixup, all at the same instant.
+  recordFixupDecisions: (
+    threadId: string,
+    kind: ReviewDecisionKind,
+    fixups: readonly FixupRef[],
   ) => void;
   undoApproval: (threadId: string) => void;
   addComment: (params: AddThreadParams) => LegacyDiffComment;
@@ -255,15 +262,23 @@ export function useDiffComments(
     [saveDecisions],
   );
 
-  const recordDecision = useCallback(
-    (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) => {
+  const recordFixupDecisions = useCallback(
+    (threadId: string, kind: ReviewDecisionKind, fixups: readonly FixupRef[]) => {
+      const at = new Date().toISOString();
       saveDecisions(
-        mergeReviewDecisions(decisionsRef.current.list, [
-          { threadId, kind, fixupSha, patchId, at: new Date().toISOString() },
-        ]),
+        mergeReviewDecisions(
+          decisionsRef.current.list,
+          fixups.map(({ fixupSha, patchId }) => ({ threadId, kind, fixupSha, patchId, at })),
+        ),
       );
     },
     [saveDecisions],
+  );
+
+  const recordDecision = useCallback(
+    (threadId: string, kind: ReviewDecisionKind, fixupSha: string, patchId?: string) =>
+      recordFixupDecisions(threadId, kind, [{ fixupSha, patchId }]),
+    [recordFixupDecisions],
   );
 
   const undoApproval = useCallback(
@@ -565,6 +580,7 @@ export function useDiffComments(
     replaceThreads,
     mergeDecisions,
     recordDecision,
+    recordFixupDecisions,
     undoApproval,
     addComment,
     addThread,

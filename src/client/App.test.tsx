@@ -376,6 +376,36 @@ describe('App Component - Clear Comments Functionality', () => {
       expect(showResolved()).toHaveAttribute('aria-checked', 'true');
     });
 
+    it('treats an approved comment as resolved until it is reopened or the approval is undone', async () => {
+      mockComments = [
+        createMockThread({ id: 'approved', filePath: 'test.ts', line: 10, body: 'Fixed' }),
+      ];
+      const record = (kind: ReviewDecision['kind'], minute: number): ReviewDecision => ({
+        threadId: 'approved',
+        kind,
+        fixupSha: kind === 'approved' ? 'aaaa' : '',
+        at: `2026-01-01T00:0${minute}:00Z`,
+      });
+      const showResolved = () => screen.queryByRole('checkbox', { name: '해결된 지적 보기' });
+      const app = () => (
+        <HotkeysProvider initiallyActiveScopes={['navigation']}>
+          <App />
+        </HotkeysProvider>
+      );
+      mockDecisions = [record('approved', 0)];
+
+      const { rerender } = renderApp();
+      expect(await screen.findByRole('checkbox', { name: '해결된 지적 보기' })).toBeInTheDocument();
+
+      mockDecisions = [record('approved', 0), record('unresolved', 1)];
+      rerender(app());
+      expect(showResolved()).not.toBeInTheDocument();
+
+      mockDecisions = [record('approved', 0), record('unapproved', 1)];
+      rerender(app());
+      expect(showResolved()).not.toBeInTheDocument();
+    });
+
     it('should not read fixups for a review that follows HEAD', async () => {
       mockComments = [
         createMockThread({ id: 'plain', filePath: 'test.ts', line: 10, body: 'Plain review' }),
@@ -1448,30 +1478,32 @@ describe('App Component - Returning from the review a comment was made on', () =
       },
     };
     const recordDecision = vi.fn();
+    const recordFixupDecisions = vi.fn();
     const undoApproval = vi.fn();
     const defaultComments = vi.mocked(useDiffComments).getMockImplementation()!;
     vi.mocked(useDiffComments).mockImplementation((...args) => ({
       ...defaultComments(...args),
       ...(storedByTarget[args[1] ?? ''] ?? { threads: [], decisions: [] }),
       recordDecision,
+      recordFixupDecisions,
       undoApproval,
     }));
     const chips = () =>
-      screen
-        .queryAllByTestId('review-state-chip')
+      [...screen.queryAllByTestId('review-state-chip'), ...screen.queryAllByTestId('resolved-chip')]
         .map((chip) => chip.textContent)
         .sort();
 
     try {
       renderApp();
-      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '해결됨']));
 
       fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
       await waitFor(() => expect(chips()).toEqual(['다시 수정 중']));
 
       act(() => window.history.back());
-      await waitFor(() => expect(chips()).toEqual(['수정 중', '승인됨']));
+      await waitFor(() => expect(chips()).toEqual(['수정 중', '해결됨']));
       expect(recordDecision).not.toHaveBeenCalled();
+      expect(recordFixupDecisions).not.toHaveBeenCalled();
       expect(undoApproval).not.toHaveBeenCalled();
     } finally {
       vi.mocked(useDiffComments).mockImplementation(defaultComments);
@@ -3489,11 +3521,11 @@ describe('App Component - Commits of the review', () => {
         files: [{ path: 'test.ts', status: 'modified', chunks: file.chunks }],
       },
     ];
-    const recordDecision = vi.fn();
+    const recordFixupDecisions = vi.fn();
     const defaultComments = vi.mocked(useDiffComments).getMockImplementation()!;
     vi.mocked(useDiffComments).mockImplementation((...args) => ({
       ...defaultComments(...args),
-      recordDecision,
+      recordFixupDecisions,
     }));
 
     try {
@@ -3504,7 +3536,9 @@ describe('App Component - Commits of the review', () => {
 
       expect(await screen.findByTestId('fixup-overlay-card')).toHaveTextContent('fffffff');
       fireEvent.click(screen.getByRole('button', { name: '승인' }));
-      expect(recordDecision).toHaveBeenCalledWith('c3', 'approved', 'f'.repeat(40), 'patch-1');
+      expect(recordFixupDecisions).toHaveBeenCalledWith('c3', 'approved', [
+        { fixupSha: 'f'.repeat(40), patchId: 'patch-1' },
+      ]);
       expect(vi.mocked(useDiffComments).mock.lastCall?.slice(0, 2)).toEqual(['def4567', 'abc1234']);
     } finally {
       vi.mocked(useDiffComments).mockImplementation(defaultComments);
@@ -3697,6 +3731,38 @@ describe('App Component - Commits of the review', () => {
             expect.objectContaining({
               filePath: 'src/new.test.ts',
               binding: { fixupTarget: COMMITS[0]!.sha, snapshotCommit: FIXUP_SHA },
+            }),
+          ],
+        ]),
+      );
+    });
+
+    it('binds a comment there to the commit the fixup folds into over the thread’s', async () => {
+      fixupsFor.current = [{ ...fixupAnsweringC1(), foldTargetSha: COMMITS[1]!.sha }];
+      mockComments = [
+        {
+          ...createMockThread({ id: 'c1', filePath: 'test.ts', line: 1, body: 'Look here' }),
+          fixupTarget: COMMITS[0]!.sha,
+        },
+      ];
+      renderApp();
+      const region = await fixupOnlyRegion();
+
+      const row = region.querySelector('[data-diff-line-row="true"]')!;
+      fireEvent.mouseEnter(row.children[2]!);
+      fireEvent.mouseDown(within(region).getByRole('button', { name: 'Add a comment' }), {
+        shiftKey: true,
+      });
+      fireEvent.change(await within(region).findByPlaceholderText(/comment/i), {
+        target: { value: 'Name this case' },
+      });
+      fireEvent.click(within(region).getByRole('button', { name: 'Submit' }));
+
+      await waitFor(() =>
+        expect(addedThreads()).toEqual([
+          [
+            expect.objectContaining({
+              binding: { fixupTarget: COMMITS[1]!.sha, snapshotCommit: FIXUP_SHA },
             }),
           ],
         ]),
