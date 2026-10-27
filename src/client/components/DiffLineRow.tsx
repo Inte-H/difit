@@ -27,6 +27,7 @@ interface DiffLineRowProps {
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
   onClick?: (e: React.MouseEvent<HTMLTableRowElement>) => void;
   filename?: string;
+  oldFilename?: string;
   diffSegments?: DiffSegment[];
 }
 
@@ -65,6 +66,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
     syntaxTheme,
     onClick,
     filename,
+    oldFilename,
     diffSegments,
   }) => {
     const lineNumber = line.newLineNumber || line.oldLineNumber;
@@ -108,7 +110,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
         <td
           className="p-0 w-full relative align-top"
           data-symbol-side={side}
-          data-symbol-path={filename}
+          data-symbol-path={side === 'old' ? (oldFilename ?? filename) : filename}
           data-symbol-line={sideLineNumber}
           {...codeCellAttributes(side, sideLineNumber)}
         >

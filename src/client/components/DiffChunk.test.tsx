@@ -1796,6 +1796,37 @@ describe('DiffChunk symbol positions', () => {
       });
       expect(emojiLine.indexOf('name')).toBe(19);
     });
+
+    it('looks a renamed file up by its old path on the old side', async () => {
+      renderWithProviders(
+        <DiffChunk
+          chunk={javaChunk}
+          chunkIndex={0}
+          threads={[]}
+          mode={mode}
+          onAddComment={asyncNoop}
+          onResolveThread={noop}
+          onReplyToThread={asyncNoop}
+          onRemoveMessage={noop}
+          onUpdateMessage={noop}
+          filename="src/Service.java"
+          oldFilename="src/OldService.java"
+        />,
+      );
+
+      const [deleted] = await wordsIn('old', 11, 'orElse');
+      expect(symbolRequestFromTarget(deleted!, refs)).toMatchObject({
+        ref: 'base111',
+        from: 'src/OldService.java',
+        line: 11,
+      });
+      const [added] = await wordsIn('new', 11, 'orElse');
+      expect(symbolRequestFromTarget(added!, refs)).toMatchObject({
+        ref: 'target2',
+        from: 'src/Service.java',
+        line: 11,
+      });
+    });
   });
 });
 

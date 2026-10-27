@@ -73,6 +73,7 @@ interface DiffChunkProps {
   } | null;
   onCommentTriggerHandled?: () => void;
   filename?: string;
+  oldFilename?: string;
   onOpenInEditor?: (filePath: string, lineNumber: number) => void;
   foldedLines?: readonly FoldedLines[];
 }
@@ -99,6 +100,7 @@ export const DiffChunk = memo(function DiffChunk({
   commentTrigger,
   onCommentTriggerHandled,
   filename,
+  oldFilename,
   onOpenInEditor,
   foldedLines = NO_FOLDS,
 }: DiffChunkProps) {
@@ -456,6 +458,7 @@ export const DiffChunk = memo(function DiffChunk({
         fileIndex={fileIndex}
         onLineClick={onLineClick}
         filename={filename}
+        oldFilename={oldFilename}
         commentTrigger={commentTrigger}
         onCommentTriggerHandled={onCommentTriggerHandled}
         foldedLines={foldedLines}
@@ -594,6 +597,7 @@ export const DiffChunk = memo(function DiffChunk({
                   }
                   syntaxTheme={syntaxTheme}
                   filename={filename}
+                  oldFilename={oldFilename}
                   diffSegments={wordLevelDiffMap.get(index)}
                   onClick={(e) => {
                     // Determine the side based on line type for unified mode
