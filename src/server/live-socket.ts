@@ -6,7 +6,11 @@ const LIVE_SOCKET_PATH = '/api/live';
 const LIVE_PING_INTERVAL_MS = 30_000;
 
 export function isLiveSocketRequest(request: IncomingMessage): boolean {
-  return request.url?.split('?')[0] === LIVE_SOCKET_PATH;
+  try {
+    return new URL(request.url ?? '/', 'http://localhost').pathname === LIVE_SOCKET_PATH;
+  } catch {
+    return false;
+  }
 }
 
 /**

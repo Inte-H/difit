@@ -1,6 +1,6 @@
 import { once } from 'events';
 import { promises as fs } from 'fs';
-import { request } from 'http';
+import { createServer, request } from 'http';
 import { createServer as createNetServer, type Server as NetServer } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -490,36 +490,39 @@ describe('Server Integration Tests', () => {
       expect(result.url).toContain('http://localhost:'); // Display host conversion
     });
 
-    it('answers an API request that offers an h2c upgrade', async () => {
-      const result = await startServer({
-        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
-        preferredPort: 9030,
-      });
-      servers.push(result.server);
+    it.skipIf(!('shouldUpgradeCallback' in createServer()))(
+      'answers an API request that offers an h2c upgrade',
+      async () => {
+        const result = await startServer({
+          selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+          preferredPort: 9030,
+        });
+        servers.push(result.server);
 
-      const status = await new Promise<number | undefined>((resolve, reject) => {
-        request(
-          {
-            host: 'localhost',
-            port: result.port,
-            path: '/api/diff',
-            headers: {
-              Connection: 'Upgrade, HTTP2-Settings',
-              Upgrade: 'h2c',
-              'HTTP2-Settings': 'AAMAAABkAARAAAAAAAIAAAAA',
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+          request(
+            {
+              host: 'localhost',
+              port: result.port,
+              path: '/api/diff',
+              headers: {
+                Connection: 'Upgrade, HTTP2-Settings',
+                Upgrade: 'h2c',
+                'HTTP2-Settings': 'AAMAAABkAARAAAAAAAIAAAAA',
+              },
             },
-          },
-          (response) => {
-            response.resume();
-            resolve(response.statusCode);
-          },
-        )
-          .on('error', reject)
-          .end();
-      });
+            (response) => {
+              response.resume();
+              resolve(response.statusCode);
+            },
+          )
+            .on('error', reject)
+            .end();
+        });
 
-      expect(status).toBe(200);
-    });
+        expect(status).toBe(200);
+      },
+    );
 
     it('passes context lines to the initial diff load', async () => {
       const result = await startServer({

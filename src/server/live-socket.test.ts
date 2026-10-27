@@ -53,13 +53,11 @@ describe('acceptLiveSockets', () => {
     expect(onConnection).not.toHaveBeenCalled();
   });
 
-  it('refuses an upgrade whose target is not a URL and keeps accepting sockets', async () => {
-    const onConnection = vi.fn();
-    const port = await listen(onConnection);
+  function sendRawUpgrade(port: number, target: string) {
     const raw = createConnection(port, '127.0.0.1');
     raw.write(
       [
-        'GET http://[ HTTP/1.1',
+        `GET ${target} HTTP/1.1`,
         'Host: 127.0.0.1',
         'Connection: Upgrade',
         'Upgrade: websocket',
@@ -69,8 +67,25 @@ describe('acceptLiveSockets', () => {
         '',
       ].join('\r\n'),
     );
+    return raw;
+  }
 
-    await once(raw, 'close');
+  it('accepts a socket whose request target is in absolute form', async () => {
+    const onConnection = vi.fn();
+    const port = await listen(onConnection);
+    const raw = sendRawUpgrade(port, `http://127.0.0.1:${port}/api/live`);
+    const [response] = (await once(raw, 'data')) as [Buffer];
+    raw.destroy();
+
+    expect(response.toString()).toMatch(/^HTTP\/1\.1 101 /);
+    expect(onConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses an upgrade whose target is not a URL and keeps accepting sockets', async () => {
+    const onConnection = vi.fn();
+    const port = await listen(onConnection);
+
+    await once(sendRawUpgrade(port, 'http://['), 'close');
     await once(connect(port, '/api/live'), 'open');
 
     expect(onConnection).toHaveBeenCalledTimes(1);
