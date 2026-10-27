@@ -359,8 +359,32 @@ describe('CommitList', () => {
       });
 
       expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
-      expect(screen.getByText('메시지를 비울 수는 없습니다.')).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent('메시지를 비울 수는 없습니다.');
       expect(save).not.toHaveBeenCalled();
+
+      fireEvent.change(editor, { target: { value: 'Review-Thread: abc' } });
+
+      expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+      expect(screen.getByRole('status')).toHaveTextContent('메시지를 비울 수는 없습니다.');
+    });
+
+    it('keeps saving off when only trailing spaces or blank lines were added', async () => {
+      renderRewordable();
+      fireEvent.click(editButtonOf(/2222222/));
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
+
+      fireEvent.change(editor, { target: { value: `${MESSAGE}  \n\n\n` } });
+
+      expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    });
+
+    it('says nothing about a blank message the commit already had', async () => {
+      renderRewordable({ load: vi.fn(async () => '') });
+      fireEvent.click(editButtonOf(/2222222/));
+      await screen.findByRole('textbox', { name: '커밋 메시지' });
+
+      expect(screen.queryByText('메시지를 비울 수는 없습니다.')).not.toBeInTheDocument();
     });
 
     it('drops an earlier refusal once the message is edited again', async () => {
@@ -373,9 +397,10 @@ describe('CommitList', () => {
       });
       expect(screen.getByRole('alert')).toHaveTextContent('refused');
 
-      fireEvent.change(editor, { target: { value: MESSAGE } });
+      fireEvent.change(editor, { target: { value: 'even better' } });
 
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '저장' })).toBeEnabled();
     });
 
     it('closes without saving on cancel and on Escape', async () => {

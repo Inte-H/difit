@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 
 import type { RewordRequest } from '../../types/diff';
+import { withoutThreadTrailers } from '../../utils/commitMessage';
 import type { DirectEditFailure } from '../contexts/FixupOverlayContext';
 import { rewordFailureMessage } from '../utils/directEdit';
 
@@ -22,8 +23,9 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
   const [text, setText] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [failure, setFailure] = useState<DirectEditFailure | null>(null);
-  const unchanged = original === null || text === original;
-  const blank = text.trim() === '';
+  const cleaned = withoutThreadTrailers(text);
+  const unchanged = original === null || cleaned === withoutThreadTrailers(original);
+  const blank = cleaned === '';
 
   const { load } = controls;
   useEffect(() => {
@@ -121,8 +123,8 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
         </div>
       )}
 
-      {original !== null && blank && (
-        <p className="mb-2 text-xs text-github-danger">
+      {!unchanged && blank && (
+        <p role="status" className="mb-2 text-xs text-github-danger">
           {rewordFailureMessage('empty-message', '')}
         </p>
       )}
