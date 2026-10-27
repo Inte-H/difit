@@ -2,7 +2,7 @@ import { execFileSync } from 'child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { POSITION_ENCODING, type ScipIndex, convertScipIndex } from './scip-index';
 import { type CommitFiles, answerFromScipIndex, commitFiles } from './scip-peek';
@@ -207,6 +207,10 @@ describe('answerFromScipIndex', () => {
 });
 
 describe('commitFiles', () => {
+  afterAll(() => {
+    vi.unstubAllEnvs();
+  });
+
   let repo: string;
   let first: string;
 
@@ -232,6 +236,10 @@ describe('commitFiles', () => {
   };
 
   beforeAll(() => {
+    // A git hook runs the suite with GIT_DIR set, which would point commitFiles at the hooked repository.
+    for (const key of Object.keys(process.env).filter((name) => name.startsWith('GIT_'))) {
+      vi.stubEnv(key, undefined);
+    }
     repo = join(temp, 'repo');
     mkdirSync(repo);
     git('init', '-q');
