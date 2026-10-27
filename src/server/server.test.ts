@@ -24,6 +24,12 @@ const reviewCommits = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock('./direct-edit.js', () => ({ commitDirectEdit, commitDirectReword }));
 vi.mock('./symbol-search.js', () => ({ searchSymbol }));
 
+const TEST_CLIENT_GONE_GRACE_MS = vi.hoisted(() => 1000);
+vi.mock('./client-presence.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./client-presence.js')>()),
+  CLIENT_GONE_GRACE_MS: TEST_CLIENT_GONE_GRACE_MS,
+}));
+
 // Helper function to get available port
 async function getAvailablePort(preferredPort: number): Promise<number> {
   let port = preferredPort;
@@ -1945,7 +1951,38 @@ describe('Server Integration Tests', () => {
     });
   });
 
-  describe('Keep-alive option', () => {
+  describe('Keep-alive option', { timeout: 15_000 }, () => {
+    const openHeartbeats = new Set<() => void>();
+
+    afterEach(async () => {
+      for (const close of openHeartbeats) close();
+      await Promise.all(
+        servers
+          .splice(0)
+          .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+      );
+    });
+
+    async function openHeartbeat(port: number): Promise<() => void> {
+      const controller = new AbortController();
+      const response = await fetch(`http://localhost:${port}/api/heartbeat`, {
+        signal: controller.signal,
+      });
+      await response.body?.getReader().read();
+      const close = () => {
+        openHeartbeats.delete(close);
+        controller.abort();
+      };
+      openHeartbeats.add(close);
+      return close;
+    }
+
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const waitForShutdown = () =>
+      vi.waitFor(() => expect(process.exit).toHaveBeenCalledWith(0), {
+        timeout: TEST_CLIENT_GONE_GRACE_MS * 3,
+      });
+
     it('accepts keepAlive option without error', async () => {
       const { port, server } = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
@@ -1973,63 +2010,79 @@ describe('Server Integration Tests', () => {
       });
       servers.push(server);
 
-      // Connect to heartbeat SSE endpoint and then abort
-      const controller = new AbortController();
-      const responsePromise = fetch(`http://localhost:${port}/api/heartbeat`, {
-        signal: controller.signal,
-      });
+      const closeOnly = await openHeartbeat(port);
 
-      // Wait for the connection to be established
-      const response = await responsePromise.catch(() => null);
-      if (response) {
-        // Start reading the stream to ensure connection is established
-        const reader = response.body?.getReader();
-        if (reader) {
-          await reader.read(); // Read the initial "connected" message
-        }
-      }
-
-      // Disconnect by aborting
-      controller.abort();
-
-      // Wait for the server's close handler + setTimeout(100ms) to run
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      closeOnly();
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
 
       // With keepAlive, process.exit should NOT have been called
       expect(process.exit).not.toHaveBeenCalled();
     });
 
-    it('calls process.exit on client disconnect when keepAlive is false', async () => {
+    it('keeps running when one of two tabs disconnects', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9080,
+      });
+      servers.push(server);
+      const closeFirst = await openHeartbeat(port);
+      const closeSecond = await openHeartbeat(port);
+
+      closeFirst();
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
+      expect(process.exit).not.toHaveBeenCalled();
+
+      closeSecond();
+      await waitForShutdown();
+    });
+
+    it('shuts down only after the last tab has been gone for the grace period', async () => {
       const { port, server } = await startServer({
         selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
         keepAlive: false,
         preferredPort: 9080,
       });
       servers.push(server);
+      const closeOnly = await openHeartbeat(port);
 
-      // Connect to heartbeat SSE endpoint and then abort
-      const controller = new AbortController();
-      const responsePromise = fetch(`http://localhost:${port}/api/heartbeat`, {
-        signal: controller.signal,
+      closeOnly();
+      await sleep(TEST_CLIENT_GONE_GRACE_MS / 2);
+      expect(process.exit).not.toHaveBeenCalled();
+
+      await waitForShutdown();
+    });
+
+    it('drops the pending shutdown once the server is closed', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9080,
       });
+      servers.push(server);
+      const closeOnly = await openHeartbeat(port);
 
-      // Wait for the connection to be established
-      const response = await responsePromise.catch(() => null);
-      if (response) {
-        const reader = response.body?.getReader();
-        if (reader) {
-          await reader.read(); // Read the initial "connected" message
-        }
-      }
+      closeOnly();
+      await new Promise<void>((resolve) => server!.close(() => resolve()));
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
 
-      // Disconnect by aborting
-      controller.abort();
+      expect(process.exit).not.toHaveBeenCalled();
+    });
 
-      // Wait for the server's close handler + setTimeout(100ms) to run
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    it('keeps running when a tab reconnects within the grace period, as on reload', async () => {
+      const { port, server } = await startServer({
+        selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+        preferredPort: 9080,
+      });
+      servers.push(server);
+      const closeBeforeReload = await openHeartbeat(port);
 
-      // Without keepAlive, process.exit SHOULD have been called
-      expect(process.exit).toHaveBeenCalledWith(0);
+      closeBeforeReload();
+      await sleep(100);
+      const closeAfterReload = await openHeartbeat(port);
+      await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
+      expect(process.exit).not.toHaveBeenCalled();
+
+      closeAfterReload();
+      await waitForShutdown();
     });
   });
 
