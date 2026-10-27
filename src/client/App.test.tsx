@@ -1538,8 +1538,9 @@ describe('App Component - Back and Forward between places in one review', () => 
     targetCommitish: target,
     requestedBaseCommitish: `${target}^`,
     requestedTargetCommitish: target,
-    files: Object.keys(FILE_TOPS).map((path) => linedFile(path, 30)),
+    files: Object.keys(FILE_TOPS).map((path) => filesByPath[path] ?? linedFile(path, 30)),
   });
+  let filesByPath: Record<string, DiffResponse['files'][number]> = {};
   const diffTargets = () =>
     vi
       .mocked(global.fetch)
@@ -1569,6 +1570,7 @@ describe('App Component - Back and Forward between places in one review', () => 
     mockComments = [];
     mockDecisions = [];
     scrolled = 0;
+    filesByPath = {};
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
       function (this: HTMLElement) {
         if (this.tagName === 'MAIN') return box(0, 800);
@@ -1578,9 +1580,10 @@ describe('App Component - Back and Forward between places in one review', () => 
         const top = fileTop - scrolled;
         if (this === section) return box(top, 2000);
         if (this.closest('[data-file-header]')) return box(Math.max(0, top), HEADER_HEIGHT);
-        const lineIndex = /^file-\d+-chunk-\d+-line-(\d+)/.exec(this.id)?.[1];
-        if (lineIndex === undefined) return box(top + 1000, LINE_HEIGHT);
-        return box(top + HEADER_HEIGHT + Number(lineIndex) * LINE_HEIGHT, LINE_HEIGHT);
+        const row = this.closest('[data-diff-line-row="true"]');
+        if (!row || !/^file-\d+-chunk-/.test(this.id)) return box(top + 1000, LINE_HEIGHT);
+        const rowIndex = [...section.querySelectorAll('[data-diff-line-row="true"]')].indexOf(row);
+        return box(top + HEADER_HEIGHT + rowIndex * LINE_HEIGHT, LINE_HEIGHT);
       },
     );
     Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
@@ -1624,22 +1627,69 @@ describe('App Component - Back and Forward between places in one review', () => 
     window.history.replaceState(null, '');
   });
 
-  it('goes back from a file picked in the file list to the line that was at the top', async () => {
+  it.each(['split', 'unified'])(
+    'in %s view, goes back from a file picked in the file list to the line that was at the top',
+    async (mode) => {
+      window.localStorage.setItem('difit.diffViewMode', mode);
+      renderApp();
+      await screen.findAllByTitle('c.ts');
+      await scrollTo(3100);
+      const lengthBefore = window.history.length;
+
+      fireEvent.click(fileListRow('c.ts'));
+      await waitFor(() => expect(scrolled).toBe(6000));
+      expect(window.history.length).toBe(lengthBefore + 1);
+
+      back();
+      await waitFor(() => expect(scrolled).toBe(3000 + 5 * LINE_HEIGHT - 8));
+      forward();
+      await waitFor(() => expect(scrolled).toBe(6000));
+      expect(window.history.length).toBe(lengthBefore + 1);
+    },
+  );
+
+  it('goes back to a deleted line whose row also shows a later added line', async () => {
+    const lines: DiffResponse['files'][number]['chunks'][number]['lines'] = [
+      ...[1, 2, 3, 4, 5].map((n) => ({
+        type: 'delete' as const,
+        content: `old ${n}`,
+        oldLineNumber: n,
+      })),
+      { type: 'add', content: 'new 1', newLineNumber: 1 },
+      ...[6, 7, 8, 9].map((n) => ({
+        type: 'normal' as const,
+        content: `same ${n}`,
+        oldLineNumber: n,
+        newLineNumber: n - 4,
+      })),
+    ];
+    filesByPath = {
+      'b.ts': {
+        path: 'b.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 5,
+        chunks: [
+          {
+            header: '@@ -1,9 +1,5 @@',
+            oldStart: 1,
+            oldLines: 9,
+            newStart: 1,
+            newLines: 5,
+            lines,
+          },
+        ],
+      },
+    };
     renderApp();
     await screen.findAllByTitle('c.ts');
-    await scrollTo(3100);
-    const lengthBefore = window.history.length;
+    await scrollTo(3000 + 3 * LINE_HEIGHT);
 
     fireEvent.click(fileListRow('c.ts'));
     await waitFor(() => expect(scrolled).toBe(6000));
-    expect(window.history.length).toBe(lengthBefore + 1);
-
     back();
-    // Line 6 of b.ts was the first one wholly below its header.
-    await waitFor(() => expect(scrolled).toBe(3000 + 5 * LINE_HEIGHT - 8));
-    forward();
-    await waitFor(() => expect(scrolled).toBe(6000));
-    expect(window.history.length).toBe(lengthBefore + 1);
+
+    await waitFor(() => expect(scrolled).toBe(3000 + 3 * LINE_HEIGHT - 8));
   });
 
   it('counts ] and Shift+N as jumps but not j and k, and Back puts the cursor back', async () => {

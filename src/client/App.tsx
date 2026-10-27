@@ -113,7 +113,11 @@ import { fetchClientSettings, saveClientSettings } from './services/userSettings
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
 import { fixupFileElementId, getFileElementId } from './utils/domUtils';
-import { getElementId } from './utils/navigation/domHelpers';
+import {
+  getElementId,
+  getFileLineIdPrefix,
+  positionFromElementId,
+} from './utils/navigation/domHelpers';
 import {
   findCommentPosition,
   findLinePlacePosition,
@@ -1467,15 +1471,18 @@ function App() {
     const files = navigableFilesRef.current;
     if (!container) return null;
     const containerRect = container.getBoundingClientRect();
-    const onScreen = (element: HTMLElement | null, below: number) => {
-      if (!element) return false;
-      const rect = element.getBoundingClientRect();
-      return rect.top >= below - 1 && rect.top < containerRect.bottom;
+    const headerBottom = (element: HTMLElement) => {
+      const header = element
+        .closest('[data-file-path]')
+        ?.querySelector<HTMLElement>('[data-file-header]');
+      return Math.max(containerRect.top, header?.getBoundingClientRect().bottom ?? 0);
     };
-    if (
-      cursor &&
-      onScreen(document.getElementById(getElementId(cursor, diffMode)), containerRect.top)
-    ) {
+    const onScreen = (element: HTMLElement) => {
+      const { top } = element.getBoundingClientRect();
+      return top >= headerBottom(element) - 1 && top < containerRect.bottom;
+    };
+    const cursorElement = cursor && document.getElementById(getElementId(cursor, diffMode));
+    if (cursor && cursorElement && onScreen(cursorElement)) {
       const line = linePlaceAt(cursor, files);
       if (line) return { kind: 'line', ...line, cursor: true };
     }
@@ -1485,35 +1492,27 @@ function App() {
     if (collapsedFiles.has(file.path)) return { kind: 'file', file: file.path };
     const section = document.getElementById(getFileElementId(file.path));
     if (section?.dataset.rendered !== 'true') return { kind: 'file', file: file.path };
-    const header = section.querySelector<HTMLElement>('[data-file-header]');
-    const below = Math.max(containerRect.top, header?.getBoundingClientRect().bottom ?? 0);
-    const positions = file.chunks.flatMap((chunk, chunkIndex) =>
-      chunk.lines.map((_, lineIndex) => ({ fileIndex, chunkIndex, lineIndex })),
+    const below = headerBottom(section);
+    // In page order, so their tops never go back up.
+    const lines = section.querySelectorAll<HTMLElement>(
+      `[id^="${getFileLineIdPrefix(fileIndex)}"]`,
     );
-    const sides = diffMode === 'split' ? (['right', 'left'] as const) : (['right'] as const);
-    const drawnAt = (index: number) => {
-      for (let next = index; next < positions.length; next++) {
-        const at = positions[next];
-        if (!at) break;
-        for (const side of sides) {
-          const position = { ...at, side };
-          const element = document.getElementById(getElementId(position, diffMode));
-          if (element) return { position, element };
-        }
-      }
-      return null;
-    };
     let low = 0;
-    let high = positions.length;
+    let high = lines.length;
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
-      const drawn = drawnAt(middle);
-      if (!drawn || drawn.element.getBoundingClientRect().top >= below - 1) high = middle;
+      if ((lines[middle]?.getBoundingClientRect().top ?? 0) >= below - 1) high = middle;
       else low = middle + 1;
     }
-    const first = drawnAt(low);
-    if (first && onScreen(first.element, below)) {
-      const line = linePlaceAt(first.position, files);
+    const first = lines[low];
+    const shown =
+      first
+        ?.closest('tr')
+        ?.querySelector<HTMLElement>(`[id^="${getFileLineIdPrefix(fileIndex)}"][id$="-right"]`) ??
+      first;
+    const position = shown ? positionFromElementId(shown.id) : null;
+    if (shown && position && onScreen(shown)) {
+      const line = linePlaceAt(position, files);
       if (line) return { kind: 'line', ...line, cursor: false };
     }
     return { kind: 'file', file: file.path };
