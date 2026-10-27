@@ -31,20 +31,24 @@ function columnOf(word: Element, name: string, line: Element): number | null {
   return null;
 }
 
-// A marker around the host covers only lines whose ref comes from the review, since a host with
-// its own ref numbers its lines in that ref.
-function hidesPosition(word: Element, host: HTMLElement): boolean {
-  const marker = word.closest('[data-symbol-no-position]');
-  return marker !== null && (host.contains(marker) || host.dataset.symbolRef === undefined);
-}
-
 function positionOf(word: Element, name: string, host: HTMLElement) {
   const line = word.closest<HTMLElement>('[data-symbol-line]');
-  if (!line || !host.contains(line) || hidesPosition(word, host)) return {};
+  if (!line || !host.contains(line)) return {};
   const lineNumber = Number(line.dataset.symbolLine);
   if (!Number.isInteger(lineNumber) || lineNumber < 1) return {};
   const column = columnOf(word, name, line);
   return column === null ? {} : { line: lineNumber, column };
+}
+
+function sideSource(host: HTMLElement, refs: ReviewRefs): { ref?: string; from?: string } {
+  const scope = host.closest<HTMLElement>('[data-symbol-new-ref]');
+  const from = host.dataset.symbolPath;
+  if (host.dataset.symbolSide === 'old') {
+    return scope
+      ? { ref: scope.dataset.symbolOldRef, from: scope.dataset.symbolOldPath ?? from }
+      : { ref: refs.base, from };
+  }
+  return { ref: scope ? scope.dataset.symbolNewRef : refs.target, from };
 }
 
 // Code that can be searched carries `data-symbol-ref`, or `data-symbol-side` when it is a diff
@@ -60,11 +64,12 @@ export function symbolRequestFromTarget(
 
   const host = word.closest<HTMLElement>('[data-symbol-ref], [data-symbol-side]');
   if (!host) return null;
-  const ref =
-    host.dataset.symbolRef ?? (host.dataset.symbolSide === 'old' ? refs.base : refs.target);
+  const { ref, from } =
+    host.dataset.symbolRef === undefined
+      ? sideSource(host, refs)
+      : { ref: host.dataset.symbolRef, from: host.dataset.symbolPath };
   if (!ref) return null;
 
-  const from = host.dataset.symbolPath;
   return from ? { name, ref, from, ...positionOf(word, name, host) } : { name, ref };
 }
 
