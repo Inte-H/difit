@@ -99,13 +99,18 @@ afterEach(async () => {
 });
 
 // A stand-in for `scip-java index --output <path>`.
-function fakeScipJava(gate?: string): { calls: string; pids: () => number[] } {
+function fakeScipJava(
+  gate?: string,
+  { failFirst = false }: { failFirst?: boolean } = {},
+): { calls: string; pids: () => number[] } {
   const dir = mkdtempSync(join(tmpdir(), 'difit-fake-scip-java-'));
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   const tool = join(dir, 'scip-java');
   const calls = join(dir, 'calls.log');
   const wait = gate ? `while [ ! -f '${gate}' ]; do sleep 0.05; done\n` : '';
-  writeFileSync(tool, `#!/bin/sh\necho $$ >> '${calls}'\n${wait}cp '${FIXTURE}' "$3"\n`);
+  const failed = join(dir, 'failed');
+  const fail = failFirst ? `if [ ! -f '${failed}' ]; then : > '${failed}'; exit 1; fi\n` : '';
+  writeFileSync(tool, `#!/bin/sh\necho $$ >> '${calls}'\n${wait}${fail}cp '${FIXTURE}' "$3"\n`);
   chmodSync(tool, 0o755);
   process.env.DIFIT_SCIP_JAVA = tool;
   return {
@@ -510,6 +515,142 @@ describe('symbol peek of a commit review', () => {
         expect(tool.pids()).toEqual([]);
       },
     );
+  });
+
+  describe('in a fixup commit on top of an indexed one', () => {
+    const edited = `${sourceLine(SERVICE, 17)} // edited`;
+    const fixupOfHead = () => {
+      const lines = readFileSync(join(FIXTURE_DIR, SERVICE), 'utf8').split('\n');
+      lines.splice(16, 1, edited);
+      lines.splice(1, 0, '// one', '// two');
+      git('checkout', '-q', '-b', 'fixups');
+      write(SERVICE, lines.join('\n'));
+      git('commit', '-q', '-am', 'fixup! members');
+      const fixup = git('rev-parse', 'HEAD');
+      git('checkout', '-q', 'main');
+      cleanups.push(() => {
+        git('branch', '-D', '-q', 'fixups');
+      });
+      return fixup;
+    };
+    const RENAMED_CALLER = {
+      name: '이름찾기',
+      from: SERVICE,
+      line: 16,
+      column: sourceLine(SERVICE, 14).indexOf('이름찾기'),
+    };
+
+    posixOnly('answers from the index of the commit it fixes, without building', async () => {
+      const fixup = fixupOfHead();
+      const tool = fakeScipJava();
+      const { api, peek, settle, settleSymbolIndex } = await openReview();
+      await settle();
+      expect((await fetch(api(`/api/diff?base=${head}&target=${fixup}`))).ok).toBe(true);
+      await settleSymbolIndex?.();
+
+      const unchanged = await peek({ ...RENAMED_CALLER, ref: fixup });
+      expect(unchanged.body).toMatchObject({
+        source: 'index',
+        definitions: [{ path: SERVICE, line: 16 }],
+        references: [{ path: SERVICE, line: 23 }],
+      });
+      const declaration = await peek({
+        name: 'findById',
+        from: PORT,
+        line: 6,
+        column: sourceLine(PORT, 6).indexOf('findById'),
+        ref: fixup,
+      });
+      expect(declaration.body.source).toBe('index');
+      expect(declaration.body.references).toEqual([
+        { path: SERVICE, line: 19, text: edited, source: 'name' },
+      ]);
+      const changed = await peek({ ...FIND_BY_ID, line: 19, ref: fixup });
+      expect(changed.body.source).toBe('name');
+      expect(changed.body.indexing).toBeUndefined();
+      expect(tool.pids()).toHaveLength(1);
+    });
+
+    posixOnly('waits for the index of the commit it fixes while it is built', async () => {
+      const gate = join(home, 'gate');
+      cleanups.push(() => rmSync(gate, { force: true }));
+      const fixup = fixupOfHead();
+      const tool = fakeScipJava(gate);
+      const { peek } = await openReview({ selection: createDiffSelection(base, head) });
+      await waitFor(async () => (tool.pids().length > 0 ? true : undefined));
+
+      const waiting = await peek({ ...RENAMED_CALLER, ref: fixup });
+      expect(waiting.body.source).toBe('name');
+      expect(waiting.body.indexing).toBe(head);
+      writeFileSync(gate, '');
+
+      await waitFor(async () => {
+        const { body } = await peek({ ...RENAMED_CALLER, ref: fixup });
+        return body.source === 'index' ? true : undefined;
+      });
+      expect(tool.pids()).toHaveLength(1);
+    });
+
+    posixOnly('builds a fixup commit once the build of the commit it fixes fails', async () => {
+      const gate = join(home, 'gate');
+      cleanups.push(() => rmSync(gate, { force: true }));
+      const fixup = fixupOfHead();
+      const tool = fakeScipJava(gate, { failFirst: true });
+      const { api, settleSymbolIndex } = await openReview();
+      await waitFor(async () => (tool.pids().length > 0 ? true : undefined));
+      expect((await fetch(api(`/api/diff?base=${head}&target=${fixup}`))).ok).toBe(true);
+
+      writeFileSync(gate, '');
+      await settleSymbolIndex?.();
+
+      expect(tool.pids()).toHaveLength(2);
+      expect(existsSync(join(home, 'difit', 'scip-index', head, 'index.lookup.gz'))).toBe(false);
+      expect(existsSync(join(home, 'difit', 'scip-index', fixup, 'index.lookup.gz'))).toBe(true);
+    });
+
+    posixOnly(
+      'answers from an indexed commit further down, and waits for a nearer one being built where that cannot answer',
+      async () => {
+        const gate = join(home, 'gate');
+        cleanups.push(() => rmSync(gate, { force: true }));
+        const fixed = fixupOfHead();
+        const next = git('commit-tree', `${fixed}^{tree}`, '-p', head, '-m', 'next');
+        const fixup = git('commit-tree', `${fixed}^{tree}`, '-p', next, '-m', 'fixup! next');
+        writeFileSync(gate, '');
+        const tool = fakeScipJava(gate);
+        const { api, peek, settle, settleSymbolIndex } = await openReview();
+        await settle();
+        rmSync(gate);
+        expect((await fetch(api(`/api/diff?base=${next}&target=${fixup}`))).ok).toBe(true);
+        await settleSymbolIndex?.();
+        expect((await peek({ ...FIND_BY_ID, ref: next })).body.indexing).toBe(next);
+        await waitFor(async () => (tool.pids().length > 1 ? true : undefined));
+
+        const unchanged = await peek({ ...RENAMED_CALLER, ref: fixup });
+
+        expect(unchanged.body).toMatchObject({
+          source: 'index',
+          definitions: [{ path: SERVICE, line: 16 }],
+          references: [{ path: SERVICE, line: 23 }],
+        });
+        expect(unchanged.body.indexing).toBeUndefined();
+        const changed = await peek({ ...FIND_BY_ID, line: 19, ref: fixup });
+        expect(changed.body.source).toBe('name');
+        expect(changed.body.indexing).toBe(next);
+        writeFileSync(gate, '');
+      },
+    );
+
+    posixOnly('builds a fixup commit that has no indexed commit under it', async () => {
+      const fixup = fixupOfHead();
+      const tool = fakeScipJava();
+      const { settle } = await openReview({ selection: createDiffSelection(head, fixup) });
+
+      await settle();
+
+      expect(tool.pids()).toHaveLength(1);
+      expect(existsSync(join(home, 'difit', 'scip-index', fixup, 'index.lookup.gz'))).toBe(true);
+    });
   });
 
   it('builds nothing and searches by name without scip-java', async () => {

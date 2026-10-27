@@ -9,7 +9,7 @@ import open from 'open';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { COMMIT_MESSAGE_PATH, REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
+import { AUTOSQUASH_PREFIX, COMMIT_MESSAGE_PATH, REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
 import { type DiffMode, type WatchEvent } from '../types/watch.js';
 import { amendedMessagesByCommit } from '../utils/amendedMessages.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
@@ -51,6 +51,7 @@ import { commitDirectEdit, commitDirectReword, type EditedView } from './direct-
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
+import { type LineChanges, lineChangesBetween } from './line-changes.js';
 import { acceptLiveSockets, isLiveSocketRequest } from './live-socket.js';
 import { runGit } from './run-git.js';
 import { ScipIndexBuilder } from './scip-build.js';
@@ -123,6 +124,8 @@ const LOOPBACK_ADDRESSES = new Set(['localhost', '127.0.0.1', '::1']);
 // A Host header wraps an IPv6 address in brackets.
 const LOOPBACK_HOST_HEADERS = new Set([...LOOPBACK_ADDRESSES, '[::1]']);
 const MAX_DIFF_CACHE_ENTRIES = 8;
+const INDEXED_ANCESTOR_DEPTH = 50;
+const MAX_LINE_CHANGES = 16;
 
 function parseIntAtLeast(value: unknown, min: number): number | undefined {
   if (typeof value !== 'string' || !/^\d{1,9}$/.test(value)) return undefined;
@@ -350,7 +353,7 @@ export async function startServer(options: ServerOptions): Promise<{
       selection.targetCommitish,
     ]);
     const commits = await Promise.all(refs.map((ref) => resolveCommit(ref)));
-    return commits.filter((commit): commit is string => commit !== null);
+    return [...commits.filter((commit): commit is string => commit !== null), ...borrowedIndexes];
   };
   const isShownBase = async (commit: string): Promise<boolean> => {
     for (const selection of [currentSelection, currentCommentSelection]) {
@@ -362,6 +365,80 @@ export async function startServer(options: ServerOptions): Promise<{
   const symbolIndex = options.stdinDiff
     ? undefined
     : new ScipIndexBuilder({ repoPath: repositoryPath, inUse: shownCommits });
+  // Indexes of older commits that answer for commits of the shown view without one of their own.
+  const borrowedIndexes = new Set<string>();
+  const firstParents = new Map<string, Promise<string[]>>();
+  const ancestorsOf = (commit: string): Promise<string[]> => {
+    let known = firstParents.get(commit);
+    if (!known) {
+      known = runGit(repositoryPath, [
+        'rev-list',
+        '--first-parent',
+        `--max-count=${INDEXED_ANCESTOR_DEPTH + 1}`,
+        commit,
+      ]).then((run) =>
+        run.code === 0 ? run.stdout.toString('utf8').split('\n').filter(Boolean).slice(1) : [],
+      );
+      firstParents.set(commit, known);
+    }
+    return known;
+  };
+  // The nearest ancestor with an index, and an ancestor nearer still whose index is being built.
+  const indexedAncestor = async (
+    commit: string,
+  ): Promise<{ ready: string | null; building: string | null }> => {
+    let building: string | null = null;
+    if (!symbolIndex) return { ready: null, building };
+    for (const ancestor of await ancestorsOf(commit)) {
+      const status = symbolIndex.state(ancestor).status;
+      if (status === 'building') building ??= ancestor;
+      else if (status === 'ready' || (await symbolIndex.useStored(ancestor))) {
+        return { ready: ancestor, building };
+      }
+    }
+    return { ready: null, building };
+  };
+  const fixupCommits = new Map<string, Promise<boolean>>();
+  const isFixupCommit = (commit: string): Promise<boolean> => {
+    let known = fixupCommits.get(commit);
+    if (!known) {
+      known = runGit(repositoryPath, ['log', '-1', '--format=%s', commit]).then(
+        (run) => run.code === 0 && AUTOSQUASH_PREFIX.test(run.stdout.toString('utf8')),
+      );
+      fixupCommits.set(commit, known);
+    }
+    return known;
+  };
+  const borrowIndex = (ancestor: { ready: string | null; building: string | null }) => {
+    for (const commit of [ancestor.ready, ancestor.building]) {
+      if (commit) borrowedIndexes.add(commit);
+    }
+  };
+  const borrowsIndex = async (commit: string): Promise<boolean> => {
+    if (!(await isFixupCommit(commit))) return false;
+    const ancestor = await indexedAncestor(commit);
+    borrowIndex(ancestor);
+    return ancestor.ready !== null || ancestor.building !== null;
+  };
+  const lineChanges = new Map<string, Promise<LineChanges | null>>();
+  const lineChangesSince = (older: string, newer: string): Promise<LineChanges | null> => {
+    const key = `${older}..${newer}`;
+    let known = lineChanges.get(key);
+    if (!known) {
+      known = lineChangesBetween(repositoryPath, older, newer)
+        .catch(() => null)
+        .then((changes) => {
+          if (!changes) lineChanges.delete(key);
+          return changes;
+        });
+      lineChanges.set(key, known);
+      for (const oldest of lineChanges.keys()) {
+        if (lineChanges.size <= MAX_LINE_CHANGES) break;
+        lineChanges.delete(oldest);
+      }
+    }
+    return known;
+  };
   const indexEvents = new Map<string, WatchEvent>();
   symbolIndex?.onChange((commit, state) => {
     const event: WatchEvent = {
@@ -379,7 +456,18 @@ export async function startServer(options: ServerOptions): Promise<{
     const pending: Promise<void> = (async () => {
       try {
         const commit = await resolveCommit(selection.targetCommitish);
-        if (commit) await symbolIndex.request(commit);
+        if (!commit) return;
+        if (await isFixupCommit(commit)) {
+          for (;;) {
+            const ancestor = await indexedAncestor(commit);
+            if (!diffSelectionsEqual(currentSelection, selection)) return;
+            borrowIndex(ancestor);
+            if (ancestor.ready) return;
+            if (!ancestor.building) break;
+            await symbolIndex.request(ancestor.building);
+          }
+        }
+        await symbolIndex.request(commit);
       } catch (error) {
         console.error('Error starting the symbol index:', error);
       }
@@ -537,6 +625,7 @@ export async function startServer(options: ServerOptions): Promise<{
       }
     }
 
+    if (!diffSelectionsEqual(currentSelection, requestedSelection)) borrowedIndexes.clear();
     currentSelection = requestedSelection;
 
     const viewSelection = createResolvedCommentSelection(
@@ -699,8 +788,11 @@ export async function startServer(options: ServerOptions): Promise<{
       const commit =
         symbolIndex && path !== undefined && isJavaPath(path) ? await resolveCommit(ref) : null;
       if (commit && at && symbolIndex) {
-        if (await isShownBase(commit)) await symbolIndex.start(commit, { urgent: true });
-        else if (!(await symbolIndex.useStored(commit))) symbolIndex.hurry(commit);
+        if ((await isShownBase(commit)) && !(await borrowsIndex(commit))) {
+          await symbolIndex.start(commit, { urgent: true });
+        } else if (!(await symbolIndex.useStored(commit))) {
+          symbolIndex.hurry(commit);
+        }
       }
       let askedIndex = false;
       const fromIndex = async () => {
@@ -722,9 +814,48 @@ export async function startServer(options: ServerOptions): Promise<{
         }
       };
 
+      const fromAncestor = async () => {
+        const status = commit ? symbolIndex?.state(commit).status : undefined;
+        if (!commit || !at || !symbolIndex || status === 'ready' || status === 'building') {
+          return null;
+        }
+        try {
+          const ancestor = await indexedAncestor(commit);
+          borrowIndex(ancestor);
+          if (ancestor.building) symbolIndex.hurry(ancestor.building);
+          const [index, changes] = ancestor.ready
+            ? await Promise.all([
+                symbolIndex.getIndex(ancestor.ready),
+                lineChangesSince(ancestor.ready, commit),
+              ])
+            : [null, null];
+          const answer =
+            index && changes
+              ? await answerFromScipIndex(
+                  index,
+                  name,
+                  ref,
+                  at,
+                  commitFiles(repositoryPath, commit, disconnected.signal),
+                  changes,
+                )
+              : null;
+          if (answer) return { answer };
+          return ancestor.building ? { waitingFor: ancestor.building } : null;
+        } catch (error) {
+          if (!disconnected.signal.aborted) console.error('Error reading the symbol index:', error);
+          return null;
+        }
+      };
+
       const indexed = await fromIndex();
       if (indexed) {
         res.json(indexed);
+        return;
+      }
+      const borrowed = await fromAncestor();
+      if (borrowed?.answer) {
+        res.json(borrowed.answer);
         return;
       }
       const response: SymbolSearchResponse = await searchSymbol(
@@ -741,6 +872,8 @@ export async function startServer(options: ServerOptions): Promise<{
         res.json(late);
       } else if (commit && at && state === 'building') {
         res.json({ ...response, indexing: commit });
+      } else if (borrowed?.waitingFor) {
+        res.json({ ...response, indexing: borrowed.waitingFor });
       } else {
         res.json(response);
       }

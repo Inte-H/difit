@@ -136,6 +136,8 @@ export interface SymbolMatch {
   // Set on a use of the clicked field that goes through a method Lombok generated from it: a
   // getter call, or a call of a @Builder method.
   via?: 'getter' | 'builder';
+  // `name` where the index may no longer be right, so the line was found by name.
+  source?: 'name';
 }
 
 export interface SymbolSearchResponse {
