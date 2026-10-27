@@ -460,6 +460,30 @@ describe('FileList unviewed filter', () => {
     expect(screen.queryByTitle('README.md')).not.toBeInTheDocument();
   });
 
+  it('moves focus to the next row when a focused file is marked viewed from the keyboard', () => {
+    const onToggleReviewed = vi.fn();
+    render(
+      <FileList
+        files={files}
+        onScrollToFile={vi.fn()}
+        comments={[]}
+        resolvedThreadIds={new Set()}
+        reviewedFiles={new Set()}
+        onToggleReviewed={onToggleReviewed}
+        onToggleFolderReviewed={vi.fn()}
+        selectedFileIndex={null}
+      />,
+    );
+    fireEvent.click(toggle());
+    const checkbox = within(getTreeRow('src/a.ts')).getByRole('checkbox');
+    checkbox.focus();
+
+    fireEvent.keyDown(checkbox, { key: 'Enter' });
+
+    expect(onToggleReviewed).toHaveBeenCalledWith('src/a.ts');
+    expect(document.activeElement).toBe(getTreeRow('src/b.ts'));
+  });
+
   it('drops a file once it is marked viewed and says when none are left', () => {
     const { rerender } = renderList(new Set(['README.md', 'docs/guide.md', 'src/a.ts']));
     fireEvent.click(toggle());

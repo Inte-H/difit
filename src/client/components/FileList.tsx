@@ -444,6 +444,12 @@ export const FileList = memo(function FileList({
     if (container) scrollRowIntoList(container, row, shouldUseStickyDirectoryHeaders);
   };
 
+  // The row is about to leave the unviewed-only list, so focus would fall to the page.
+  const moveFocusPastRow = (key: string) => {
+    if (!rowRefs.current.get(key)?.contains(document.activeElement)) return;
+    focusRow(shownRows[shownRows.findIndex((row) => row.key === key) + 1]);
+  };
+
   const shownRowOfFile = (fileIndex: number | null) => {
     const path = fileIndex === null ? undefined : files[fileIndex]?.path;
     return path === undefined ? undefined : shownRows.find((row) => row.key === fileRowKey(path));
@@ -675,6 +681,7 @@ export const FileList = memo(function FileList({
           <Checkbox
             checked={isReviewed}
             onChange={() => {
+              if (onlyUnviewed && !isReviewed) moveFocusPastRow(fileRowKey(file.path));
               onToggleReviewed(file.path);
             }}
             title={isReviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
