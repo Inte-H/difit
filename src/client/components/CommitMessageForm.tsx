@@ -26,6 +26,7 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
   const cleaned = withoutThreadTrailers(text);
   const unchanged = original === null || cleaned === withoutThreadTrailers(original);
   const blank = cleaned === '';
+  const blankHint = !unchanged && blank ? rewordFailureMessage('empty-message', '') : '';
 
   const { load } = controls;
   useEffect(() => {
@@ -123,11 +124,9 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
         </div>
       )}
 
-      {!unchanged && blank && (
-        <p role="status" className="mb-2 text-xs text-github-danger">
-          {rewordFailureMessage('empty-message', '')}
-        </p>
-      )}
+      <p role="status" className={`text-xs text-github-danger ${blankHint ? 'mb-2' : ''}`}>
+        {blankHint}
+      </p>
 
       <p className="mb-2 text-xs text-github-text-secondary">
         저장하면 이 커밋의 메시지만 바꾸는 amend! 커밋이 만들어지고, 마무리 때 접힙니다.

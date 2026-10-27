@@ -348,6 +348,8 @@ describe('CommitList', () => {
       expect(screen.getByRole('textbox', { name: '커밋 메시지' })).toHaveValue('better');
     });
 
+    const hintOf = (editor: HTMLElement) => within(editor.closest('form')!).getByRole('status');
+
     it('keeps saving off while the message is blank and says why', async () => {
       const { save } = renderRewordable();
       fireEvent.click(editButtonOf(/2222222/));
@@ -359,13 +361,13 @@ describe('CommitList', () => {
       });
 
       expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
-      expect(screen.getByRole('status')).toHaveTextContent('메시지를 비울 수는 없습니다.');
+      expect(hintOf(editor)).toHaveTextContent('메시지를 비울 수는 없습니다.');
       expect(save).not.toHaveBeenCalled();
 
       fireEvent.change(editor, { target: { value: 'Review-Thread: abc' } });
 
       expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
-      expect(screen.getByRole('status')).toHaveTextContent('메시지를 비울 수는 없습니다.');
+      expect(hintOf(editor)).toHaveTextContent('메시지를 비울 수는 없습니다.');
     });
 
     it('keeps saving off when only trailing spaces or blank lines were added', async () => {
@@ -376,15 +378,20 @@ describe('CommitList', () => {
       fireEvent.change(editor, { target: { value: `${MESSAGE}  \n\n\n` } });
 
       expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
-      expect(screen.queryByRole('status')).not.toBeInTheDocument();
+      expect(hintOf(editor)).toHaveTextContent('');
     });
 
     it('says nothing about a blank message the commit already had', async () => {
       renderRewordable({ load: vi.fn(async () => '') });
       fireEvent.click(editButtonOf(/2222222/));
-      await screen.findByRole('textbox', { name: '커밋 메시지' });
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
 
-      expect(screen.queryByText('메시지를 비울 수는 없습니다.')).not.toBeInTheDocument();
+      expect(hintOf(editor)).toHaveTextContent('');
+
+      fireEvent.change(editor, { target: { value: '   ' } });
+
+      expect(hintOf(editor)).toHaveTextContent('');
+      expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
     });
 
     it('drops an earlier refusal once the message is edited again', async () => {
