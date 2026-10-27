@@ -486,7 +486,7 @@ export function CommentThreadCard({
                     되돌리기
                   </button>
                 )}
-                {review.state === 'approved' && (
+                {review.state === 'approved' && review.revertibleFixups.length === 0 && (
                   <button
                     type="button"
                     onClick={() => review.onUndoApproval(thread.id)}

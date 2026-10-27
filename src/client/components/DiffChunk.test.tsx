@@ -1019,7 +1019,7 @@ describe('editing the reviewed code directly', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Expand thread' }));
-    expect(screen.getByRole('button', { name: '승인 취소' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '승인 취소' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '되돌리기' }));
 
     expect(decideFixups).toHaveBeenCalledWith('c1', 'rejected', [
