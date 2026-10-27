@@ -9,8 +9,9 @@ import open from 'open';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-import { REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
+import { COMMIT_MESSAGE_PATH, REVIEWER_EDIT_AUTHOR } from '../types/diff.js';
 import { type DiffMode, type WatchEvent } from '../types/watch.js';
+import { amendedMessagesByCommit } from '../utils/amendedMessages.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
 import { lineOfPosition } from '../utils/commentPosition.js';
 import {
@@ -25,6 +26,7 @@ import {
   NONE_EDITOR_ID,
   resolveEditorOption,
 } from '../utils/editorOptions.js';
+import { withoutThreadTrailers } from '../utils/commitMessage.js';
 import { createId } from '../utils/createId.js';
 import { getFileExtension } from '../utils/fileUtils.js';
 import { isSymbolName } from '../utils/symbolName.js';
@@ -42,7 +44,7 @@ import {
 
 import { validateCommitish } from '../cli/utils.js';
 import { sendToClaudeSession, sessionMessageFor } from './claude-session.js';
-import { commitDirectEdit } from './direct-edit.js';
+import { commitDirectEdit, commitDirectReword } from './direct-edit.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
@@ -55,6 +57,7 @@ import { parseUserSettingsPatch, readUserConfig, updateUserClientSettings } from
 import {
   type BaseMode,
   type ChangeKindsResponse,
+  type CommitMessageResponse,
   type CommentImport,
   type Comment,
   type CommentThread,
@@ -71,6 +74,9 @@ import {
   type RevisionsResponse,
   type ReviewCommit,
   type ReviewScope,
+  type RewordRejection,
+  type RewordRequest,
+  type RewordResponse,
   type SymbolSearchResponse,
   type ThreadAwaitingAgent,
   type ThreadFixup,
@@ -85,6 +91,7 @@ import {
   getDiffSelectionKey,
   isCommitHash,
   isCommitTarget,
+  isSameCommit,
   isSameView,
   isViewOfReview,
 } from '../utils/diffSelection.js';
@@ -107,6 +114,7 @@ interface ServerOptions {
 
 const GENERATED_STATUS_CACHE_TTL_MS = 60_000;
 const DIRECT_EDIT_MESSAGE = '직접 고침';
+const REWORD_MESSAGE = '메시지 직접 고침';
 const LOOPBACK_ADDRESSES = new Set(['localhost', '127.0.0.1', '::1']);
 // A Host header wraps an IPv6 address in brackets.
 const LOOPBACK_HOST_HEADERS = new Set([...LOOPBACK_ADDRESSES, '[::1]']);
@@ -1570,6 +1578,167 @@ export async function startServer(options: ServerOptions): Promise<{
       console.error('Error applying direct edit:', error);
       res.status(500).json({
         error: error instanceof Error ? error.message : 'Failed to apply direct edit',
+      });
+    }
+  });
+
+  const reviewCommitOf = (review: ReviewScope | undefined, commit: unknown) =>
+    typeof commit === 'string' && commit.length > 0
+      ? review?.commits.find(({ sha }) => isSameCommit(sha, commit))
+      : undefined;
+
+  async function messageAsReviewed(
+    selection: DiffSelection,
+    commit: ReviewCommit,
+  ): Promise<string> {
+    const { decisions } = getOrCreateCommentSession(selection);
+    const fixups = await parser.listFixupsForScreen(selection);
+    return (
+      amendedMessagesByCommit(fixups, decisions).get(commit.sha) ??
+      withoutThreadTrailers(await parser.readCommitMessage(commit.sha))
+    );
+  }
+
+  app.get('/api/commit-message', async (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    const commit = reviewCommitOf(findReviewOf(selection), req.query.commit);
+    if (!commit) {
+      res.status(400).json({ error: 'Not a commit of this review' });
+      return;
+    }
+    try {
+      const body: CommitMessageResponse = { message: await messageAsReviewed(selection, commit) };
+      res.json(body);
+    } catch (error) {
+      console.error('Error reading the commit message:', error);
+      res.status(500).json({ error: 'Failed to read the commit message' });
+    }
+  });
+
+  function parseRewordRequest(body: unknown): RewordRequest | null {
+    if (!body || typeof body !== 'object') return null;
+    const { commit, original, message } = body as Record<string, unknown>;
+    if (typeof commit !== 'string' || typeof original !== 'string' || typeof message !== 'string') {
+      return null;
+    }
+    return { commit, original, message };
+  }
+
+  const refuseReword = (
+    reason: RewordRejection,
+    output?: string,
+  ): { status: number; body: RewordResponse } => ({
+    status: 409,
+    body: {
+      error: `Reword refused: ${reason}`,
+      reason,
+      ...(output === undefined ? {} : { output }),
+    },
+  });
+
+  async function applyReword(
+    selection: DiffSelection,
+    review: ReviewScope,
+    commit: ReviewCommit,
+    request: RewordRequest,
+  ): Promise<{ status: number; body: RewordResponse }> {
+    const current = await messageAsReviewed(selection, commit);
+    if (withoutThreadTrailers(request.original) !== current) return refuseReword('stale-view');
+    if (withoutThreadTrailers(request.message) === current) return refuseReword('no-change');
+
+    const threadId = createId();
+    const result = await commitDirectReword(repositoryPath, selection.targetCommitish, {
+      commit: commit.sha,
+      message: request.message,
+      threadId,
+    });
+    if (!result.ok) return refuseReword(result.reason, result.output);
+    const binding = bindingForView(
+      review,
+      createDiffSelection(commit.parentSha, commit.sha),
+      commit.sha,
+    );
+
+    const session = getOrCreateCommentSession(selection);
+    const patchId = (await parser.readThreadFixup(result.sha))?.patchId;
+    const now = new Date().toISOString();
+    updateCommentSession(
+      selection,
+      [
+        ...session.threads,
+        {
+          id: threadId,
+          filePath: COMMIT_MESSAGE_PATH,
+          createdAt: now,
+          updatedAt: now,
+          position: { side: 'new', line: 1 },
+          messages: [
+            {
+              id: threadId,
+              body: REWORD_MESSAGE,
+              author: REVIEWER_EDIT_AUTHOR,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          ...(binding?.view ? { view: binding.view } : {}),
+          fixupTarget: commit.sha,
+        },
+      ],
+      mergeReviewDecisions(session.decisions, [
+        {
+          threadId,
+          kind: 'approved',
+          fixupSha: result.sha,
+          ...(patchId === undefined ? {} : { patchId }),
+          at: now,
+        },
+      ]),
+    );
+    return {
+      status: 200,
+      body: {
+        success: true,
+        sha: result.sha,
+        threadId,
+        version: session.version,
+        threads: session.threads,
+        decisions: session.decisions,
+      },
+    };
+  }
+
+  app.post('/api/reword', async (req, res) => {
+    const selection = getCommentSelectionFromQuery(req.query as Record<string, unknown>);
+    if (!canEditDirectly(selection)) {
+      res.status(403).json({ error: 'Rewording is not available for this review' });
+      return;
+    }
+    if (!LOOPBACK_HOST_HEADERS.has(req.hostname)) {
+      res.status(403).json({ error: 'Rewording accepts requests to localhost only' });
+      return;
+    }
+    if (!req.is('application/json')) {
+      res.status(415).json({ error: 'Expected application/json' });
+      return;
+    }
+    const request = parseRewordRequest(req.body);
+    const review = findReviewOf(selection);
+    const commit = request ? reviewCommitOf(review, request.commit) : undefined;
+    if (!request || !review || !commit) {
+      res.status(400).json({ error: 'Invalid reword request' });
+      return;
+    }
+
+    const run = directEditQueue.then(() => applyReword(selection, review, commit, request));
+    directEditQueue = run.catch(() => undefined);
+    try {
+      const { status, body } = await run;
+      res.status(status).json(body);
+    } catch (error) {
+      console.error('Error rewording a commit:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to reword the commit',
       });
     }
   });

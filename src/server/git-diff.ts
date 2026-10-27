@@ -22,6 +22,7 @@ import {
   AUTOSQUASH_PREFIX,
   REVIEW_THREAD_TRAILER,
 } from '../types/diff.js';
+import { withoutThreadTrailers } from '../utils/commitMessage.js';
 import {
   getMergeBaseTargetRef,
   isCommitTarget,
@@ -763,7 +764,8 @@ export class GitDiffParser {
   }
 
   // Replays the messages of each group in autosquash order: an amend! commit replaces the message
-  // with its own past the first paragraph. Left out from a squash! on, which git merges by hand.
+  // with its own past the first paragraph, less the thread trailers taken out after folding. Left
+  // out from a squash! on, which git merges by hand.
   private async readAmendedMessages(
     groups: TodoCommit[][],
     threadShas: ReadonlySet<string>,
@@ -797,7 +799,9 @@ export class GitDiffParser {
         for (const commit of folded) {
           if (message === undefined || commit.subject.startsWith('squash! ')) break;
           if (!commit.subject.startsWith('amend! ')) continue;
-          const after = withoutFirstParagraph(messageOf.get(commit.sha) ?? '');
+          const after = withoutThreadTrailers(
+            withoutFirstParagraph(messageOf.get(commit.sha) ?? ''),
+          );
           if (after.length === 0) break;
           if (threadShas.has(commit.sha)) bySha.set(commit.sha, { before: message, after });
           message = after;
@@ -894,9 +898,18 @@ export class GitDiffParser {
     const mergedOf = mainline.some((entry) => entry.isMerge)
       ? await this.listMergedCommits(mainline, range)
       : new Map<string, Pick<ReviewCommit, 'merged' | 'mergedOmitted'>>();
-    return mainline.flatMap(({ sha, firstParent, subject, threadIds }) =>
+    return mainline.flatMap(({ sha, firstParent, subject, threadIds, isMerge }) =>
       firstParent && threadIds.length === 0 && !AUTOSQUASH_PREFIX.test(subject)
-        ? [{ sha, shortSha: shortHash(sha), parentSha: firstParent, subject, ...mergedOf.get(sha) }]
+        ? [
+            {
+              sha,
+              shortSha: shortHash(sha),
+              parentSha: firstParent,
+              subject,
+              ...mergedOf.get(sha),
+              ...(isMerge ? { isMerge: true as const } : {}),
+            },
+          ]
         : [],
     );
   }
@@ -979,6 +992,20 @@ export class GitDiffParser {
           commitCount: others.length,
         }
       : null;
+  }
+
+  async readCommitMessage(sha: string): Promise<string> {
+    return (
+      await this.git.raw([
+        'log',
+        '-1',
+        '--no-show-signature',
+        '--encoding=UTF-8',
+        '--format=%B',
+        sha,
+        '--',
+      ])
+    ).trimEnd();
   }
 
   // A commit that is not a merge, read the way listThreadFixups reads it.

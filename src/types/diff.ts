@@ -68,6 +68,8 @@ export interface ReviewCommit {
   // oldest first; the oldest beyond a limit are only counted in `mergedOmitted`.
   merged?: MergedCommit[];
   mergedOmitted?: number;
+  // Set on a merge even when it brings in nothing `merged` would list.
+  isMerge?: true;
 }
 
 export interface ReviewScope {
@@ -323,6 +325,9 @@ export const AUTOSQUASH_PREFIX = /^(?:fixup|squash|amend)! /;
 
 export const REVIEWER_EDIT_AUTHOR = 'reviewer-edit';
 
+// Where a thread opened by rewording a commit message sits, after Gerrit's name for the message.
+export const COMMIT_MESSAGE_PATH = '/COMMIT_MSG';
+
 // Author the page writes on everything the reviewer types; any other author is the agent's.
 export const REVIEWER_AUTHOR = 'User';
 
@@ -417,6 +422,40 @@ export type DirectEditResponse =
       decisions: ReviewDecision[];
     }
   | { error: string; reason?: DirectEditRejection; output?: string };
+
+export interface RewordRequest {
+  commit: string;
+  // The message the reviewer started from; a mismatch means the view is out of date.
+  original: string;
+  message: string;
+}
+
+export type RewordRejection =
+  | 'stale-view'
+  | 'target-not-in-head'
+  | 'detached-head'
+  | 'operation-in-progress'
+  | 'merge-commit'
+  | 'empty-message'
+  | 'no-change'
+  | 'head-moved'
+  | 'commit-failed';
+
+export type RewordResponse =
+  | {
+      success: true;
+      sha: string;
+      threadId: string;
+      version: number;
+      threads: DiffCommentThread[];
+      decisions: ReviewDecision[];
+    }
+  | { error: string; reason?: RewordRejection; output?: string };
+
+// The message a commit of the review shows: the one its pending amend! commits leave, or its own.
+export interface CommitMessageResponse {
+  message: string;
+}
 
 // Where the ref the review was opened by now points, once commits other than fixups follow the target.
 export interface NewerTarget {
