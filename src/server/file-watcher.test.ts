@@ -1,7 +1,6 @@
 import type { Event } from '@parcel/watcher';
-import { type Response } from 'express';
 import { resolve } from 'path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { DiffMode } from '../types/watch.js';
 
@@ -28,17 +27,14 @@ const TEST_REPOS_WORKTREE_PATH = resolve('/repos/worktree');
 
 describe('FileWatcherService', () => {
   let fileWatcher: FileWatcherService;
-  let mockResponse: Response;
+  let mockClient: { send: Mock };
   let mockSubscription: { unsubscribe: () => Promise<void> };
 
   beforeEach(() => {
     vi.clearAllMocks();
     fileWatcher = new FileWatcherService();
 
-    // Mock Express Response
-    mockResponse = {
-      write: vi.fn(),
-    } as unknown as Response;
+    mockClient = { send: vi.fn() };
 
     // Mock subscription
     mockSubscription = {
@@ -115,33 +111,29 @@ describe('FileWatcherService', () => {
     });
 
     it('should clear clients', async () => {
-      fileWatcher.addClient(mockResponse);
+      fileWatcher.addClient(mockClient);
       await fileWatcher.stop();
 
       // After stop, adding client should work normally (clients array should be cleared)
-      expect(() => fileWatcher.addClient(mockResponse)).not.toThrow();
+      expect(() => fileWatcher.addClient(mockClient)).not.toThrow();
     });
   });
 
   describe('client management', () => {
     it('should add and remove clients', () => {
-      const mockResponse1 = { write: vi.fn() } as unknown as Response;
-      const mockResponse2 = { write: vi.fn() } as unknown as Response;
+      const mockClient1 = { send: vi.fn() };
+      const mockClient2 = { send: vi.fn() };
 
-      fileWatcher.addClient(mockResponse1);
-      fileWatcher.addClient(mockResponse2);
+      fileWatcher.addClient(mockClient1);
+      fileWatcher.addClient(mockClient2);
 
       // Should send connected event to new clients
-      expect(mockResponse1.write).toHaveBeenCalledWith(
-        expect.stringContaining('"type":"connected"'),
-      );
-      expect(mockResponse2.write).toHaveBeenCalledWith(
-        expect.stringContaining('"type":"connected"'),
-      );
+      expect(mockClient1.send).toHaveBeenCalledWith(expect.stringContaining('"type":"connected"'));
+      expect(mockClient2.send).toHaveBeenCalledWith(expect.stringContaining('"type":"connected"'));
 
-      fileWatcher.removeClient(mockResponse1);
+      fileWatcher.removeClient(mockClient1);
 
-      // mockResponse1 should be removed, but this is tested indirectly
+      // mockClient1 should be removed, but this is tested indirectly
       // by checking that only one client receives broadcasts
     });
   });
@@ -197,7 +189,7 @@ describe('FileWatcherService', () => {
       vi.mocked(simpleGit).mockReturnValue(mockGit as any);
 
       await fileWatcher.start(DiffMode.DEFAULT, TEST_REPO_PATH, 300);
-      fileWatcher.addClient(mockResponse);
+      fileWatcher.addClient(mockClient);
     });
 
     it('should filter relevant git files for DEFAULT mode', async () => {
@@ -216,7 +208,7 @@ describe('FileWatcherService', () => {
       await new Promise((resolve) => setTimeout(resolve, 350));
 
       // Should only broadcast for HEAD file in DEFAULT mode
-      expect(mockResponse.write).toHaveBeenCalledWith(expect.stringContaining('"type":"reload"'));
+      expect(mockClient.send).toHaveBeenCalledWith(expect.stringContaining('"type":"reload"'));
     });
 
     it('should filter out ignored patterns', async () => {
@@ -232,9 +224,7 @@ describe('FileWatcherService', () => {
       await callback(null, mockEvents);
 
       // Should not broadcast for ignored files
-      expect(mockResponse.write).not.toHaveBeenCalledWith(
-        expect.stringContaining('"type":"reload"'),
-      );
+      expect(mockClient.send).not.toHaveBeenCalledWith(expect.stringContaining('"type":"reload"'));
     });
   });
 
@@ -246,7 +236,7 @@ describe('FileWatcherService', () => {
       vi.mocked(simpleGit).mockReturnValue(mockGit as any);
 
       await fileWatcher.start(DiffMode.DEFAULT, TEST_REPO_PATH, 100); // Short debounce for testing
-      fileWatcher.addClient(mockResponse);
+      fileWatcher.addClient(mockClient);
     });
 
     it('should debounce multiple file changes', async () => {
@@ -265,7 +255,7 @@ describe('FileWatcherService', () => {
 
       // Should only send one reload event due to debouncing
       const reloadCalls = vi
-        .mocked(mockResponse.write)
+        .mocked(mockClient.send)
         .mock.calls.filter((call) => call[0].toString().includes('"type":"reload"'));
       expect(reloadCalls).toHaveLength(1);
     });
@@ -288,8 +278,8 @@ describe('FileWatcherService', () => {
         vi.mocked(simpleGit).mockReturnValue(mockGit as any);
 
         await fileWatcher.start(mode, TEST_REPO_PATH, 300);
-        const mockClient = { write: vi.fn() } as unknown as Response;
-        fileWatcher.addClient(mockClient);
+        const modeClient = { send: vi.fn() };
+        fileWatcher.addClient(modeClient);
 
         const subscribeCall = vi
           .mocked(subscribe)
@@ -302,7 +292,7 @@ describe('FileWatcherService', () => {
 
           await new Promise((resolve) => setTimeout(resolve, 350)); // Wait for debounce
 
-          expect(mockClient.write).toHaveBeenCalledWith(
+          expect(modeClient.send).toHaveBeenCalledWith(
             expect.stringContaining(`"changeType":"${expectedType}"`),
           );
         }

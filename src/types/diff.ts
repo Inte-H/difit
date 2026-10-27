@@ -149,7 +149,7 @@ export interface SymbolSearchResponse {
   // `java.util.Optional#orElse()`.
   library?: string;
   // The full sha of the commit whose index is being built; name search answers until
-  // /api/watch announces a `symbolIndexChanged` event for it.
+  // /api/live announces a `symbolIndexChanged` event for it.
   indexing?: string;
 }
 

@@ -114,27 +114,27 @@ Object.defineProperty(window, 'confirm', {
   value: mockConfirm,
 });
 
-// Mock EventSource
-class MockEventSource {
-  static instances: MockEventSource[] = [];
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
   onopen: (() => void) | null = null;
-  onerror: ((err: any) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onclose: (() => void) | null = null;
   close = vi.fn();
 
   constructor(url: string) {
     this.url = url;
-    MockEventSource.instances.push(this);
+    MockWebSocket.instances.push(this);
   }
 
   url: string;
 
   static clearInstances() {
-    MockEventSource.instances = [];
+    MockWebSocket.instances = [];
   }
 }
-Object.defineProperty(window, 'EventSource', {
+Object.defineProperty(window, 'WebSocket', {
   writable: true,
-  value: MockEventSource,
+  value: MockWebSocket,
 });
 
 let mockComments: DiffCommentThread[] = [];
@@ -189,7 +189,7 @@ const renderApp = () => {
 beforeEach(() => {
   window.localStorage.clear();
   vi.unstubAllEnvs();
-  MockEventSource.clearInstances();
+  MockWebSocket.clearInstances();
   mockViewedFiles = new Set<string>();
   mockHasLoadedInitialViewedFiles = true;
   mockReplaceThreads.mockReset();
@@ -798,25 +798,6 @@ describe('App Component - Clear Comments Functionality', () => {
       });
 
       expect(mockReplaceThreads).not.toHaveBeenCalledWith([...serverThreads, ...mockComments]);
-    });
-  });
-});
-
-describe('App Component - Heartbeat Connection', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockComments = [];
-    mockConfirm.mockReturnValue(false);
-    mockFetch(mockDiffResponse);
-  });
-
-  it('uses the direct API url for heartbeat when configured in development', async () => {
-    vi.stubEnv('VITE_DIFIT_API_URL', 'http://localhost:4969');
-
-    renderApp();
-
-    await waitFor(() => {
-      expect(MockEventSource.instances[0]?.url).toBe('http://localhost:4969/api/heartbeat');
     });
   });
 });

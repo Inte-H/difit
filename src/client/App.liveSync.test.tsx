@@ -7,21 +7,21 @@ import type { DiffCommentThread, DiffResponse, ReviewDecision, ThreadFixup } fro
 
 import App from './App';
 
-// Real hooks throughout: only the network (fetch, EventSource) is faked.
+// Real hooks throughout: only the network (fetch, WebSocket) is faked.
 
-class MockEventSource {
-  static instances: MockEventSource[] = [];
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: MessageEvent) => void) | null = null;
-  onerror: (() => void) | null = null;
+  onclose: (() => void) | null = null;
   close = vi.fn();
 
   constructor(public url: string) {
-    MockEventSource.instances.push(this);
+    MockWebSocket.instances.push(this);
   }
 
   static watchConnections() {
-    return MockEventSource.instances.filter((source) => source.url === '/api/watch');
+    return MockWebSocket.instances.filter((socket) => new URL(socket.url).pathname === '/api/live');
   }
 }
 
@@ -162,7 +162,7 @@ async function renderReview() {
   await settle();
 }
 
-const openWatch = () => MockEventSource.watchConnections().at(-1);
+const openWatch = () => MockWebSocket.watchConnections().at(-1);
 
 async function sendCommentsChanged() {
   const readsBefore = callsTo('/api/comments-json').length;
@@ -181,8 +181,8 @@ describe('App - live comment sync', { timeout: 15_000 }, () => {
   beforeEach(() => {
     window.localStorage.clear();
     vi.clearAllMocks();
-    vi.stubGlobal('EventSource', MockEventSource);
-    MockEventSource.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    MockWebSocket.instances = [];
     server = { version: 1, threads: [thread], decisions: [] };
     stubServer();
   });
@@ -191,10 +191,11 @@ describe('App - live comment sync', { timeout: 15_000 }, () => {
     vi.unstubAllGlobals();
   });
 
-  it('opens a single watch connection for a loaded review', async () => {
+  it('keeps one connection to the server for a loaded review', async () => {
     await renderReview();
 
-    expect(MockEventSource.watchConnections()).toHaveLength(1);
+    expect(MockWebSocket.watchConnections()).toHaveLength(1);
+    expect(MockWebSocket.instances).toHaveLength(1);
   });
 
   it.each(['승인', '거절'])('keeps the watch connection when %s is pressed', async (label) => {

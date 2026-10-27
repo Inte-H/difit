@@ -114,7 +114,7 @@ difit [commit-ish] [compare-with]
 | `/api/diff`            | GET    | Retrieve diff data with optional whitespace ignore |
 | `/api/comments`        | POST   | Save review comments                               |
 | `/api/comments-output` | GET    | Get formatted comments output                      |
-| `/api/heartbeat`       | GET    | SSE endpoint for tab close detection               |
+| `/api/live`            | WS     | Watch events per open tab; tab close detection     |
 
 ### Request Flow
 

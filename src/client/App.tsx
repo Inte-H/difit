@@ -113,7 +113,6 @@ import { copyTextToClipboard } from './utils/clipboard';
 import { fixupFileElementId, getFileElementId } from './utils/domUtils';
 import { getElementId } from './utils/navigation/domHelpers';
 import { findCommentPosition } from './utils/navigation/positionHelpers';
-import { resolveEventSourceUrl } from './utils/eventSourceUrl';
 import {
   EMPTY_MERGED_CHUNKS_STATE,
   buildMergedChunksState,
@@ -1820,25 +1819,6 @@ function App() {
       window.removeEventListener('beforeunload', sendCommentsBeforeUnload);
     };
   }, [decisions, getCommentApiUrl, hasBootstrappedComments, storedThreads, syncThreadsToServer]);
-
-  // Establish SSE connection for tab close detection
-  useEffect(() => {
-    const eventSource = new EventSource(resolveEventSourceUrl('/api/heartbeat'));
-
-    eventSource.onopen = () => {
-      console.log('Connected to server heartbeat');
-    };
-
-    eventSource.onerror = () => {
-      console.log('Server connection lost');
-      eventSource.close();
-    };
-
-    // Cleanup on unmount
-    return () => {
-      eventSource.close();
-    };
-  }, []);
 
   const bindNewThread = useCallback(
     async (

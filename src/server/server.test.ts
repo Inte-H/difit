@@ -1,9 +1,12 @@
+import { once } from 'events';
 import { promises as fs } from 'fs';
+import { createServer, request } from 'http';
 import { createServer as createNetServer, type Server as NetServer } from 'net';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { WebSocket } from 'ws';
 
 // Set environment variable to skip fetch mocking
 process.env.VITEST_SERVER_TEST = 'true';
@@ -486,6 +489,40 @@ describe('Server Integration Tests', () => {
 
       expect(result.url).toContain('http://localhost:'); // Display host conversion
     });
+
+    it.skipIf(!('shouldUpgradeCallback' in createServer()))(
+      'answers an API request that offers an h2c upgrade',
+      async () => {
+        const result = await startServer({
+          selection: { targetCommitish: 'HEAD', baseCommitish: 'HEAD^' },
+          preferredPort: 9030,
+        });
+        servers.push(result.server);
+
+        const status = await new Promise<number | undefined>((resolve, reject) => {
+          request(
+            {
+              host: 'localhost',
+              port: result.port,
+              path: '/api/diff',
+              headers: {
+                Connection: 'Upgrade, HTTP2-Settings',
+                Upgrade: 'h2c',
+                'HTTP2-Settings': 'AAMAAABkAARAAAAAAAIAAAAA',
+              },
+            },
+            (response) => {
+              response.resume();
+              resolve(response.statusCode);
+            },
+          )
+            .on('error', reject)
+            .end();
+        });
+
+        expect(status).toBe(200);
+      },
+    );
 
     it('passes context lines to the initial diff load', async () => {
       const result = await startServer({
@@ -1556,12 +1593,6 @@ describe('Server Integration Tests', () => {
       expect(output).not.toContain('Other diff comment');
     });
 
-    it.skip('GET /api/heartbeat returns SSE headers', async () => {
-      // Skipped due to connection reset issues in test environment
-      // SSE endpoint functionality is verified through manual testing
-      expect(true).toBe(true);
-    });
-
     it('GET /api/diff sets openInEditorAvailable=false for stdin diff', async () => {
       const stdinServer = await startServer({
         stdinDiff: 'diff --git a/stdin-test.js b/stdin-test.js',
@@ -1952,10 +1983,10 @@ describe('Server Integration Tests', () => {
   });
 
   describe('Keep-alive option', { timeout: 15_000 }, () => {
-    const openHeartbeats = new Set<() => void>();
+    const openTabs = new Set<() => void>();
 
     afterEach(async () => {
-      for (const close of openHeartbeats) close();
+      for (const close of openTabs) close();
       await Promise.all(
         servers
           .splice(0)
@@ -1963,17 +1994,14 @@ describe('Server Integration Tests', () => {
       );
     });
 
-    async function openHeartbeat(port: number): Promise<() => void> {
-      const controller = new AbortController();
-      const response = await fetch(`http://localhost:${port}/api/heartbeat`, {
-        signal: controller.signal,
-      });
-      await response.body?.getReader().read();
+    async function openTab(port: number): Promise<() => void> {
+      const socket = new WebSocket(`ws://localhost:${port}/api/live`);
+      await once(socket, 'message');
       const close = () => {
-        openHeartbeats.delete(close);
-        controller.abort();
+        openTabs.delete(close);
+        socket.close();
       };
-      openHeartbeats.add(close);
+      openTabs.add(close);
       return close;
     }
 
@@ -2010,7 +2038,7 @@ describe('Server Integration Tests', () => {
       });
       servers.push(server);
 
-      const closeOnly = await openHeartbeat(port);
+      const closeOnly = await openTab(port);
 
       closeOnly();
       await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
@@ -2025,8 +2053,8 @@ describe('Server Integration Tests', () => {
         preferredPort: 9080,
       });
       servers.push(server);
-      const closeFirst = await openHeartbeat(port);
-      const closeSecond = await openHeartbeat(port);
+      const closeFirst = await openTab(port);
+      const closeSecond = await openTab(port);
 
       closeFirst();
       await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
@@ -2043,7 +2071,7 @@ describe('Server Integration Tests', () => {
         preferredPort: 9080,
       });
       servers.push(server);
-      const closeOnly = await openHeartbeat(port);
+      const closeOnly = await openTab(port);
 
       closeOnly();
       await sleep(TEST_CLIENT_GONE_GRACE_MS / 2);
@@ -2058,7 +2086,7 @@ describe('Server Integration Tests', () => {
         preferredPort: 9080,
       });
       servers.push(server);
-      const closeOnly = await openHeartbeat(port);
+      const closeOnly = await openTab(port);
 
       closeOnly();
       await new Promise<void>((resolve) => server!.close(() => resolve()));
@@ -2073,11 +2101,11 @@ describe('Server Integration Tests', () => {
         preferredPort: 9080,
       });
       servers.push(server);
-      const closeBeforeReload = await openHeartbeat(port);
+      const closeBeforeReload = await openTab(port);
 
       closeBeforeReload();
       await sleep(100);
-      const closeAfterReload = await openHeartbeat(port);
+      const closeAfterReload = await openTab(port);
       await sleep(TEST_CLIENT_GONE_GRACE_MS + 300);
       expect(process.exit).not.toHaveBeenCalled();
 

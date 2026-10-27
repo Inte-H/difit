@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process';
+import { once } from 'events';
 import {
   chmodSync,
   existsSync,
@@ -14,6 +15,7 @@ import { delimiter, dirname, join } from 'path';
 
 import { fetch } from 'undici';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
 
 import { startServer } from './server.js';
 import type { SymbolSearchResponse } from '../types/diff.js';
@@ -119,6 +121,8 @@ async function openReview(options: Parameters<typeof startServer>[0] = {}) {
     repoPath: repo,
     preferredPort: 9330,
     openBrowser: false,
+    // A page closed during cleanup must not start the shutdown that ends the test process.
+    keepAlive: true,
     ...options,
   });
   const { port, server, stopSymbolIndex, settleSymbolIndex } = started;
@@ -140,7 +144,20 @@ async function openReview(options: Parameters<typeof startServer>[0] = {}) {
     expect((await fetch(api('/api/diff'))).ok).toBe(true);
     await settleSymbolIndex?.();
   };
-  return { api, peek, stopSymbolIndex, settle, settleSymbolIndex };
+  const openPage = async (until: (received: string) => boolean) => {
+    const socket = new WebSocket(`ws://localhost:${port}/api/live`);
+    cleanups.push(() => socket.terminate());
+    let received = '';
+    const heard = new Promise<string>((resolve) => {
+      socket.on('message', (data: Buffer) => {
+        received += `${data.toString('utf8')}\n`;
+        if (until(received)) resolve(received);
+      });
+    });
+    await once(socket, 'open');
+    return { heard };
+  };
+  return { api, peek, stopSymbolIndex, settle, settleSymbolIndex, openPage };
 }
 
 const FIND_BY_ID = {
@@ -240,7 +257,7 @@ describe('symbol peek of a commit review', () => {
     const gate = join(home, 'gate');
     cleanups.push(() => rmSync(gate, { force: true }));
     fakeScipJava(gate);
-    const { api, peek } = await openReview();
+    const { api, peek, openPage } = await openReview();
 
     const building = await waitFor(async () => {
       const { body } = await peek({ ...FIND_BY_ID, ref: head });
@@ -263,21 +280,10 @@ describe('symbol peek of a commit review', () => {
     expect(Date.now() - started).toBeLessThan(2000);
     expect((await peek({ ...FIND_BY_ID, ref: head })).body.indexing).toBe(head);
 
-    const watching = new AbortController();
-    cleanups.push(() => watching.abort());
-    const watch = await fetch(api('/api/watch'), { signal: watching.signal });
-    const events = (async () => {
-      const decoder = new TextDecoder();
-      let received = '';
-      for await (const chunk of watch.body!) {
-        received += decoder.decode(chunk as Uint8Array, { stream: true });
-        if (received.includes('"status":"ready"')) return received;
-      }
-      return received;
-    })();
+    const { heard } = await openPage((received) => received.includes('"status":"ready"'));
     writeFileSync(gate, '');
 
-    const received = await events;
+    const received = await heard;
     expect(received).toContain(`"type":"symbolIndexChanged","commit":"${head}","status":"ready"`);
     const done = await peek({ ...FIND_BY_ID, ref: head });
     expect(done.body.source).toBe('index');
@@ -286,18 +292,11 @@ describe('symbol peek of a commit review', () => {
 
   posixOnly('tells a page that connects later how the index stands', async () => {
     fakeScipJava();
-    const { api, settle } = await openReview();
+    const { settle, openPage } = await openReview();
     await settle();
 
-    const watching = new AbortController();
-    cleanups.push(() => watching.abort());
-    const watch = await fetch(api('/api/watch'), { signal: watching.signal });
-    const decoder = new TextDecoder();
-    let received = '';
-    for await (const chunk of watch.body!) {
-      received += decoder.decode(chunk as Uint8Array, { stream: true });
-      if (received.includes('symbolIndexChanged')) break;
-    }
+    const { heard } = await openPage((received) => received.includes('symbolIndexChanged'));
+    const received = await heard;
 
     expect(received).toContain(`"type":"symbolIndexChanged","commit":"${head}","status":"ready"`);
   });
