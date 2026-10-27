@@ -348,6 +348,36 @@ describe('CommitList', () => {
       expect(screen.getByRole('textbox', { name: '커밋 메시지' })).toHaveValue('better');
     });
 
+    it('keeps saving off while the message is blank and says why', async () => {
+      const { save } = renderRewordable();
+      fireEvent.click(editButtonOf(/2222222/));
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
+
+      fireEvent.change(editor, { target: { value: '  \n ' } });
+      await act(async () => {
+        fireEvent.keyDown(editor, { key: 'Enter', ctrlKey: true });
+      });
+
+      expect(screen.getByRole('button', { name: '저장' })).toBeDisabled();
+      expect(screen.getByText('메시지를 비울 수는 없습니다.')).toBeInTheDocument();
+      expect(save).not.toHaveBeenCalled();
+    });
+
+    it('drops an earlier refusal once the message is edited again', async () => {
+      renderRewordable({ save: vi.fn(async () => ({ message: 'refused' })) });
+      fireEvent.click(editButtonOf(/2222222/));
+      const editor = await screen.findByRole('textbox', { name: '커밋 메시지' });
+      fireEvent.change(editor, { target: { value: 'better' } });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '저장' }));
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent('refused');
+
+      fireEvent.change(editor, { target: { value: MESSAGE } });
+
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
     it('closes without saving on cancel and on Escape', async () => {
       const { save } = renderRewordable();
       fireEvent.click(editButtonOf(/2222222/));

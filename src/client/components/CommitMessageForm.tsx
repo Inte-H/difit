@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 
 import type { RewordRequest } from '../../types/diff';
 import type { DirectEditFailure } from '../contexts/FixupOverlayContext';
+import { rewordFailureMessage } from '../utils/directEdit';
 
 export interface RewordControls {
   // The message the review shows for the commit; null when it could not be read.
@@ -22,6 +23,7 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
   const [isSaving, setIsSaving] = useState(false);
   const [failure, setFailure] = useState<DirectEditFailure | null>(null);
   const unchanged = original === null || text === original;
+  const blank = text.trim() === '';
 
   const { load } = controls;
   useEffect(() => {
@@ -43,7 +45,7 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
   }, [load, sha]);
 
   const save = async () => {
-    if (original === null || unchanged || isSaving) return;
+    if (original === null || unchanged || blank || isSaving) return;
     setIsSaving(true);
     setFailure(null);
     const result = await controls.save({
@@ -84,7 +86,10 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
           aria-label="커밋 메시지"
           className="mb-2 w-full resize-y rounded border border-github-border bg-github-bg-secondary px-2 py-1.5 font-mono text-xs leading-5 text-github-text-primary focus:border-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-600/30 disabled:opacity-50"
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            setFailure(null);
+          }}
           onKeyDown={handleKeyDown}
           rows={Math.min(12, Math.max(3, text.split('\n').length))}
           spellCheck={false}
@@ -116,6 +121,12 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
         </div>
       )}
 
+      {original !== null && blank && (
+        <p className="mb-2 text-xs text-github-danger">
+          {rewordFailureMessage('empty-message', '')}
+        </p>
+      )}
+
       <p className="mb-2 text-xs text-github-text-secondary">
         저장하면 이 커밋의 메시지만 바꾸는 amend! 커밋이 만들어지고, 마무리 때 접힙니다.
       </p>
@@ -132,7 +143,7 @@ export function CommitMessageForm({ sha, controls, onClose }: CommitMessageFormP
         <button
           type="submit"
           className="rounded border border-github-accent bg-github-accent/20 px-3 py-1 text-xs font-medium text-github-text-primary transition-all disabled:opacity-50"
-          disabled={unchanged || isSaving}
+          disabled={unchanged || blank || isSaving}
         >
           {isSaving ? '저장하는 중…' : '저장'}
         </button>
