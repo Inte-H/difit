@@ -120,7 +120,7 @@ export function threadReviewControls(
   return {
     state: deriveThreadReviewState(thread.id, fixups, overlay.decisions, thread),
     pendingFixups: pending.map(toRef),
-    revertibleFixups: reviewerEditFixups(thread, pending).map(toRef),
+    revertibleFixups: reviewerEditFixups(thread, fixups, overlay.decisions).map(toRef),
     targetCommit: overlay.targetCommit,
     responding: isAgentResponding(thread, overlay.fixupsByThread, overlay.decisions),
     onDecide: overlay.decideFixups,

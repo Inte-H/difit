@@ -117,7 +117,7 @@ export function isThreadResolved(threadId: string, decisions: ReviewDecision[]):
   return latestOf(own, ['resolved', 'unresolved'])?.kind === 'resolved';
 }
 
-type ThreadMessages = { messages?: ReadonlyArray<{ author?: string }> };
+type ThreadMessages = { messages?: ReadonlyArray<{ author?: string; createdAt?: string }> };
 
 export function isThreadDeleted(threadId: string, decisions: ReviewDecision[]): boolean {
   return decisions.some(
@@ -408,10 +408,31 @@ export function selectThreadsAwaitingAgent(
   });
 }
 
-// A lone pending fixup on a thread a reviewer edit answered is taken as that edit.
-export function reviewerEditFixups<T>(thread: ThreadMessages, pending: readonly T[]): T[] {
-  const edited = (thread.messages ?? []).some(({ author }) => author === REVIEWER_EDIT_AUTHOR);
-  return edited && pending.length === 1 ? [...pending] : [];
+// An edit is accepted only while no fixup on the thread is under judgment, so its fixup is the last
+// one authored by the time of its message. None is offered beside another standing fixup, which
+// may build on the edit.
+export function reviewerEditFixups(
+  thread: { id: string } & ThreadMessages,
+  fixups: ThreadFixup[],
+  decisions: ReviewDecision[],
+): ThreadFixup[] {
+  const authoredAt = (fixup: ThreadFixup) => Date.parse(fixup.authoredAt) || 0;
+  const written = new Set(
+    (thread.messages ?? [])
+      .filter(({ author }) => author === REVIEWER_EDIT_AUTHOR)
+      .flatMap(({ createdAt }) => {
+        const editedAt = Date.parse(createdAt ?? '') || 0;
+        const latest = fixups
+          .filter((fixup) => authoredAt(fixup) <= editedAt)
+          .reduce<ThreadFixup | undefined>(
+            (last, fixup) => (last && authoredAt(last) > authoredAt(fixup) ? last : fixup),
+            undefined,
+          );
+        return latest ? [latest] : [];
+      }),
+  );
+  const pending = pendingFixupsFor(thread.id, fixups, decisions);
+  return pending.every((fixup) => written.has(fixup)) ? pending : [];
 }
 
 export function pendingFixupsFor(

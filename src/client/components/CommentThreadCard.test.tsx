@@ -599,10 +599,14 @@ describe('CommentThreadCard', () => {
       decisions,
       recordDecision,
     });
-    const review = (state: 'awaiting-approval' | 'approved', onUndoApproval = vi.fn()) => ({
+    const review = (
+      state: 'awaiting-approval' | 'approved',
+      onUndoApproval = vi.fn(),
+      revertibleFixups: Array<{ fixupSha: string }> = [],
+    ) => ({
       state,
       pendingFixups: [{ fixupSha: 'aaaa' }],
-      revertibleFixups: [{ fixupSha: 'aaaa' }],
+      revertibleFixups,
       targetCommit: 'b7c2e10',
       responding: false,
       onDecide: vi.fn(),
@@ -613,12 +617,17 @@ describe('CommentThreadCard', () => {
     const card = (
       decisions: ReviewDecision[],
       state: 'awaiting-approval' | 'approved',
-      { recordDecision = vi.fn(), onUndoApproval = vi.fn(), onReplyToThread = vi.fn() } = {},
+      {
+        recordDecision = vi.fn(),
+        onUndoApproval = vi.fn(),
+        onReplyToThread = vi.fn(),
+        revertibleFixups = [] as Array<{ fixupSha: string }>,
+      } = {},
     ) => (
       <FixupOverlayProvider value={overlayWith(decisions, recordDecision)}>
         <CommentThreadCard
           thread={mockThread}
-          review={review(state, onUndoApproval)}
+          review={review(state, onUndoApproval, revertibleFixups)}
           onResolveThread={vi.fn()}
           onReplyToThread={onReplyToThread}
           onRemoveMessage={vi.fn()}
@@ -638,16 +647,26 @@ describe('CommentThreadCard', () => {
       expect(screen.getByRole('button', { name: 'Reopen thread' })).toBeInTheDocument();
     });
 
-    it('keeps undoing and reverting the approval reachable on the expanded card', async () => {
+    it('keeps undoing the approval reachable on the expanded card', async () => {
       const user = userEvent.setup();
       const onUndoApproval = vi.fn();
       render(card([record('approved', 0)], 'approved', { onUndoApproval }));
 
       await user.click(screen.getByRole('button', { name: 'Expand thread' }));
-      expect(screen.getByRole('button', { name: '되돌리기' })).toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: '승인 취소' }));
 
       expect(onUndoApproval).toHaveBeenCalledWith('thread-1');
+    });
+
+    it('keeps reverting a reviewer edit reachable on the expanded card', async () => {
+      const user = userEvent.setup();
+      render(
+        card([record('approved', 0)], 'approved', { revertibleFixups: [{ fixupSha: 'aaaa' }] }),
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Expand thread' }));
+      expect(screen.getByRole('button', { name: '되돌리기' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '승인 취소' })).not.toBeInTheDocument();
     });
 
     it('reopens with an unresolved record when the check is pressed, keeping the approval', async () => {
@@ -934,6 +953,7 @@ describe('CommentThreadCard', () => {
       );
 
     const { unmount } = renderCard([{ fixupSha: 'eeee' }]);
+    expect(screen.queryByRole('button', { name: '승인 취소' })).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '되돌리기' }));
     expect(onDecide).toHaveBeenCalledWith(mockThread.id, 'rejected', [{ fixupSha: 'eeee' }]);
     unmount();

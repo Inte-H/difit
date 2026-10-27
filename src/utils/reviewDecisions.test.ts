@@ -508,14 +508,89 @@ describe('commentPanelStatus', () => {
 });
 
 describe('reviewerEditFixups', () => {
-  it('takes a lone pending fixup on a thread a reviewer edit answered', () => {
-    const edited = {
-      messages: [{ author: REVIEWER_AUTHOR }, { author: REVIEWER_EDIT_AUTHOR }],
-    };
+  const at = (minute: number) => `2026-01-01T00:${String(minute).padStart(2, '0')}:00.000Z`;
+  const reviewerEdit = (minute: number) => ({
+    author: REVIEWER_EDIT_AUTHOR,
+    createdAt: at(minute),
+  });
+  const shas = (fixups: ThreadFixup[]) => fixups.map(({ sha }) => sha);
 
-    expect(reviewerEditFixups(edited, ['eeee'])).toEqual(['eeee']);
-    expect(reviewerEditFixups(edited, ['eeee', 'cccc'])).toEqual([]);
-    expect(reviewerEditFixups({ messages: [{ author: REVIEWER_AUTHOR }] }, ['eeee'])).toEqual([]);
+  it('takes the fixup the edit wrote just before its message', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(1)],
+    };
+    const edited = fixup('eeee', ['t1'], '2026-01-01T00:01:00Z');
+
+    expect(shas(reviewerEditFixups(thread, [edited], []))).toEqual(['eeee']);
+    expect(
+      shas(
+        reviewerEditFixups(
+          { id: 't1', messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }] },
+          [edited],
+          [],
+        ),
+      ),
+    ).toEqual([]);
+  });
+
+  it('leaves out an agent fixup that answered after the edit was reverted', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(1)],
+    };
+    const edited = fixup('eeee', ['t1'], '2026-01-01T00:01:00Z');
+    const agents = fixup('bbbb', ['t1'], '2026-01-01T00:05:00Z');
+    const decisions = [decision('rejected', 'eeee', at(2)), decision('approved', 'bbbb', at(6))];
+
+    expect(reviewerEditFixups(thread, [edited, agents], decisions)).toEqual([]);
+    expect(reviewerEditFixups(thread, [agents], decisions)).toEqual([]);
+  });
+
+  it('keeps the edited fixup after its approval is undone and given again', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(1)],
+    };
+    const edited = fixup('eeee', ['t1'], '2026-01-01T00:01:00Z');
+    const decisions = mergeReviewDecisions(
+      [decision('approved', 'eeee', at(1)), decision('unapproved', '', at(2))],
+      [decision('approved', 'eeee', at(3))],
+    );
+
+    expect(shas(reviewerEditFixups(thread, [edited], decisions))).toEqual(['eeee']);
+  });
+
+  it('offers nothing while an agent fixup written on top of the edit also stands', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(1)],
+    };
+    const fixups = [
+      fixup('eeee', ['t1'], '2026-01-01T00:01:00Z'),
+      fixup('aaaa', ['t1'], '2026-01-01T00:05:00Z'),
+    ];
+    const decisions = [decision('approved', 'eeee', at(6)), decision('approved', 'aaaa', at(6))];
+
+    expect(reviewerEditFixups(thread, fixups, decisions)).toEqual([]);
+    expect(
+      shas(reviewerEditFixups(thread, fixups, [...decisions, decision('rejected', 'aaaa', at(7))])),
+    ).toEqual(['eeee']);
+  });
+
+  it('pairs a second edit with its own fixup, not the agent fixup rejected before it', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(1), reviewerEdit(9)],
+    };
+    const fixups = [
+      fixup('eeee', ['t1'], '2026-01-01T00:01:00Z'),
+      fixup('bbbb', ['t1'], '2026-01-01T00:05:00Z'),
+      fixup('ffff', ['t1'], '2026-01-01T00:09:00Z'),
+    ];
+    const decisions = [decision('rejected', 'eeee', at(2)), decision('rejected', 'bbbb', at(8))];
+
+    expect(shas(reviewerEditFixups(thread, fixups, decisions))).toEqual(['ffff']);
   });
 });
 
