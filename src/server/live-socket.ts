@@ -1,9 +1,13 @@
-import { type Server } from 'http';
+import { type IncomingMessage, type Server } from 'http';
 
 import { WebSocketServer, type WebSocket } from 'ws';
 
 const LIVE_SOCKET_PATH = '/api/live';
 const LIVE_PING_INTERVAL_MS = 30_000;
+
+export function isLiveSocketRequest(request: IncomingMessage): boolean {
+  return request.url?.split('?')[0] === LIVE_SOCKET_PATH;
+}
 
 /**
  * Accepts the one WebSocket each open page keeps on {@link LIVE_SOCKET_PATH}. A socket that
@@ -17,7 +21,7 @@ export function acceptLiveSockets(
   const sockets = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, stream, head) => {
-    if (new URL(request.url ?? '/', 'http://localhost').pathname !== LIVE_SOCKET_PATH) {
+    if (!isLiveSocketRequest(request)) {
       stream.destroy();
       return;
     }

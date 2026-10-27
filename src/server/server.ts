@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
-import { type Server } from 'http';
+import { createServer, type Server } from 'http';
 import { join, dirname, isAbsolute, resolve, sep } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -49,7 +49,7 @@ import { commitDirectEdit, commitDirectReword } from './direct-edit.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
-import { acceptLiveSockets } from './live-socket.js';
+import { acceptLiveSockets, isLiveSocketRequest } from './live-socket.js';
 import { runGit } from './run-git.js';
 import { ScipIndexBuilder } from './scip-build.js';
 import { type SymbolPosition, answerFromScipIndex, commitFiles, isJavaPath } from './scip-peek.js';
@@ -2075,10 +2075,11 @@ async function startServerWithFallback(
   host: string,
 ): Promise<{ port: number; url: string; server: Server }> {
   return new Promise((resolve, reject) => {
-    // express's listen() method uses listen() method in node:net Server instance internally
-    // https://expressjs.com/en/5x/api.html#app.listen
-    // so, an error will be an instance of NodeJS.ErrnoException
-    const server = app.listen(preferredPort, host, (err: NodeJS.ErrnoException | undefined) => {
+    const server = createServer({ shouldUpgradeCallback: isLiveSocketRequest }, app);
+    let settled = false;
+    const onListen = (err?: NodeJS.ErrnoException) => {
+      if (settled) return;
+      settled = true;
       const displayHost = host === '0.0.0.0' ? 'localhost' : host;
       const url = `http://${displayHost}:${preferredPort}`;
       if (!err) {
@@ -2102,6 +2103,8 @@ async function startServerWithFallback(
           reject(new Error(`Failed to launch a server: ${err.message}`));
         }
       }
-    });
+    };
+    server.once('error', onListen);
+    server.listen(preferredPort, host, onListen);
   });
 }

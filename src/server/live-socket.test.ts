@@ -1,6 +1,6 @@
 import { once } from 'events';
 import { createServer, type Server } from 'http';
-import { type AddressInfo } from 'net';
+import { type AddressInfo, createConnection } from 'net';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
@@ -51,6 +51,29 @@ describe('acceptLiveSockets', () => {
 
     await expect(once(client, 'open')).rejects.toThrow();
     expect(onConnection).not.toHaveBeenCalled();
+  });
+
+  it('refuses an upgrade whose target is not a URL and keeps accepting sockets', async () => {
+    const onConnection = vi.fn();
+    const port = await listen(onConnection);
+    const raw = createConnection(port, '127.0.0.1');
+    raw.write(
+      [
+        'GET http://[ HTTP/1.1',
+        'Host: 127.0.0.1',
+        'Connection: Upgrade',
+        'Upgrade: websocket',
+        'Sec-WebSocket-Version: 13',
+        'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==',
+        '',
+        '',
+      ].join('\r\n'),
+    );
+
+    await once(raw, 'close');
+    await once(connect(port, '/api/live'), 'open');
+
+    expect(onConnection).toHaveBeenCalledTimes(1);
   });
 
   it('keeps a socket whose page answers every ping', async () => {
