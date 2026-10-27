@@ -15,6 +15,8 @@ import { useState } from 'react';
 import type { DiffFile } from '../../types/diff';
 import { copyTextToClipboard } from '../utils/clipboard';
 
+import { FilePathText } from './FilePathText';
+
 interface DiffViewerHeaderProps {
   file: DiffFile;
   isCollapsed: boolean;
@@ -93,8 +95,8 @@ export const DiffViewerHeader = ({
           {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
         </button>
         {getFileIcon(file.status)}
-        <h2 className="text-sm font-mono text-github-text-primary m-0 overflow-hidden text-ellipsis whitespace-nowrap">
-          {file.path}
+        <h2 className="min-w-0 text-sm font-mono text-github-text-primary m-0">
+          <FilePathText path={file.path} />
         </h2>
         <button
           className={`bg-transparent border-none cursor-pointer px-1.5 py-1 rounded text-sm transition-all hover:bg-github-bg-tertiary ${

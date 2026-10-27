@@ -70,6 +70,7 @@ import {
 import { DiffQuickMenu } from './components/DiffQuickMenu';
 import { DiffViewer } from './components/DiffViewer';
 import { FileChips } from './components/FileChips';
+import { FilePathText } from './components/FilePathText';
 import { CommitList, ShownCommits } from './components/CommitList';
 import { type RewordControls } from './components/CommitMessageForm';
 import { FileList, type FileListHandle } from './components/FileList';
@@ -2783,9 +2784,10 @@ function App() {
                             <div className="text-xs uppercase tracking-wide text-github-text-muted">
                               Deferred Rendering
                             </div>
-                            <div className="text-sm font-mono text-github-text-primary truncate">
-                              {file.path}
-                            </div>
+                            <FilePathText
+                              path={file.path}
+                              className="text-sm font-mono text-github-text-primary"
+                            />
                           </div>
                           <button
                             type="button"
