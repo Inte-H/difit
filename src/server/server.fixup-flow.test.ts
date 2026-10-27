@@ -228,6 +228,16 @@ it('folds the fixups for comments made on a run and on the whole review into the
   const line = { path: 'discount.js', start: '1', end: '1' };
   expect(await status({ base: docs, target: base, side: 'new', ...line })).toBe(404);
   expect(await status({ base, target: fix, side: 'middle', ...line })).toBe(400);
+  expect(await status({ base, target: docs, side: 'new', ...line, range: '2' })).toBe(400);
+  const target = async (query: string) =>
+    (
+      (await (await fetch(api(`/api/fixup-target?${query}`))).json()) as {
+        fixupTarget: string;
+      }
+    ).fixupTarget;
+  const unchangedLine = `base=${base}&target=${docs}&side=new&path=discount.js&start=3&end=3`;
+  expect(await target(unchangedLine)).toBe(docs);
+  expect(await target(`${unchangedLine}&range=1-1&range=2-2`)).toBe(fix);
 
   const at = '2026-10-20T00:00:00Z';
   const thread = (id: string, filePath: string, line: number, content: string) => ({

@@ -12,14 +12,16 @@ import { rangesAroundNewLines } from '../hooks/useExpandedLines';
 import type { DiffViewerBodyProps } from './types';
 
 function holdsThread(lines: DiffLine[], threads: CommentThread[]) {
-  return threads.some((thread) => {
-    const end = Array.isArray(thread.line) ? thread.line[1] : thread.line;
-    return lines.some(
-      (line) =>
-        (thread.side !== 'new' && line.oldLineNumber === end) ||
-        (thread.side !== 'old' && line.newLineNumber === end),
-    );
-  });
+  return threads.some((thread) =>
+    [...(thread.extraLines ?? []), thread.line].some((threadLine) => {
+      const end = Array.isArray(threadLine) ? threadLine[1] : threadLine;
+      return lines.some(
+        (line) =>
+          (thread.side !== 'new' && line.oldLineNumber === end) ||
+          (thread.side !== 'old' && line.newLineNumber === end),
+      );
+    }),
+  );
 }
 
 const holdsAnchor = (lines: DiffLine[], anchors: ReadonlySet<number>) =>

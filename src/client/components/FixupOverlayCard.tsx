@@ -351,7 +351,9 @@ function FixupFileBox({
   const isFocused = focusedFixupFile?.fixupSha === fixup.sha && focusedFixupFile.path === file.path;
   if (isFocused && !isOpen) setIsOpen(true);
   const lastThread = threads[threads.length - 1];
-  const lastLabel = lastThread ? locationLabel(lastThread.file, lastThread.line) : '';
+  const lastLabel = lastThread
+    ? locationLabel(lastThread.file, lastThread.line, lastThread.extraLines)
+    : '';
   return (
     <div
       id={chunkIndex === 0 ? fixupFileElementId(fixup.sha, file.path) : undefined}
@@ -370,7 +372,7 @@ function FixupFileBox({
               onClick={() => pickThread(thread.id)}
               className="font-mono text-github-accent hover:underline"
             >
-              {locationLabel(thread.file, thread.line)}
+              {locationLabel(thread.file, thread.line, thread.extraLines)}
             </button>
           </span>
         ))}

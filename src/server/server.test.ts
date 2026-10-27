@@ -951,6 +951,54 @@ describe('Server Integration Tests', () => {
       expect(output).toContain('Total comments: 2');
     });
 
+    it('keeps the other ranges of a thread the page sends, and lists them in the output', async () => {
+      const at = '2024-01-01T00:00:00.000Z';
+      const thread = {
+        id: 'multi',
+        filePath: 'test.js',
+        createdAt: at,
+        updatedAt: at,
+        position: { side: 'new', line: { start: 77, end: 80 }, extraRanges: [12, 40] },
+        codeSnapshot: { content: 'a\nb\nc\nd', extraContents: ['x', 'y'] },
+        messages: [{ id: 'multi', body: 'Same mistake', createdAt: at, updatedAt: at }],
+      };
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threads: [thread] }),
+      });
+
+      const json = (await (await fetch(`http://localhost:${port}/api/comments-json`)).json()) as {
+        threads: Array<{ position: unknown; codeSnapshot: unknown }>;
+      };
+      expect(json.threads[0]?.position).toEqual(thread.position);
+      expect(json.threads[0]?.codeSnapshot).toEqual(thread.codeSnapshot);
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      expect(output).toContain('test.js:L12,L40,L77-L80\nSame mistake');
+    });
+
+    it('reads the other lines of a thread an older page sends in its own shape', async () => {
+      await fetch(`http://localhost:${port}/api/comments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          threads: [
+            {
+              id: 'shaped',
+              file: 'test.js',
+              line: [77, 80],
+              extraLines: [12, [40, 41]],
+              side: 'old',
+              messages: [{ id: 'shaped', body: 'Same mistake' }],
+            },
+          ],
+        }),
+      });
+
+      const output = await (await fetch(`http://localhost:${port}/api/comments-output`)).text();
+      expect(output).toContain('test.js:L12,L40-L41,L77-L80 (old)\nSame mistake');
+    });
+
     it('GET /api/comments-output marks each thread with its review state', async () => {
       await fetch(`http://localhost:${port}/api/diff?base=abc1234%5E&target=abc1234`);
       const comments = [

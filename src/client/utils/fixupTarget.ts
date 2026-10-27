@@ -12,6 +12,7 @@ export async function fetchFixupTarget(
   filePath: string,
   line: LineNumber | undefined,
   side: DiffSide,
+  extraLines: readonly LineNumber[] = [],
 ): Promise<string | undefined> {
   const lines = line === undefined ? { scope: 'file' } : rangeParams(line);
   const params = new URLSearchParams({
@@ -21,6 +22,10 @@ export async function fetchFixupTarget(
     side,
     ...lines,
   });
+  for (const extra of extraLines) {
+    const { start, end } = rangeOfLine(extra);
+    params.append('range', `${start}-${end}`);
+  }
   try {
     const response = await fetch(`/api/fixup-target?${params.toString()}`);
     if (!response.ok) return undefined;

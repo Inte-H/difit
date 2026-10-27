@@ -13,7 +13,12 @@ import { AUTOSQUASH_PREFIX, COMMIT_MESSAGE_PATH, REVIEWER_EDIT_AUTHOR } from '..
 import { type DiffMode, type WatchEvent } from '../types/watch.js';
 import { amendedMessagesByCommit } from '../utils/amendedMessages.js';
 import { formatCommentsOutput } from '../utils/commentFormatting.js';
-import { lineOfPosition } from '../utils/commentPosition.js';
+import {
+  extraLinesOfPosition,
+  lineOfPosition,
+  lineOfRange,
+  positionOfLines,
+} from '../utils/commentPosition.js';
 import {
   mergeCommentImports,
   mergeCommentThreads,
@@ -1042,18 +1047,20 @@ export async function startServer(options: ServerOptions): Promise<{
   });
 
   app.get('/api/fixup-target', async (req, res) => {
-    const { base, target, path, start, end, side, scope } = req.query;
+    const { base, target, path, start, end, side, scope, range } = req.query;
     const wholeFile = scope === 'file';
     const startLine = Number(start);
     const endLine = Number(end);
+    const extraRanges = parseLineRanges(range);
     const filepathResult = parseRepositoryRelativePath(path);
     const view =
       typeof base === 'string' && typeof target === 'string'
         ? createDiffSelection(base, target)
         : undefined;
     const linesValid = wholeFile
-      ? start === undefined && end === undefined
+      ? start === undefined && end === undefined && range === undefined
       : scope === undefined &&
+        extraRanges !== null &&
         Number.isInteger(startLine) &&
         Number.isInteger(endLine) &&
         startLine >= 1 &&
@@ -1072,7 +1079,7 @@ export async function startServer(options: ServerOptions): Promise<{
       const fixupTarget = await chooseFixupTarget(repositoryPath, {
         view: { base: view.baseCommitish, target: view.targetCommitish },
         filePath: filepathResult.path,
-        ...(wholeFile ? {} : { startLine, endLine }),
+        ...(wholeFile ? {} : { startLine, endLine, extraRanges: extraRanges ?? [] }),
         side,
         ...(commits.length > 0 ? { commits } : {}),
       });
@@ -1082,6 +1089,19 @@ export async function startServer(options: ServerOptions): Promise<{
       res.status(500).json({ error: 'Failed to choose fixup target' });
     }
   });
+
+  // `range=12-12&range=40-41`; null when any of them is not a range of lines.
+  function parseLineRanges(value: unknown): Array<{ start: number; end: number }> | null {
+    if (value === undefined) return [];
+    const values = Array.isArray(value) ? value : [value];
+    const ranges = values.map((text) => {
+      const match = typeof text === 'string' ? /^(\d+)-(\d+)$/.exec(text) : null;
+      const start = Number(match?.[1]);
+      const end = Number(match?.[2]);
+      return match && start >= 1 && start <= end ? { start, end } : null;
+    });
+    return ranges.every((range) => range !== null) ? ranges : null;
+  }
 
   function normalizeLineValue(line: unknown): DiffLineRange {
     if (Array.isArray(line) && line.length === 2) {
@@ -1149,10 +1169,12 @@ export async function startServer(options: ServerOptions): Promise<{
     commits: readonly ReviewCommit[] = [],
   ): CommentThread {
     const line = lineOfPosition(thread.position);
+    const extraLines = extraLinesOfPosition(thread.position);
     return {
       id: thread.id,
       file: thread.filePath,
       ...(line === undefined ? {} : { line }),
+      ...(extraLines ? { extraLines } : {}),
       side: thread.position.side,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
@@ -1206,7 +1228,12 @@ export async function startServer(options: ServerOptions): Promise<{
       position:
         thread.line === undefined
           ? { side: thread.side ?? 'new', scope: 'file' }
-          : { side: thread.side ?? 'new', line: normalizeLineValue(thread.line) },
+          : positionOfLines(thread.side ?? 'new', [
+              lineOfRange(normalizeLineValue(thread.line)),
+              ...(Array.isArray(thread.extraLines) ? thread.extraLines : []).map((line) =>
+                lineOfRange(normalizeLineValue(line)),
+              ),
+            ]),
       codeSnapshot:
         typeof thread.codeContent === 'string'
           ? {

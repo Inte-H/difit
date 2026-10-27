@@ -5,6 +5,7 @@ import type {
   CommentThread,
   DiffFile,
   DiffSide,
+  ExtraCommentLines,
   DiffViewMode,
   ExpandedRange,
   LineNumber,
@@ -32,6 +33,7 @@ export type DiffViewerBodyProps = {
     body: string,
     codeContent?: string,
     side?: DiffSide,
+    extra?: ExtraCommentLines,
   ) => Promise<void>;
   onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string, answer?: ChoiceAnswer) => Promise<void>;

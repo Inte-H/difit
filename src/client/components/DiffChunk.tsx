@@ -5,6 +5,7 @@ import {
   type DiffChunk as DiffChunkType,
   type DiffLine,
   type DiffSide,
+  type ExtraCommentLines,
   type CommentThread,
   type LineNumber,
   type DiffViewMode,
@@ -51,6 +52,7 @@ interface DiffChunkProps {
     body: string,
     codeContent?: string,
     side?: DiffSide,
+    extra?: ExtraCommentLines,
   ) => Promise<void>;
   onResolveThread: (threadId: string) => void;
   onReplyToThread: (threadId: string, body: string, answer?: ChoiceAnswer) => Promise<void>;

@@ -143,6 +143,8 @@ difit comment add --port <port> '{"type":"reply","filePath":"src/config.ts","pos
 
    A comment on the whole file has `"position": {"side": "new", "scope": "file"}` with no `line` (`"side": "old"` when the diff deletes the file), and its text output location is the bare path, without `:L<n>`, followed by `(old)` for a deleted file. It is about the file as a whole, so read the whole file and fix wherever the remark applies, still in one fixup. Its `fixupTarget` is the last commit of the view that changed the file, or the view's last commit when none did; commits the commit list leaves out do not count. Reply to it with the same `position`.
 
+   A comment on several ranges of one file has `extraRanges` next to `line` in its `position`, e.g. `{"side": "new", "line": {"start": 77, "end": 80}, "extraRanges": [12, 40]}`: the lines in `extraRanges` belong to the same comment too. `line` is the bottom-most range, under which the card sits, `extraRanges` lists the others top to bottom, and the text output location lists them all, `path:L12,L40,L77-L80`. Fix every range in the same fixup, and reply with the same `position`.
+
    - Line numbers belong to the `view` tree: read new-side lines with `git show <view.targetCommitish>:<file>` and old-side lines with `git show <view.baseCommitish>:<file>`. Without `view`, they belong to the review target.
    - Fix the code in HEAD. Later commits may have moved or changed those lines, so find the place by `codeSnapshot.content` rather than by line number. Make one fixup even when a later commit changed those lines; resolve the fold as in "Folding into a commit in the middle of the range".
 

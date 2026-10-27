@@ -331,6 +331,38 @@ describe('StorageService - Repository Isolation', () => {
       expect(service.getDiffContextData('base', 'target')).toMatchObject({ version: 2, threads });
     });
 
+    it('writes a thread on several ranges into a version 2 record and reads it back', () => {
+      const thread: DiffCommentThread = {
+        id: 'multi',
+        filePath: 'src/a.ts',
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+        position: { side: 'new', line: { start: 77, end: 80 }, extraRanges: [12, 40] },
+        codeSnapshot: { content: 'a\nb\nc\nd', extraContents: ['x', 'y'] },
+        messages: [
+          {
+            id: 'multi',
+            body: 'b',
+            author: 'User',
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ],
+      };
+      const lineOnly = { ...thread, id: 'line', position: { side: 'new' as const, line: 3 } };
+
+      service.saveCommentThreads('base', 'target', [lineOnly, thread]);
+
+      const key = localStorageMock._keys.find((k) => k.startsWith('difit-storage-v1')) ?? '';
+      const raw = JSON.parse(localStorage.getItem(key) ?? '{}');
+      expect(raw.version).toBe(2);
+      expect(raw.threads[0].position).toEqual({ side: 'new', line: 3 });
+      expect(new StorageService().getDiffContextData('base', 'target')?.threads).toEqual([
+        lineOnly,
+        thread,
+      ]);
+    });
+
     it('reads back a version 3 record with its decisions', () => {
       service.saveDiffContextData('base', 'target', {
         version: 2,

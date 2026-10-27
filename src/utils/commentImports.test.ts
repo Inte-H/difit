@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { CommentImport, DiffCommentThread } from '../types/diff';
+import type {
+  CommentImport,
+  DiffCommentPosition,
+  DiffCommentThread,
+  ThreadCommentImport,
+} from '../types/diff';
 
 import {
   mergeCommentImports,
@@ -690,6 +695,134 @@ describe('commentImports', () => {
       expect(() => normalizeCommentImports({ ...askReply, type: 'thread' })).toThrow(
         'choices and answer belong on a reply',
       );
+    });
+  });
+
+  describe('a comment on several ranges', () => {
+    const POSITION: DiffCommentPosition = {
+      side: 'new',
+      line: { start: 77, end: 80 },
+      extraRanges: [12, { start: 40, end: 41 }],
+    };
+    const multiImport: ThreadCommentImport = {
+      type: 'thread',
+      id: 'multi',
+      filePath: 'src/example.ts',
+      position: POSITION,
+      body: 'Use a placeholder instead of joining strings',
+      codeSnapshot: { content: 'a\nb\nc\nd', extraContents: ['x', 'y\nz'], commit: PIN_SHA },
+    };
+
+    it('keeps the other ranges and their code', () => {
+      const [parsed] = parseCommentImportValue(JSON.stringify(multiImport));
+
+      expect(parsed?.position).toEqual(POSITION);
+      expect(parsed?.codeSnapshot?.extraContents).toEqual(['x', 'y\nz']);
+    });
+
+    it('reads an import with only a line as before', () => {
+      const [parsed] = parseCommentImportValue(
+        JSON.stringify({
+          ...multiImport,
+          position: { side: 'new', line: 7 },
+          codeSnapshot: undefined,
+        }),
+      );
+
+      expect(parsed?.position).toEqual({ side: 'new', line: 7 });
+    });
+
+    it.each([
+      ['a range below the line', { ...POSITION, extraRanges: [90] }],
+      ['ranges out of order', { ...POSITION, extraRanges: [40, 12] }],
+      ['ranges that overlap', { ...POSITION, extraRanges: [{ start: 10, end: 12 }, 12] }],
+      ['a range touching the line', { ...POSITION, extraRanges: [{ start: 70, end: 77 }] }],
+      ['something other than a list', { ...POSITION, extraRanges: 12 }],
+      ['a range on the whole file', { side: 'new', scope: 'file', extraRanges: [12] }],
+    ])('rejects %s', (_label, position) => {
+      expect(() => normalizeCommentImports({ ...multiImport, position })).toThrow(
+        /Invalid comment import field: position/,
+      );
+    });
+
+    it('survives the copy to a new server that the skill makes with jq', () => {
+      const {
+        threads: [made],
+      } = mergeCommentImports([], [multiImport]);
+      const thread: DiffCommentThread = {
+        ...made!,
+        messages: [
+          ...made!.messages,
+          {
+            id: 'r1',
+            body: 'Fixed all three',
+            author: 'Agent',
+            createdAt: '2024-01-02T00:00:00.000Z',
+            updatedAt: '2024-01-02T00:00:00.000Z',
+          },
+        ],
+      };
+      const stored = JSON.parse(JSON.stringify({ threads: [thread] })) as {
+        threads: DiffCommentThread[];
+      };
+      const copied = stored.threads.flatMap((t) => [
+        {
+          type: 'thread',
+          id: t.id,
+          filePath: t.filePath,
+          position: t.position,
+          body: t.messages[0]!.body,
+          author: t.messages[0]!.author,
+          createdAt: t.messages[0]!.createdAt,
+          codeSnapshot: t.codeSnapshot,
+        },
+        ...t.messages.slice(1).map((message) => ({
+          type: 'reply',
+          filePath: t.filePath,
+          position: t.position,
+          body: message.body,
+          author: message.author,
+          createdAt: message.createdAt,
+        })),
+      ]);
+
+      const { threads, warnings } = mergeCommentImports(
+        [],
+        parseCommentImportValue(JSON.stringify(copied)),
+      );
+
+      expect(warnings).toEqual([]);
+      expect(threads).toHaveLength(1);
+      expect(threads[0]).toMatchObject({
+        id: 'multi',
+        position: POSITION,
+        codeSnapshot: { extraContents: ['x', 'y\nz'] },
+        messages: [{ body: multiImport.body }, { body: 'Fixed all three' }],
+      });
+    });
+
+    it('takes a reply only on the thread with the same ranges', () => {
+      const lineOnly = createThread({ id: 'line-only', line: 77, body: 'On the last range alone' });
+      const { threads: both } = mergeCommentImports(
+        [{ ...lineOnly, position: { side: 'new', line: { start: 77, end: 80 } } }],
+        [multiImport],
+      );
+
+      const { threads, warnings } = mergeCommentImports(both, [
+        { ...multiImport, type: 'reply', id: 'reply-1', body: 'Done' },
+      ]);
+
+      expect(warnings).toEqual([]);
+      expect(threads.find(({ id }) => id === 'multi')?.messages).toHaveLength(2);
+      expect(threads.find(({ id }) => id === 'line-only')?.messages).toHaveLength(1);
+    });
+
+    it('keeps the ranges through a merge of thread lists', () => {
+      const {
+        threads: [multi],
+      } = mergeCommentImports([], [multiImport]);
+
+      expect(mergeCommentThreads([multi!], [multi!]).threads).toEqual([multi]);
     });
   });
 });
