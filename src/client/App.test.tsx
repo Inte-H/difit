@@ -3075,6 +3075,52 @@ describe('App Component - Commits of the review', () => {
     );
   });
 
+  it('binds a comment on the whole file to the run and the commit the server chose for the file', async () => {
+    chosenFixupTarget = COMMITS[0]!.sha;
+    await showFirstTwoOfThree();
+
+    fireEvent.click(await screen.findByRole('button', { name: '파일 전체에 지적 달기' }));
+    fireEvent.change(await screen.findByPlaceholderText(/comment/i), {
+      target: { value: 'Split this file' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+
+    await waitFor(() =>
+      expect(addedThreads()).toEqual([
+        [
+          {
+            filePath: 'test.ts',
+            body: 'Split this file',
+            side: 'new',
+            binding: {
+              view: { baseCommitish: COMMITS[0]!.parentSha, targetCommitish: COMMITS[1]!.sha },
+              fixupTarget: COMMITS[0]!.sha,
+              snapshotCommit: COMMITS[1]!.sha,
+            },
+          },
+        ],
+      ]),
+    );
+    expect(fixupTargetQueries()).toEqual([
+      { base: 'def4567', target: 'abc1234', path: 'test.ts', side: 'new', scope: 'file' },
+    ]);
+  });
+
+  it('shows a comment on the whole file above the code and in the panel by its file name', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'f1', filePath: 'test.ts', line: 1, body: 'About this file' }),
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '' },
+      },
+    ];
+    renderApp();
+
+    const section = await screen.findByRole('region', { name: '파일 전체 지적' });
+    expect(within(section).getByText('About this file')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Outdated comment')).not.toBeInTheDocument();
+  });
+
   it('draws a comment made on one commit there and leaves it off the other commit', async () => {
     mockComments = [pinnedThread('const a = 1;')];
     renderApp();
@@ -3504,6 +3550,66 @@ describe('App Component - Commits of the review', () => {
 
     expect(commitButton(/abc1234/)).toHaveAttribute('aria-current', 'true');
     expect(diffQueries()).toHaveLength(queriesBefore);
+  });
+
+  it('scrolls to the card of a comment on the whole file picked from the list', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'f1', filePath: 'test.ts', line: 1, body: 'About this file' }),
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '' },
+      },
+    ];
+    renderApp();
+    await screen.findByText('About this file');
+    const main = document.querySelector('main')!;
+    const scrollTo = vi.fn();
+    main.scrollTo = scrollTo;
+    main.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800 }) as DOMRect;
+    const rect = (top: number, bottom: number) => () =>
+      ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top }) as DOMRect;
+    document.getElementById('file-comment-f1')!.getBoundingClientRect = rect(900, 1100);
+    document.getElementById('comment-thread-f1')!.getBoundingClientRect = rect(1000, 1100);
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith({
+        top: expect.toSatisfy((top: number) => top >= 1100 - 800 && top <= 900),
+      }),
+    );
+  });
+
+  it('keeps the card of a whole-file comment on screen when the fixups above it are taller', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'f1', filePath: 'test.ts', line: 1, body: 'About this file' }),
+        position: { side: 'new', scope: 'file' },
+        codeSnapshot: { content: '' },
+      },
+    ];
+    renderApp();
+    await screen.findByText('About this file');
+    const main = document.querySelector('main')!;
+    const scrollTo = vi.fn();
+    main.scrollTo = scrollTo;
+    main.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 800, left: 0, right: 0, width: 0, height: 800 }) as DOMRect;
+    const rect = (top: number, bottom: number) => () =>
+      ({ top, bottom, left: 0, right: 0, width: 0, height: bottom - top }) as DOMRect;
+    document.getElementById('file-comment-f1')!.getBoundingClientRect = rect(100, 2100);
+    document.getElementById('comment-thread-f1')!.getBoundingClientRect = rect(2000, 2100);
+
+    await userEvent.keyboard('{Shift>}L{/Shift}');
+    await waitFor(() => expect(commentsPanelHasFocus()).toBe(true));
+    await userEvent.keyboard('{Enter}');
+
+    await waitFor(() =>
+      expect(scrollTo).toHaveBeenCalledWith({ top: expect.toSatisfy((top: number) => top > 1800) }),
+    );
   });
 
   it('names on the card the commit a fix for the comment goes into', async () => {

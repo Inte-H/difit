@@ -7,6 +7,7 @@ import {
   FilePen,
   FilePlus,
   FileX,
+  MessageSquarePlus,
   Square,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -26,6 +27,8 @@ interface DiffViewerHeaderProps {
   onToggleReviewed?: (path: string) => void;
   labels?: readonly string[];
   onRevealFixup?: () => void;
+  // Without it the file takes no comment on the whole file.
+  onAddFileComment?: () => void;
 }
 
 const NO_LABELS: readonly string[] = [];
@@ -59,6 +62,7 @@ export const DiffViewerHeader = ({
   onToggleReviewed,
   labels = NO_LABELS,
   onRevealFixup,
+  onAddFileComment,
 }: DiffViewerHeaderProps) => {
   const [isCopied, setIsCopied] = useState(false);
 
@@ -152,6 +156,18 @@ export const DiffViewerHeader = ({
             -{file.deletions}
           </span>
         </div>
+        {onAddFileComment && (
+          <button
+            type="button"
+            onClick={onAddFileComment}
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm text-github-text-secondary border border-github-border hover:bg-github-bg-tertiary hover:text-github-text-primary transition-colors"
+            title="파일 전체에 지적 달기"
+            aria-label="파일 전체에 지적 달기"
+          >
+            <MessageSquarePlus size={14} />
+            <span className="max-md:hidden">파일 지적</span>
+          </button>
+        )}
         {onToggleReviewed && (
           <button
             onClick={() => onToggleReviewed(file.path)}

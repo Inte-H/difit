@@ -13,6 +13,8 @@ export interface GitOptions {
 
 const GIT_TIMEOUT_MS = 60_000;
 
+export const literalPathspec = (path: string) => `:(literal)${path}`;
+
 export function runGit(
   repoPath: string,
   args: string[],

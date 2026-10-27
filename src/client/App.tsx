@@ -946,6 +946,13 @@ function App() {
     () => drawnThreads.filter((thread) => !resolvedThreadIds.has(thread.id)),
     [drawnThreads, resolvedThreadIds],
   );
+  const unresolvedLineThreads = useMemo(
+    () =>
+      unresolvedThreads.filter(
+        (thread): thread is CommentThread & { line: LineNumber } => thread.line !== undefined,
+      ),
+    [unresolvedThreads],
+  );
   const pickedThread = useMemo(
     () => normalizedThreads.find((thread) => thread.id === pickedThreadId) ?? null,
     [normalizedThreads, pickedThreadId],
@@ -1046,7 +1053,7 @@ function App() {
   const { cursor, isHelpOpen, setIsHelpOpen, setCursorPosition, rememberFilePosition } =
     useKeyboardNavigation({
       files: navigableFiles,
-      comments: unresolvedThreads,
+      comments: unresolvedLineThreads,
       viewMode: diffMode,
       reviewedFiles: viewedFiles,
       onToggleReviewed: toggleFileReviewed,
@@ -1772,6 +1779,20 @@ function App() {
     };
   }, []);
 
+  const bindNewThread = useCallback(
+    async (
+      file: string,
+      line: LineNumber | undefined,
+      side: DiffSide,
+    ): Promise<ViewBinding | undefined> => {
+      if (!review || !resolvedSelection || !isViewOfReview(resolvedSelection, review)) {
+        return undefined;
+      }
+      const fixupTarget = await fetchFixupTarget(resolvedSelection, file, line, side);
+      return bindingForView(review, resolvedSelection, fixupTarget);
+    },
+    [review, resolvedSelection],
+  );
   const handleAddComment = useCallback(
     async (
       file: string,
@@ -1780,15 +1801,17 @@ function App() {
       codeContent?: string,
       side?: DiffSide,
     ): Promise<void> => {
-      const ofReview = review && resolvedSelection && isViewOfReview(resolvedSelection, review);
-      let binding: ViewBinding | undefined;
-      if (ofReview) {
-        const fixupTarget = await fetchFixupTarget(resolvedSelection, file, line, side || 'new');
-        binding = bindingForView(review, resolvedSelection, fixupTarget);
-      }
+      const binding = await bindNewThread(file, line, side || 'new');
       addThreadRef.current(newThread(file, line, body, codeContent, side, binding));
     },
-    [review, resolvedSelection],
+    [bindNewThread],
+  );
+  const handleAddFileComment = useCallback(
+    async (file: string, body: string, side: DiffSide): Promise<void> => {
+      const binding = await bindNewThread(file, undefined, side);
+      addThreadRef.current({ filePath: file, body, side, binding });
+    },
+    [bindNewThread],
   );
   const handleAddFixupOnlyComment = useCallback(
     (
@@ -1882,6 +1905,16 @@ function App() {
       next.delete(thread.file);
       return next;
     });
+    if (thread.line === undefined) {
+      if (diffData.files.some(({ path }) => path === thread.file)) {
+        scrollFileIntoDiffContainer(
+          thread.file,
+          `comment-thread-${thread.id}`,
+          `file-comment-${thread.id}`,
+        );
+      }
+      return;
+    }
     const moveCursor = () => {
       const position = findCommentPosition(thread, navigableFilesRef.current);
       setCursorPosition(position);
@@ -2532,6 +2565,7 @@ function App() {
                         onToggleCollapsed={toggleFileCollapsed}
                         onToggleAllCollapsed={toggleAllFilesCollapsed}
                         onAddComment={takesComments ? handleAddComment : undefined}
+                        onAddFileComment={takesComments ? handleAddFileComment : undefined}
                         onResolveThread={resolveThread}
                         onReplyToThread={handleReplyToThread}
                         onRemoveMessage={removeMessage}

@@ -7,6 +7,7 @@ import type {
   ReviewScope,
 } from '../../types/diff';
 import { noVisibleLineContradictsAnchor, relocateAnchor } from '../../utils/anchorRelocation';
+import { lineOfPosition, lineOfRange } from '../../utils/commentPosition';
 import { commitsOfView, isSameCommit, isSameView } from '../../utils/diffSelection';
 
 export interface FileLineIndex {
@@ -15,7 +16,8 @@ export interface FileLineIndex {
 }
 
 export interface ThreadPlacement {
-  line: LineNumber;
+  // Absent for a thread on the whole file.
+  line?: LineNumber;
   isOutdated: boolean;
   outdatedReason?: AnchorStaleReason;
 }
@@ -38,9 +40,6 @@ export function buildFileLineIndex(file: Pick<DiffFile, 'chunks'>): FileLineInde
   return { old: oldIndex, new: newIndex };
 }
 
-const toLineNumber = (line: DiffCommentThread['position']['line']): LineNumber =>
-  typeof line === 'number' ? line : [line.start, line.end];
-
 // A stale thread keeps its stored position. Without a target commit (working tree, index, stdin)
 // the thread is never moved, only checked at its stored line.
 export function locateThread(
@@ -49,13 +48,17 @@ export function locateThread(
   targetCommit: string | null,
   madeOnThisView?: boolean,
 ): ThreadPlacement {
-  const storedLine = toLineNumber(thread.position.line);
+  const { position } = thread;
+  if (!('line' in position)) {
+    return index ? { isOutdated: false } : { isOutdated: true, outdatedReason: 'missing' };
+  }
+  const storedLine = lineOfRange(position.line);
   const snapshot = thread.codeSnapshot?.content;
   if (snapshot === undefined) return { line: storedLine, isOutdated: false };
   if (!index) return { line: storedLine, isOutdated: true, outdatedReason: 'missing' };
 
-  const anchor = { line: thread.position.line, content: snapshot };
-  const lines = thread.position.side === 'old' ? index.old : index.new;
+  const anchor = { line: position.line, content: snapshot };
+  const lines = position.side === 'old' ? index.old : index.new;
   if (targetCommit === null) {
     return noVisibleLineContradictsAnchor(anchor, lines)
       ? { line: storedLine, isOutdated: false }
@@ -73,13 +76,13 @@ export function locateThread(
   if (relocation.kind === 'stale') {
     return { line: storedLine, isOutdated: true, outdatedReason: relocation.reason };
   }
-  return { line: toLineNumber(relocation.line), isOutdated: false };
+  return { line: lineOfRange(relocation.line), isOutdated: false };
 }
 
 export type Placement =
-  | { kind: 'stored' | 'moved'; line: LineNumber }
-  | { kind: 'stale'; reason: AnchorStaleReason; line: LineNumber }
-  | { kind: 'hidden'; line: LineNumber };
+  | { kind: 'stored' | 'moved'; line?: LineNumber }
+  | { kind: 'stale'; reason: AnchorStaleReason; line?: LineNumber }
+  | { kind: 'hidden'; line?: LineNumber };
 
 export interface PlacementContext {
   view: DiffSelection | null;
@@ -87,7 +90,8 @@ export interface PlacementContext {
   targetCommit: string | null;
 }
 
-const sameLine = (a: LineNumber, b: LineNumber) => String(a) === String(b);
+const sameLine = (a: LineNumber | undefined, b: LineNumber | undefined) => String(a) === String(b);
+const atLine = (line: LineNumber | undefined) => (line === undefined ? {} : { line });
 
 export function placeThread(
   thread: DiffCommentThread,
@@ -95,7 +99,7 @@ export function placeThread(
   index: FileLineIndex | undefined,
   indexCommit?: string,
 ): Placement {
-  const storedLine = toLineNumber(thread.position.line);
+  const storedLine = lineOfPosition(thread.position);
   let madeOnThisView: boolean | undefined;
   if (view && review) {
     const fixupTarget = thread.fixupTarget ?? review.selection.targetCommitish;
@@ -103,7 +107,7 @@ export function placeThread(
       !isSameView(view, review.selection) &&
       !commitsOfView(view, review).some((commit) => isSameCommit(commit.sha, fixupTarget))
     ) {
-      return { kind: 'hidden', line: storedLine };
+      return { kind: 'hidden', ...atLine(storedLine) };
     }
     const anchorCommit = thread.codeSnapshot?.commit;
     madeOnThisView =
@@ -114,7 +118,14 @@ export function placeThread(
 
   const placement = locateThread(thread, index, targetCommit, madeOnThisView);
   if (placement.isOutdated) {
-    return { kind: 'stale', reason: placement.outdatedReason ?? 'missing', line: placement.line };
+    return {
+      kind: 'stale',
+      reason: placement.outdatedReason ?? 'missing',
+      ...atLine(placement.line),
+    };
   }
-  return { kind: sameLine(placement.line, storedLine) ? 'stored' : 'moved', line: placement.line };
+  return {
+    kind: sameLine(placement.line, storedLine) ? 'stored' : 'moved',
+    ...atLine(placement.line),
+  };
 }

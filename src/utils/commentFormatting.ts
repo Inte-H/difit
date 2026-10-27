@@ -3,8 +3,9 @@ import type { BaseMode, Comment, CommentThread, DiffSide, ThreadReviewState } fr
 import { reviewStateLabel } from './reviewDecisions.js';
 import { hasSuggestionBlock, parseSuggestionBlocks } from './suggestionUtils.js';
 
-function getLineInfo(line: number | number[]): string {
-  return typeof line === 'number' ? `L${line}` : `L${line[0]}-L${line[1]}`;
+function getLineInfo(line: number | number[] | undefined): string {
+  if (line === undefined) return '';
+  return typeof line === 'number' ? `:L${line}` : `:L${line[0]}-L${line[1]}`;
 }
 
 export interface CommentPromptDiffContext {
@@ -17,13 +18,13 @@ export interface CommentPromptDiffContext {
 
 function formatCommentLocation(
   file: string,
-  line: number | number[],
+  line: number | number[] | undefined,
   side?: DiffSide,
   reviewState?: ThreadReviewState,
 ): string {
   const filePath = file || '<unknown file>';
   const stateSuffix = reviewState ? ` [${reviewStateLabel(reviewState)}]` : '';
-  return `${filePath}:${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
+  return `${filePath}${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
 }
 
 function isNonRangeCommitish(commitish: string): boolean {

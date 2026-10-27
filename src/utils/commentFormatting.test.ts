@@ -430,6 +430,36 @@ Related entries are below.`);
       expect(result.match(/고쳐 넣을 커밋/g)).toHaveLength(2);
     });
 
+    it('should name only the file for a thread on the whole file, marking a deleted one', () => {
+      const onFile = (id: string, side: 'old' | 'new'): CommentThread => ({
+        id,
+        file: 'src/App.tsx',
+        side,
+        createdAt: '2024-01-01T00:00:00Z',
+        updatedAt: '2024-01-01T00:00:00Z',
+        messages: [
+          {
+            id,
+            body: `Whole file ${id}`,
+            createdAt: '2024-01-01T00:00:00Z',
+            updatedAt: '2024-01-01T00:00:00Z',
+          },
+        ],
+        fixupCommit: { shortSha: '1111111', subject: 'first' },
+      });
+      const result = formatCommentsOutput(
+        [onFile('kept', 'new'), onFile('deleted', 'old')],
+        new Map([['kept', 'awaiting-fix']]),
+      );
+
+      expect(result).toContain(
+        '\nsrc/App.tsx [수정 중]\n고쳐 넣을 커밋: 1111111 first\nWhole file kept',
+      );
+      expect(result).toContain(
+        '\nsrc/App.tsx (old)\n고쳐 넣을 커밋: 1111111 first\nWhole file deleted',
+      );
+    });
+
     it('should handle comments with multi-line bodies', () => {
       const comments: Comment[] = [
         {

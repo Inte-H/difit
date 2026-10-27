@@ -290,3 +290,78 @@ it('folds the fixups for comments made on a run and on the whole review into the
   );
   expect(git(repo, ['show', 'HEAD~1:discount.js'])).toContain('Math.floor(price / 10)');
 });
+
+it('binds a comment on the whole file to the last commit that changed it and hands it over without a line', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-'));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }));
+  git(repo, ['init', '-q']);
+  git(repo, ['checkout', '-q', '-b', 'main']);
+  const base = commit(repo, 'base', {
+    'discount.js': 'export function discount(price) {\n  return price * 0.1;\n}\n',
+  });
+  const pin = commit(repo, 'test: pin current discount', { 'discount.test.js': PINNING_TEST });
+  const docs = commit(repo, 'docs: say discounts round down', { 'README.md': 'Rounds down.\n' });
+
+  const { port, server } = await startServer({
+    selection: createDiffSelection(base, docs),
+    repoPath: repo,
+    preferredPort: 9280,
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server?.close(() => resolve())));
+  const api = (path: string) => `http://localhost:${port}${path}`;
+  const fixupTarget = async (query: Record<string, string>) => {
+    const response = await fetch(
+      api(
+        `/api/fixup-target?${new URLSearchParams({ base, target: docs, side: 'new', ...query })}`,
+      ),
+    );
+    return response.ok
+      ? ((await response.json()) as { fixupTarget: string }).fixupTarget
+      : response.status;
+  };
+
+  expect(await fixupTarget({ path: 'discount.test.js', scope: 'file' })).toBe(pin);
+  expect(await fixupTarget({ path: 'discount.test.js', scope: 'file', start: '1', end: '1' })).toBe(
+    400,
+  );
+  expect(await fixupTarget({ path: 'discount.test.js', scope: 'folder' })).toBe(400);
+
+  const imported = await fetch(api('/api/comment-imports'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify([
+      {
+        type: 'thread',
+        id: 't1',
+        filePath: 'discount.test.js',
+        position: { side: 'new', scope: 'file' },
+        body: 'Name the test after the rule it pins.',
+        author: 'User',
+        fixupTarget: pin,
+      },
+    ]),
+  });
+  expect(imported.status).toBe(200);
+
+  const output = await (await fetch(api('/api/comments-output'))).text();
+  expect(output).toContain('\ndiscount.test.js [수정 중]\n');
+  expect(output).not.toContain('discount.test.js:');
+  const waited = await (await fetch(api('/api/comments-wait'))).text();
+  expect(JSON.parse(waited.split('data: ')[1]!)).toEqual([
+    expect.objectContaining({
+      threadId: 't1',
+      filePath: 'discount.test.js',
+      position: { side: 'new', scope: 'file' },
+      fixupTarget: pin,
+    }),
+  ]);
+
+  writeFileSync(
+    join(repo, 'discount.test.js'),
+    PINNING_TEST.replace("test('discount'", "test('takes ten percent without rounding'"),
+  );
+  git(repo, ['commit', '-q', '-a', '-m', `fixup! ${pin}`, '-m', 'Review-Thread: t1']);
+  expect(await (await fetch(api('/api/comments-output'))).text()).toContain(
+    '\ndiscount.test.js [승인 대기]\n',
+  );
+});

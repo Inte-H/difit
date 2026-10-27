@@ -755,6 +755,17 @@ describe('fixup boxes in a file the comment is not on', () => {
       expect(pickThread).toHaveBeenCalledWith('t2');
     });
 
+    it('names a comment on the whole file by its path, with the particle its last letter takes', () => {
+      renderBoxes(mode, [
+        box({ threads: [{ id: 't3', file: 'src/config.json' }] }),
+        box({ threads: [{ id: 't4', file: 'src/example.ts' }], chunkIndex: 1 }),
+      ]);
+
+      const [json, ts] = screen.getAllByTestId('fixup-file-box');
+      expect(json).toHaveTextContent('지적 src/config.json을 고치며');
+      expect(ts).toHaveTextContent('지적 src/example.ts를 고치며');
+    });
+
     it('draws a box once under a line that was replaced', () => {
       const replaced: DiffChunkData = {
         ...testChunk,

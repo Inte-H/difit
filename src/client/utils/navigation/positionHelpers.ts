@@ -58,6 +58,7 @@ export function findCommentPosition(
   commentThread: CommentThread,
   files: DiffFile[],
 ): CursorPosition | null {
+  if (commentThread.line === undefined) return null;
   const fileIndex = files.findIndex((f) => f.path === commentThread.file);
   if (fileIndex === -1) return null;
 

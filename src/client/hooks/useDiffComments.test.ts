@@ -143,8 +143,8 @@ describe('useDiffComments', () => {
 
       // Check if comments are in the correct order
       expect(result.current.comments).toHaveLength(2);
-      expect(result.current.comments[0]?.position.line).toEqual({ start: 36, end: 39 });
-      expect(result.current.comments[1]?.position.line).toBe(42);
+      expect(result.current.comments[0]?.position).toMatchObject({ line: { start: 36, end: 39 } });
+      expect(result.current.comments[1]?.position).toMatchObject({ line: 42 });
 
       const expected = `diff main...feature-branch (abc1234...def5678)
 =====
@@ -374,8 +374,7 @@ const next = true;
       expect(comment!.filePath).toBe('src/utils/test.ts');
       expect(comment!.body).toBe('Test comment');
       expect(comment!.author).toBe('User');
-      expect(comment!.position.side).toBe('new');
-      expect(comment!.position.line).toBe(15);
+      expect(comment!.position).toEqual({ side: 'new', line: 15 });
       expect(comment!.codeSnapshot?.content).toBe('const x = 42;');
       expect(comment!.codeSnapshot?.language).toBe('typescript');
       expect(comment!.codeSnapshot?.commit).toBe('feature-branch');
