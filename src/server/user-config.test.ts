@@ -8,6 +8,7 @@ import {
   getUserConfigPath,
   readUserConfig,
   parseUserSettingsPatch,
+  readScipIndexCacheLimitBytes,
   updateUserClientSettings,
   MAX_USER_CONFIG_BYTES,
 } from './user-config.js';
@@ -74,6 +75,16 @@ describe('user-config', () => {
       const config = await readUserConfig(configPath);
       expect(config.client).toEqual({ diffViewMode: 'split' });
     });
+
+    it('keeps keys other than client', async () => {
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ version: 1, scipIndexCacheLimitMiB: 512, client: 'dark' }),
+        'utf-8',
+      );
+      const config = await readUserConfig(configPath);
+      expect(config).toEqual({ version: 1, scipIndexCacheLimitMiB: 512, client: {} });
+    });
   });
 
   describe('updateUserClientSettings', () => {
@@ -96,6 +107,21 @@ describe('user-config', () => {
       });
     });
 
+    it('leaves keys other than client in the file', async () => {
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ version: 1, scipIndexCacheLimitMiB: 512, client: { sidebarOpen: true } }),
+        'utf-8',
+      );
+      await updateUserClientSettings({ diffViewMode: 'split' }, configPath);
+
+      expect(JSON.parse(await fs.readFile(configPath, 'utf-8'))).toEqual({
+        version: 1,
+        scipIndexCacheLimitMiB: 512,
+        client: { sidebarOpen: true, diffViewMode: 'split' },
+      });
+    });
+
     it('rejects settings exceeding the size limit', async () => {
       const huge = { blob: 'x'.repeat(MAX_USER_CONFIG_BYTES) };
       await expect(updateUserClientSettings(huge, configPath)).rejects.toThrow(
@@ -107,6 +133,29 @@ describe('user-config', () => {
       await updateUserClientSettings({ sidebarOpen: true }, configPath);
       const entries = await fs.readdir(configDir);
       expect(entries).toEqual(['config.json']);
+    });
+  });
+
+  describe('readScipIndexCacheLimitBytes', () => {
+    const write = (value: unknown) =>
+      fs.writeFile(configPath, JSON.stringify({ version: 1, scipIndexCacheLimitMiB: value }));
+
+    it('is 1 GiB when the config does not set it', async () => {
+      await expect(readScipIndexCacheLimitBytes(configPath)).resolves.toBe(1024 * 1024 * 1024);
+    });
+
+    it('reads the limit in MiB', async () => {
+      await write(256);
+      await expect(readScipIndexCacheLimitBytes(configPath)).resolves.toBe(256 * 1024 * 1024);
+      await write(0);
+      await expect(readScipIndexCacheLimitBytes(configPath)).resolves.toBe(0);
+    });
+
+    it('falls back to 1 GiB for a value that is not a size', async () => {
+      for (const value of ['512', -1, null]) {
+        await write(value);
+        await expect(readScipIndexCacheLimitBytes(configPath)).resolves.toBe(1024 * 1024 * 1024);
+      }
     });
   });
 

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'fs';
@@ -139,7 +140,7 @@ async function openReview(options: Parameters<typeof startServer>[0] = {}) {
     expect((await fetch(api('/api/diff'))).ok).toBe(true);
     await settleSymbolIndex?.();
   };
-  return { api, peek, stopSymbolIndex, settle };
+  return { api, peek, stopSymbolIndex, settle, settleSymbolIndex };
 }
 
 const FIND_BY_ID = {
@@ -356,6 +357,77 @@ describe('symbol peek of a commit review', () => {
     await settle();
 
     expect(tool.pids()).toHaveLength(1);
+  });
+
+  posixOnly(
+    'keeps the shown review over the cache limit and builds an evicted one again',
+    async () => {
+      mkdirSync(join(home, 'difit'), { recursive: true });
+      writeFileSync(
+        join(home, 'difit', 'config.json'),
+        JSON.stringify({ version: 1, client: {}, scipIndexCacheLimitMiB: 0 }),
+      );
+      const other = git('commit-tree', `${head}^{tree}`, '-p', base, '-m', 'other');
+      const third = git('commit-tree', `${head}^{tree}`, '-p', other, '-m', 'third');
+      const tool = fakeScipJava();
+      const { api, peek, settleSymbolIndex } = await openReview();
+      const show = async (from: string, target: string) => {
+        expect((await fetch(api(`/api/diff?base=${from}&target=${target}`))).ok).toBe(true);
+        await settleSymbolIndex?.();
+      };
+      const root = join(home, 'difit', 'scip-index');
+      const cached = () =>
+        readdirSync(root)
+          .filter((sha) => readdirSync(join(root, sha)).length > 0)
+          .sort();
+
+      await show(base, head);
+      expect(cached()).toEqual([head]);
+
+      await show(base, other);
+      expect(cached()).toEqual([other]);
+      expect((await peek({ ...FIND_BY_ID, ref: other })).body.source).toBe('index');
+      expect((await peek({ ...FIND_BY_ID, ref: head })).body.source).toBe('name');
+
+      await show(other, third);
+      expect(cached()).toEqual([other, third].sort());
+
+      await show(base, head);
+      expect(tool.pids()).toHaveLength(4);
+      expect(cached()).toEqual([head]);
+      expect((await peek({ ...FIND_BY_ID, ref: head })).body.source).toBe('index');
+    },
+  );
+
+  posixOnly('keeps the merge base that a merge-base review shows as its base', async () => {
+    const other = git('commit-tree', `${head}^{tree}`, '-p', base, '-m', 'other');
+    const side = git('commit-tree', `${head}^{tree}`, '-p', head, '-m', 'side');
+    const target = git('commit-tree', `${head}^{tree}`, '-p', head, '-m', 'target');
+    fakeScipJava();
+    const { api, settleSymbolIndex } = await openReview();
+    const show = async (query: string) => {
+      expect((await fetch(api(`/api/diff?${query}`))).ok).toBe(true);
+      await settleSymbolIndex?.();
+    };
+    const root = join(home, 'difit', 'scip-index');
+    const cached = () =>
+      readdirSync(root)
+        .filter((sha) => readdirSync(join(root, sha)).length > 0)
+        .sort();
+
+    // An already indexed target lets the cleanup start before the diff request ends.
+    await show(`base=${base}&target=${head}`);
+    await show(`base=${base}&target=${target}`);
+    await show(`base=${base}&target=${other}`);
+    expect(cached()).toEqual([head, other, target].sort());
+    writeFileSync(
+      join(home, 'difit', 'config.json'),
+      JSON.stringify({ version: 1, client: {}, scipIndexCacheLimitMiB: 0 }),
+    );
+
+    await show(`base=${side}&target=${target}&baseMode=merge-base`);
+
+    expect(cached()).toEqual([head, target].sort());
   });
 
   it('builds nothing and searches by name without scip-java', async () => {

@@ -2,9 +2,11 @@ import { promises as fs } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 
+// Keys other than `client` belong to the server and are kept as they are.
 export interface UserConfig {
   version: 1;
   client: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 const CONFIG_VERSION = 1 as const;
@@ -43,8 +45,12 @@ export async function readUserConfig(path: string = getUserConfigPath()): Promis
   try {
     const raw = await fs.readFile(path, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
-    if (isPlainObject(parsed) && isPlainObject(parsed.client)) {
-      return { version: CONFIG_VERSION, client: parsed.client };
+    if (isPlainObject(parsed)) {
+      return {
+        ...parsed,
+        version: CONFIG_VERSION,
+        client: isPlainObject(parsed.client) ? parsed.client : {},
+      };
     }
   } catch {
     // Missing or unreadable config falls back to defaults.
@@ -61,6 +67,7 @@ export async function updateUserClientSettings(
 ): Promise<UserConfig> {
   const current = await readUserConfig(path);
   const next: UserConfig = {
+    ...current,
     version: CONFIG_VERSION,
     client: { ...current.client, ...patch },
   };
@@ -76,4 +83,18 @@ export async function updateUserClientSettings(
   await fs.writeFile(tmpPath, serialized, 'utf-8');
   await fs.rename(tmpPath, path);
   return next;
+}
+
+const SCIP_INDEX_CACHE_LIMIT_KEY = 'scipIndexCacheLimitMiB';
+const DEFAULT_SCIP_INDEX_CACHE_LIMIT_MIB = 1024;
+
+export async function readScipIndexCacheLimitBytes(
+  path: string = getUserConfigPath(),
+): Promise<number> {
+  const value = (await readUserConfig(path))[SCIP_INDEX_CACHE_LIMIT_KEY];
+  const mib =
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : DEFAULT_SCIP_INDEX_CACHE_LIMIT_MIB;
+  return mib * 1024 * 1024;
 }

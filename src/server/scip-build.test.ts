@@ -7,6 +7,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  utimesSync,
   writeFileSync,
 } from 'fs';
 import { tmpdir } from 'os';
@@ -19,6 +21,7 @@ import {
   findScipJava,
   isIndexableCommit,
   scipIndexCacheRoot,
+  selectEvictions,
   toolSpawnSpec,
 } from './scip-build';
 
@@ -442,6 +445,10 @@ describe('ScipIndexBuilder', () => {
     const live = join(cache, other, 'work-1-abc');
     writeFiles(stale, { 'src/A.java': 'class A {}\n' });
     writeFiles(live, { 'src/A.java': 'class A {}\n' });
+    const staleTemp = join(cache, other, `index.lookup.gz.${deadPid}.tmp`);
+    const liveTemp = join(cache, other, 'index.lookup.gz.1.tmp');
+    writeFileSync(staleTemp, 'x');
+    writeFileSync(liveTemp, 'x');
     const { builder } = newBuilder(repo, fakeScipJava(WRITES_INDEX).path, cache);
 
     await expect(builder.request(sha)).resolves.toEqual({ status: 'ready' });
@@ -449,6 +456,8 @@ describe('ScipIndexBuilder', () => {
     await builder.stop();
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(live)).toBe(true);
+    expect(existsSync(staleTemp)).toBe(false);
+    expect(existsSync(liveTemp)).toBe(true);
   });
 
   posixOnly('kills what the tool left running in its process group', async () => {
@@ -612,5 +621,295 @@ describe('ScipIndexBuilder', () => {
     // The fake fails unless it sees the committed build.gradle, not the edited one.
     await expect(builder.request(sha)).resolves.toEqual({ status: 'ready' });
     expect(snapshot()).toEqual(before);
+  });
+});
+
+describe('selectEvictions', () => {
+  const entry = (sha: string, bytes: number, lastUsedMs: number) => ({ sha, bytes, lastUsedMs });
+
+  it('picks the least recently used until the rest fits under the limit', () => {
+    const entries = [entry('c', 40, 300), entry('a', 40, 100), entry('b', 40, 200)];
+    expect(selectEvictions(entries, 120, new Set())).toEqual([]);
+    expect(selectEvictions(entries, 80, new Set())).toEqual(['a']);
+    expect(selectEvictions(entries, 79, new Set())).toEqual(['a', 'b']);
+  });
+
+  it('skips kept entries but still counts their size', () => {
+    const entries = [entry('a', 40, 100), entry('b', 40, 200), entry('c', 40, 300)];
+    expect(selectEvictions(entries, 40, new Set(['a']))).toEqual(['b', 'c']);
+    expect(selectEvictions(entries, 0, new Set(['a', 'b', 'c']))).toEqual([]);
+  });
+});
+
+describe('ScipIndexBuilder cache limit', () => {
+  const [A, B, C, D, E, F] = ['a', 'b', 'c', 'd', 'e', 'f'].map((ch) => ch.repeat(40)) as [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+
+  function seed(cache: string, sha: string, files: Record<string, number>, usedAt: number): void {
+    for (const [name, bytes] of Object.entries(files)) {
+      const path = join(cache, sha, name);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, Buffer.alloc(bytes));
+      utimesSync(path, usedAt, usedAt);
+    }
+  }
+
+  function stored(cache: string): string[] {
+    return readdirSync(cache)
+      .filter((sha) => readdirSync(join(cache, sha)).length > 0)
+      .sort();
+  }
+
+  function limitedBuilder(
+    cache: string,
+    limit: { bytes: number },
+    options: { repo?: string; tool?: string; inUse?: () => Promise<string[]> } = {},
+  ) {
+    const builder = new ScipIndexBuilder({
+      repoPath: options.repo ?? tempDir('difit-scip-build-repo-'),
+      cacheRoot: cache,
+      env: { DIFIT_SCIP_JAVA: options.tool, PATH: '' },
+      cacheLimitBytes: async () => limit.bytes,
+      inUse: options.inUse ?? (async () => []),
+    });
+    builders.push(builder);
+    const events: Array<[string, ScipBuildState['status']]> = [];
+    builder.onChange((sha, state) => events.push([sha, state.status]));
+    return { builder, events };
+  }
+
+  it('removes the least recently used indexes until the cache fits under the limit', async () => {
+    const cache = tempDir('difit-scip-cache-');
+    seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+    seed(cache, B, { 'index.lookup.gz': 400 }, 200);
+    seed(cache, C, { 'index.lookup.gz': 400 }, 300);
+    const { builder } = limitedBuilder(cache, { bytes: 1000 });
+
+    await expect(builder.request(C)).resolves.toEqual({ status: 'ready' });
+
+    expect(stored(cache)).toEqual([B, C]);
+  });
+
+  it('counts an index as used when a review opens it', async () => {
+    const cache = tempDir('difit-scip-cache-');
+    seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+    seed(cache, B, { 'index.lookup.gz': 400 }, 200);
+    seed(cache, C, { 'index.lookup.gz': 400 }, 300);
+    const { builder } = limitedBuilder(cache, { bytes: 1000 });
+
+    await builder.request(A);
+
+    expect(stored(cache)).toEqual([A, C]);
+    expect(statSync(join(cache, A, 'index.lookup.gz')).mtimeMs).toBeGreaterThan(300_000);
+  });
+
+  posixOnly(
+    'keeps indexes in use and builds in progress, and removes failed build logs',
+    async () => {
+      const cache = tempDir('difit-scip-cache-');
+      seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+      // pid 1 is alive, so another difit process may be building this commit.
+      seed(cache, B, { 'build.log': 400, 'work-1-abc/index.scip': 400 }, 200);
+      seed(cache, C, { 'index.lookup.gz': 400 }, 300);
+      seed(cache, D, { 'build.log': 400 }, 400);
+      seed(cache, E, { 'index.lookup.gz.1.tmp': 400 }, 500);
+      seed(cache, F, { 'index.lookup.gz': 400 }, 600);
+      const { builder, events } = limitedBuilder(cache, { bytes: 0 }, { inUse: async () => [A] });
+
+      await builder.request(F);
+
+      expect(stored(cache)).toEqual([A, B, E, F]);
+      expect(readdirSync(join(cache, B)).sort()).toEqual(['build.log', 'work-1-abc']);
+      expect(readdirSync(join(cache, E))).toEqual(['index.lookup.gz.1.tmp']);
+      // Nothing of these was known to this process, so there is nothing to announce.
+      expect(events).toEqual([[F, 'ready']]);
+    },
+  );
+
+  posixOnly('removes the log of a failed build without trying the build again', async () => {
+    const repo = createRepo();
+    const sha = commit(repo, JAVA_PROJECT);
+    const cache = tempDir('difit-scip-cache-');
+    const fake = fakeScipJava('exit 1');
+    const { builder } = limitedBuilder(cache, { bytes: 0 }, { repo, tool: fake.path });
+    const failed = await builder.request(sha);
+    seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+    seed(cache, B, { 'index.lookup.gz': 400 }, 200);
+
+    await builder.request(A);
+
+    expect(stored(cache)).toEqual([A]);
+    await expect(builder.request(sha)).resolves.toEqual(failed);
+    expect(builder.state(sha)).toEqual(failed);
+    expect(calls(fake.log)).toHaveLength(1);
+  });
+
+  it('reads the limit again at every cleanup', async () => {
+    const cache = tempDir('difit-scip-cache-');
+    seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+    seed(cache, B, { 'index.lookup.gz': 400 }, 200);
+    const limit = { bytes: 10_000 };
+    const { builder } = limitedBuilder(cache, limit);
+
+    await builder.request(B);
+    expect(stored(cache)).toEqual([A, B]);
+
+    limit.bytes = 500;
+    await builder.request(B);
+    expect(stored(cache)).toEqual([B]);
+  });
+
+  it('reads the limit from the difit config file at every cleanup', async () => {
+    const configDir = tempDir('difit-config-');
+    const saved = process.env.DIFIT_CONFIG_DIR;
+    process.env.DIFIT_CONFIG_DIR = configDir;
+    try {
+      const cache = tempDir('difit-scip-cache-');
+      seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+      seed(cache, B, { 'index.lookup.gz': 400 }, 200);
+      const builder = new ScipIndexBuilder({
+        repoPath: tempDir('difit-scip-build-repo-'),
+        cacheRoot: cache,
+        env: { PATH: '' },
+      });
+      builders.push(builder);
+
+      await builder.request(B);
+      expect(stored(cache)).toEqual([A, B]);
+
+      writeFileSync(
+        join(configDir, 'config.json'),
+        JSON.stringify({ version: 1, client: {}, scipIndexCacheLimitMiB: 0 }),
+      );
+      await builder.request(B);
+      expect(stored(cache)).toEqual([B]);
+    } finally {
+      if (saved === undefined) delete process.env.DIFIT_CONFIG_DIR;
+      else process.env.DIFIT_CONFIG_DIR = saved;
+    }
+  });
+
+  function slowFirstInUse(shown: () => string[]) {
+    let release = () => {};
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let calls = 0;
+    const inUse = async () => {
+      const commits = shown();
+      if (calls++ === 0) await released;
+      return commits;
+    };
+    return { inUse, started: () => calls > 0, release };
+  }
+
+  it('keeps a commit that a request opens while a cleanup is running', async () => {
+    const cache = tempDir('difit-scip-cache-');
+    seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+    seed(cache, B, { 'index.lookup.gz': 400 }, 50);
+    const cleanup = slowFirstInUse(() => []);
+    const { builder, events } = limitedBuilder(cache, { bytes: 500 }, { inUse: cleanup.inUse });
+
+    const first = builder.request(A);
+    await waitFor(cleanup.started);
+    const second = builder.request(B);
+    await waitFor(() => builder.state(B).status === 'ready');
+    cleanup.release();
+    await Promise.all([first, second]);
+
+    expect(stored(cache)).toEqual([B]);
+    expect(builder.state(B)).toEqual({ status: 'ready' });
+    expect(events).not.toContainEqual([B, 'none']);
+  });
+
+  it('keeps a commit that becomes shown while a cleanup is running', async () => {
+    const cache = tempDir('difit-scip-cache-');
+    seed(cache, A, { 'index.lookup.gz': 400 }, 100);
+    seed(cache, B, { 'index.lookup.gz': 400 }, 50);
+    let shown: string[] = [];
+    const cleanup = slowFirstInUse(() => shown);
+    const { builder } = limitedBuilder(cache, { bytes: 500 }, { inUse: cleanup.inUse });
+
+    const first = builder.request(A);
+    await waitFor(cleanup.started);
+    shown = [B];
+    cleanup.release();
+    await first;
+
+    expect(stored(cache)).toEqual([A, B]);
+  });
+
+  posixOnly('counts an index as used when a lookup reads it', async () => {
+    const repo = createRepo();
+    const sha = commit(repo, JAVA_PROJECT);
+    const cache = tempDir('difit-scip-cache-');
+    const limit = { bytes: 1e9 };
+    const { builder } = limitedBuilder(cache, limit, {
+      repo,
+      tool: fakeScipJava(WRITES_INDEX).path,
+    });
+    await builder.request(sha);
+    const indexPath = join(cache, sha, 'index.lookup.gz');
+    utimesSync(indexPath, 100, 100);
+    seed(cache, A, { 'index.lookup.gz': 400 }, 200);
+    seed(cache, B, { 'index.lookup.gz': 1 }, 300);
+
+    expect(await builder.getIndex(sha)).not.toBeNull();
+    await waitFor(() => statSync(indexPath).mtimeMs > 300_000);
+    limit.bytes = statSync(indexPath).size + 1;
+    await builder.request(B);
+
+    expect(stored(cache)).toEqual([B, sha].sort());
+  });
+
+  posixOnly('counts an index as used when a lookup loads it from disk', async () => {
+    const repo = createRepo();
+    const sha = commit(repo, JAVA_PROJECT);
+    const cache = tempDir('difit-scip-cache-');
+    const unlimited = { bytes: 1e9 };
+    const built = limitedBuilder(cache, unlimited, { repo, tool: fakeScipJava(WRITES_INDEX).path });
+    await built.builder.request(sha);
+    const { builder } = limitedBuilder(cache, unlimited, { repo });
+    await expect(builder.request(sha)).resolves.toEqual({ status: 'ready' });
+    const indexPath = join(cache, sha, 'index.lookup.gz');
+    utimesSync(indexPath, 100, 100);
+
+    expect(await builder.getIndex(sha)).not.toBeNull();
+    await waitFor(() => statSync(indexPath).mtimeMs > 100_000, 2000);
+  });
+
+  posixOnly('builds again a commit whose index the cleanup removed', async () => {
+    const repo = createRepo();
+    const first = commit(repo, JAVA_PROJECT);
+    const second = commit(repo, {
+      'src/main/java/demo/Other.java': 'package demo;\nclass Other {}\n',
+    });
+    const cache = tempDir('difit-scip-cache-');
+    const fake = fakeScipJava(WRITES_INDEX);
+    const { builder, events } = limitedBuilder(cache, { bytes: 0 }, { repo, tool: fake.path });
+
+    await expect(builder.request(first)).resolves.toEqual({ status: 'ready' });
+    await expect(builder.request(second)).resolves.toEqual({ status: 'ready' });
+    expect(stored(cache)).toEqual([second]);
+    expect(builder.state(first)).toEqual({ status: 'none' });
+    await expect(builder.getIndex(first)).resolves.toBeNull();
+
+    await expect(builder.request(first)).resolves.toEqual({ status: 'ready' });
+    expect(calls(fake.log)).toHaveLength(3);
+    expect(stored(cache)).toEqual([first]);
+    expect(events).toEqual([
+      [first, 'building'],
+      [first, 'ready'],
+      [second, 'building'],
+      [second, 'ready'],
+      [first, 'none'],
+      [first, 'building'],
+      [first, 'ready'],
+      [second, 'none'],
+    ]);
   });
 });
