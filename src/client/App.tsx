@@ -107,6 +107,7 @@ import { fetchClientSettings, saveClientSettings } from './services/userSettings
 import { hasMultipleCommentAuthors } from './utils/commentAuthors';
 import { copyTextToClipboard } from './utils/clipboard';
 import { fixupFileElementId, getFileElementId } from './utils/domUtils';
+import { getElementId } from './utils/navigation/domHelpers';
 import { findCommentPosition } from './utils/navigation/positionHelpers';
 import { resolveEventSourceUrl } from './utils/eventSourceUrl';
 import {
@@ -838,6 +839,8 @@ function App() {
         getMergedChunksForVersion(mergedChunksState, diffDataVersion, file.path) || file.chunks,
     }));
   }, [diffData, diffDataVersion, mergedChunksState]);
+  const navigableFilesRef = useRef(navigableFiles);
+  navigableFilesRef.current = navigableFiles;
 
   const fileLineIndexByPath = useMemo(() => {
     const map = new Map<string, ReturnType<typeof buildFileLineIndex>>();
@@ -1860,7 +1863,6 @@ function App() {
       revealFixupFile(placed.fixupSha, thread.file);
       return;
     }
-    const files = diffData.files;
     setCollapsedFiles((prev) => {
       if (!prev.has(thread.file)) return prev;
       const next = new Set(prev);
@@ -1868,8 +1870,13 @@ function App() {
       return next;
     });
     const moveCursor = () => {
-      const position = findCommentPosition(thread, files);
-      if (position) setCursorPosition(position);
+      const position = findCommentPosition(thread, navigableFilesRef.current);
+      setCursorPosition(position);
+      scrollFileIntoDiffContainer(
+        thread.file,
+        `comment-thread-${thread.id}`,
+        position ? getElementId(position, diffMode) : undefined,
+      );
     };
     if (afterRender) requestAnimationFrame(moveCursor);
     else moveCursor();
