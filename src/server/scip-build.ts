@@ -10,13 +10,14 @@ import {
   readdir,
   rm,
   stat,
+  utimes,
   writeFile,
 } from 'fs/promises';
 import { join, resolve } from 'path';
 
 import { runGit } from './run-git.js';
 import { type ScipIndex, convertScipIndex, readScipIndex, writeScipIndex } from './scip-index.js';
-import { getDifitConfigDir } from './user-config.js';
+import { getDifitConfigDir, readScipIndexCacheLimitBytes } from './user-config.js';
 
 // Builds a SCIP index of one commit with scip-java, outside the repository: the commit's
 // tree is extracted with `git archive` into the cache, so the work tree, index, refs and
@@ -37,6 +38,10 @@ interface ScipIndexBuilderOptions {
   timeoutMs?: number;
   // Compact indexes kept in memory for lookups.
   maxLoaded?: number;
+  // Read at every cleanup; defaults to the limit in the difit config file.
+  cacheLimitBytes?: () => Promise<number>;
+  // Commits whose indexes a cleanup keeps even over the limit.
+  inUse?: () => Promise<Iterable<string>>;
 }
 
 const COMPACT_FILE = 'index.lookup.gz';
@@ -50,6 +55,7 @@ const KILL_GRACE_MS = 2000;
 const ENDING_SIGNALS = ['SIGTERM', 'SIGHUP'] as const;
 const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const WORK_DIR = /^work-(\d+)-/;
+const TEMP_FILE = /\.(\d+)\.tmp$/;
 const ROOT_BUILD_FILES = new Set([
   'build.gradle',
   'build.gradle.kts',
@@ -231,6 +237,35 @@ async function removeTree(dir: string): Promise<void> {
   } catch {}
 }
 
+export interface CacheEntry {
+  sha: string;
+  bytes: number;
+  lastUsedMs: number;
+}
+
+// Least recently used first, until the rest fits under the limit. Kept entries still count
+// toward the limit.
+export function selectEvictions(
+  entries: readonly CacheEntry[],
+  limitBytes: number,
+  keep: ReadonlySet<string>,
+): string[] {
+  let total = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+  const evicted: string[] = [];
+  for (const entry of [...entries].sort((a, b) => a.lastUsedMs - b.lastUsedMs)) {
+    if (total <= limitBytes) break;
+    if (keep.has(entry.sha)) continue;
+    evicted.push(entry.sha);
+    total -= entry.bytes;
+  }
+  return evicted;
+}
+
+interface StoredEntry extends CacheEntry {
+  files: string[];
+  building: boolean;
+}
+
 class BuildError extends Error {}
 
 export class ScipIndexBuilder {
@@ -240,17 +275,21 @@ export class ScipIndexBuilder {
   private readonly maxLoaded: number;
   private readonly platform: NodeJS.Platform;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly cacheLimitBytes: () => Promise<number>;
+  private readonly inUse: () => Promise<Iterable<string>>;
   private readonly states = new Map<string, ScipBuildState>();
   private readonly jobs = new Map<string, Promise<ScipBuildState>>();
   private readonly loaded = new Map<string, ScipIndex>();
   private readonly loading = new Map<string, Promise<ScipIndex | null>>();
   private readonly listeners = new Set<(sha: string, state: ScipBuildState) => void>();
+  private readonly requestedSinceTrimStarted = new Set<string>();
   private readonly children = new Set<ChildProcess>();
   private readonly abort = new AbortController();
   private tool: Promise<string | null> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
   private stopping: Promise<void> | null = null;
   private sweep: Promise<void> | null = null;
+  private trimming: Promise<void> = Promise.resolve();
   private hooked = false;
   private readonly killOnExit = () => {
     for (const child of this.children) killProcessTreeNow(child, this.platform);
@@ -268,6 +307,8 @@ export class ScipIndexBuilder {
     this.maxLoaded = options.maxLoaded ?? DEFAULT_MAX_LOADED;
     this.platform = process.platform;
     this.env = options.env ?? process.env;
+    this.cacheLimitBytes = options.cacheLimitBytes ?? (() => readScipIndexCacheLimitBytes());
+    this.inUse = options.inUse ?? (() => Promise.resolve([]));
   }
 
   state(sha: string): ScipBuildState {
@@ -280,13 +321,20 @@ export class ScipIndexBuilder {
   }
 
   // Starts indexing a full commit sha unless it is already indexed, and settles with the
-  // final state. Requests for the same commit share one build; builds run one at a time.
-  request(sha: string): Promise<ScipBuildState> {
-    const existing = this.jobs.get(sha);
-    if (existing) return existing;
-    const job = this.run(sha);
-    this.jobs.set(sha, job);
-    return job;
+  // final state. Builds run one at a time.
+  async request(sha: string): Promise<ScipBuildState> {
+    this.requestedSinceTrimStarted.add(sha);
+    let job = this.jobs.get(sha);
+    if (!job) {
+      job = this.run(sha);
+      this.jobs.set(sha, job);
+    }
+    const state = await job;
+    if (state.status === 'ready') {
+      await this.markUsed(sha);
+      await this.trimCache(sha);
+    }
+    return state;
   }
 
   // The commit's index once it is ready, or null.
@@ -294,6 +342,7 @@ export class ScipIndexBuilder {
     const cached = this.loaded.get(sha);
     if (cached) {
       this.remember(sha, cached);
+      void this.markUsed(sha);
       return cached;
     }
     if (this.state(sha).status !== 'ready') return null;
@@ -304,7 +353,10 @@ export class ScipIndexBuilder {
     }
     const index = await load;
     if (index) {
-      this.remember(sha, index);
+      if (this.state(sha).status === 'ready') {
+        this.remember(sha, index);
+        void this.markUsed(sha);
+      }
     } else if (this.state(sha).status === 'ready') {
       // Removed or damaged on disk; a later request builds it again.
       await rm(this.compactPath(sha), { force: true });
@@ -318,7 +370,7 @@ export class ScipIndexBuilder {
     this.stopping ??= (async () => {
       this.abort.abort();
       await Promise.all([...this.children].map((child) => killProcessTree(child, this.platform)));
-      await Promise.all([this.queue, this.sweep]);
+      await Promise.all([this.queue, this.sweep, this.trimming]);
       this.unhookProcess();
     })();
     return this.stopping;
@@ -354,6 +406,115 @@ export class ScipIndexBuilder {
       if (this.loaded.size <= this.maxLoaded) break;
       this.loaded.delete(oldest);
     }
+  }
+
+  // Access times are not kept reliably (relatime, noatime), so use is recorded as the index
+  // file's modification time.
+  private async markUsed(sha: string): Promise<void> {
+    const now = new Date();
+    try {
+      await utimes(this.compactPath(sha), now, now);
+    } catch {}
+  }
+
+  private trimCache(requested: string): Promise<void> {
+    const run = this.trimming.then(() => this.evictOverLimit(requested));
+    this.trimming = run.catch(() => undefined);
+    return run;
+  }
+
+  private async evictOverLimit(requested: string): Promise<void> {
+    if (this.abort.signal.aborted) return;
+    this.requestedSinceTrimStarted.clear();
+    let limit: number;
+    const keep = new Set([requested]);
+    try {
+      limit = await this.cacheLimitBytes();
+      for (const sha of await this.inUse()) keep.add(sha);
+    } catch (error) {
+      console.error('Error reading what the symbol index cache must keep:', error);
+      return;
+    }
+    for (const [sha, state] of this.states) {
+      if (state.status === 'building') keep.add(sha);
+    }
+    const entries = await this.storedEntries();
+    for (const entry of entries) {
+      if (entry.building) keep.add(entry.sha);
+    }
+    const bySha = new Map(entries.map((entry) => [entry.sha, entry]));
+    for (const sha of selectEvictions(entries, limit, keep)) {
+      const entry = bySha.get(sha);
+      if (entry && (await this.stillUnused(sha))) await this.evict(entry);
+    }
+  }
+
+  private async stillUnused(sha: string): Promise<boolean> {
+    let shown: Iterable<string>;
+    try {
+      shown = await this.inUse();
+    } catch {
+      return false;
+    }
+    return !new Set(shown).has(sha) && !this.requestedSinceTrimStarted.has(sha);
+  }
+
+  // Each commit directory counts with its finished files; work trees and half-written files
+  // belong to builds in progress.
+  private async storedEntries(): Promise<StoredEntry[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.cacheRoot);
+    } catch {
+      return [];
+    }
+    const entries: StoredEntry[] = [];
+    for (const sha of names) {
+      if (!FULL_SHA.test(sha)) continue;
+      const dir = join(this.cacheRoot, sha);
+      let children;
+      try {
+        children = await readdir(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      const entry: StoredEntry = { sha, bytes: 0, lastUsedMs: 0, files: [], building: false };
+      for (const child of children) {
+        const pid = Number(WORK_DIR.exec(child.name)?.[1] ?? NaN);
+        if (child.isDirectory() && !Number.isNaN(pid) && isProcessAlive(pid)) {
+          entry.building = true;
+        }
+        if (!child.isFile() || TEMP_FILE.test(child.name)) continue;
+        try {
+          const info = await stat(join(dir, child.name));
+          entry.bytes += info.size;
+          entry.lastUsedMs = Math.max(entry.lastUsedMs, info.mtimeMs);
+          entry.files.push(join(dir, child.name));
+        } catch {}
+      }
+      if (entry.files.length > 0) entries.push(entry);
+    }
+    return entries;
+  }
+
+  // Only the finished files go, so a build of the same commit by another difit process keeps
+  // its work tree.
+  private async evict(entry: StoredEntry): Promise<void> {
+    const job = this.jobs.get(entry.sha);
+    let removedAll = true;
+    for (const file of entry.files) {
+      try {
+        await rm(file, { force: true });
+      } catch {
+        removedAll = false;
+      }
+    }
+    // A failed build is not retried within this run, even once its log is gone.
+    const status = this.state(entry.sha).status;
+    if (!removedAll || status === 'failed' || status === 'building') return;
+    if (status === 'ready' || this.jobs.get(entry.sha) === job) this.jobs.delete(entry.sha);
+    this.loaded.delete(entry.sha);
+    if (status !== 'none') this.setState(entry.sha, { status: 'none' });
   }
 
   private async exists(path: string): Promise<boolean> {
@@ -435,7 +596,8 @@ export class ScipIndexBuilder {
     }
   }
 
-  // Work directories of difit processes that ended without cleaning up after themselves.
+  // Work directories and half-written indexes of difit processes that ended without cleaning
+  // up after themselves.
   private async sweepStaleWork(): Promise<void> {
     let commits: string[];
     try {
@@ -451,7 +613,7 @@ export class ScipIndexBuilder {
         continue;
       }
       for (const name of entries) {
-        const pid = Number(WORK_DIR.exec(name)?.[1] ?? NaN);
+        const pid = Number((WORK_DIR.exec(name) ?? TEMP_FILE.exec(name))?.[1] ?? NaN);
         if (Number.isNaN(pid) || pid === process.pid || isProcessAlive(pid)) continue;
         await removeTree(join(this.cacheRoot, commit, name));
       }

@@ -312,20 +312,6 @@ export async function startServer(options: ServerOptions): Promise<{
   };
   await reviewOf(initialSelection, currentCommentSelection);
 
-  const symbolIndex = options.stdinDiff
-    ? undefined
-    : new ScipIndexBuilder({ repoPath: repositoryPath });
-  const indexEvents = new Map<string, WatchEvent>();
-  symbolIndex?.onChange((commit, state) => {
-    const event: WatchEvent = {
-      type: 'symbolIndexChanged',
-      commit,
-      status: state.status,
-      timestamp: new Date().toISOString(),
-    };
-    indexEvents.set(commit, event);
-    fileWatcher.broadcast(event);
-  });
   // A ref that rev-parse returns unchanged is a full hash and always names the same commit.
   const resolvedCommits = new Map<string, string>();
   const resolveCommit = async (ref: string): Promise<string | null> => {
@@ -343,6 +329,28 @@ export async function startServer(options: ServerOptions): Promise<{
     if (commit === ref) resolvedCommits.set(ref, commit);
     return commit;
   };
+  const shownCommits = async (): Promise<string[]> => {
+    const refs = [currentSelection, currentCommentSelection].flatMap((selection) => [
+      selection.baseCommitish,
+      selection.targetCommitish,
+    ]);
+    const commits = await Promise.all(refs.map((ref) => resolveCommit(ref)));
+    return commits.filter((commit): commit is string => commit !== null);
+  };
+  const symbolIndex = options.stdinDiff
+    ? undefined
+    : new ScipIndexBuilder({ repoPath: repositoryPath, inUse: shownCommits });
+  const indexEvents = new Map<string, WatchEvent>();
+  symbolIndex?.onChange((commit, state) => {
+    const event: WatchEvent = {
+      type: 'symbolIndexChanged',
+      commit,
+      status: state.status,
+      timestamp: new Date().toISOString(),
+    };
+    indexEvents.set(commit, event);
+    fileWatcher.broadcast(event);
+  });
   const indexRequests = new Set<Promise<void>>();
   const indexReviewedCommit = (selection: DiffSelection) => {
     if (!symbolIndex) return;
@@ -508,7 +516,6 @@ export async function startServer(options: ServerOptions): Promise<{
     }
 
     currentSelection = requestedSelection;
-    indexReviewedCommit(requestedSelection);
 
     const viewSelection = createResolvedCommentSelection(
       responseDiffData,
@@ -517,6 +524,7 @@ export async function startServer(options: ServerOptions): Promise<{
     );
     const review = await reviewOf(requestedSelection, viewSelection);
     currentCommentSelection = review?.selection ?? viewSelection;
+    indexReviewedCommit(requestedSelection);
 
     const baseCommitish =
       responseDiffData.baseCommitish ?? (options.stdinDiff ? 'stdin' : undefined);
