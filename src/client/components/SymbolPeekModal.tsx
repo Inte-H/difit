@@ -252,6 +252,11 @@ function MatchList({ result, selected, onSelect }: MatchListProps) {
                         {VIA_LABELS[match.via]}
                       </span>
                     )}
+                    {match.source === 'name' && (
+                      <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
+                        이름 검색
+                      </span>
+                    )}
                   </span>
                   <code className="block truncate font-mono text-xs text-github-text-primary">
                     {match.text.trim()}
