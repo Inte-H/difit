@@ -31,9 +31,7 @@ export function useFileWatch(
   }, [onSymbolIndexChanged]);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 5;
-  // Well inside the server's grace period, so a dropped connection is back before the server
-  // treats the page as closed.
+  const maxReconnectAttempts = 15;
   const reconnectDelay = 1000;
 
   const [watchState, setWatchState] = useState<ClientWatchState>({

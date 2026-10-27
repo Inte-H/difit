@@ -259,7 +259,7 @@ describe('useFileWatch', () => {
           { initialProps: { onCommentsChanged: vi.fn(async () => {}) } },
         );
 
-        for (let attempt = 0; attempt <= 5; attempt += 1) {
+        for (let attempt = 0; attempt <= 15; attempt += 1) {
           const socket = MockWebSocket.instances.at(-1)!;
           socket.onopen = null;
           act(() => {
@@ -267,12 +267,12 @@ describe('useFileWatch', () => {
             vi.advanceTimersByTime(1000);
           });
         }
-        expect(MockWebSocket.instances).toHaveLength(6);
+        expect(MockWebSocket.instances).toHaveLength(16);
         expect(result.current.error).toBe('Lost connection to file watch service');
 
         rerender({ onCommentsChanged: vi.fn(async () => {}) });
 
-        expect(MockWebSocket.instances).toHaveLength(7);
+        expect(MockWebSocket.instances).toHaveLength(17);
       } finally {
         vi.useRealTimers();
       }
