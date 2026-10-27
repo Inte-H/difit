@@ -5,6 +5,8 @@ import { pipeline } from 'stream/promises';
 import { promisify } from 'util';
 import { createGzip, gunzip } from 'zlib';
 
+import type { SymbolMatch } from '../types/diff.js';
+
 // Lookup-only view of a SCIP index (https://github.com/sourcegraph/scip, scip.proto),
 // decoded by hand so the raw file never becomes one big object graph.
 
@@ -20,6 +22,12 @@ interface ScipSite {
   endCol: number;
 }
 
+type ScipAccessorKind = NonNullable<SymbolMatch['via']>;
+
+interface ScipFieldUse extends ScipSite {
+  via?: ScipAccessorKind;
+}
+
 export interface ScipLookupResult {
   symbol: string;
   definitions: ScipSite[];
@@ -27,6 +35,10 @@ export interface ScipLookupResult {
   // No document of the index defines the symbol or the type it belongs to, so it lives in
   // a library. Never set for packages.
   external: boolean;
+  // Set when the symbol is a field, or a getter or @Builder method Lombok generated from one:
+  // the uses of the field and the calls of every such method, without the references that
+  // Lombok's generated code leaves on the field's declaration and on its annotations.
+  fieldUses?: ScipFieldUse[];
 }
 
 // scip.proto PositionEncoding.
@@ -44,6 +56,7 @@ const HEADER_WORDS = 8;
 const OCC_WORDS = 4;
 const MULTI_LINE_END = 0x7fffffff;
 const ROLE_DEFINITION = 1;
+const GENERATED_MARKERS = [' java/lang/SuppressWarnings#', ' lombok/Generated#'];
 
 const WIRE_VARINT = 0;
 const WIRE_FIXED64 = 1;
@@ -91,16 +104,9 @@ export class ScipIndex {
     const { docStart, occ } = this.data;
     const line0 = line - 1;
     const end = docStart[doc + 1] ?? 0;
-    let lo = docStart[doc] ?? 0;
-    let hi = end;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if ((occ[mid * OCC_WORDS] ?? 0) < line0) lo = mid + 1;
-      else hi = mid;
-    }
     let best = -1;
     let bestWidth = Infinity;
-    for (let i = lo; i < end && occ[i * OCC_WORDS] === line0; i++) {
+    for (let i = this.firstOnLine(doc, line0); i < end && occ[i * OCC_WORDS] === line0; i++) {
       const start = occ[i * OCC_WORDS + 1] ?? 0;
       const stop = occ[i * OCC_WORDS + 2] ?? 0;
       if (column < start || column >= stop) continue;
@@ -111,7 +117,173 @@ export class ScipIndex {
       }
     }
     if (best < 0) return null;
-    return this.resultFor((occ[best * OCC_WORDS + 3] ?? 0) >>> 1);
+    const symbol = (occ[best * OCC_WORDS + 3] ?? 0) >>> 1;
+    const result = this.resultFor(symbol);
+    const fieldUses = this.fieldUsesOf(symbol);
+    return fieldUses ? { ...result, fieldUses } : result;
+  }
+
+  private firstOnLine(doc: number, line0: number): number {
+    const { docStart, occ } = this.data;
+    let lo = docStart[doc] ?? 0;
+    let hi = docStart[doc + 1] ?? 0;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if ((occ[mid * OCC_WORDS] ?? 0) < line0) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  // scip-java records no link from a generated method to its field, so they are matched by
+  // where the method's definition sits: a getter starts where the field's name starts (or,
+  // when the declaration line ends in a comment, right after the declaration), and a @Builder
+  // method has exactly the range of the field's name.
+  private fieldUsesOf(symbol: number): ScipFieldUse[] | undefined {
+    const name = this.symbolName(symbol);
+    const definition = this.firstDefinition(symbol);
+    if (definition === undefined) return undefined;
+    let group: AccessorGroup | null = null;
+    if (fieldOwner(name) !== null) {
+      group = this.accessorGroup(definition);
+    } else if (methodOwner(name) !== null) {
+      const { docStart, occ } = this.data;
+      const doc = this.docOf(definition);
+      const line0 = occ[definition * OCC_WORDS] ?? 0;
+      const end = docStart[doc + 1] ?? 0;
+      for (let i = this.firstOnLine(doc, line0); i < end && occ[i * OCC_WORDS] === line0; i++) {
+        const word = occ[i * OCC_WORDS + 3] ?? 0;
+        if ((word & 1) === 0 || fieldOwner(this.symbolName(word >>> 1)) === null) continue;
+        const candidate = this.accessorGroup(i);
+        if (!candidate?.accessors.has(symbol)) continue;
+        if (group !== null && group.field !== candidate.field) return undefined;
+        group = candidate;
+      }
+    }
+    if (group === null) return undefined;
+    return this.usesOf(group);
+  }
+
+  private accessorGroup(fieldDefinition: number): AccessorGroup | null {
+    const { docStart, occ } = this.data;
+    const field = (occ[fieldDefinition * OCC_WORDS + 3] ?? 0) >>> 1;
+    const owner = fieldOwner(this.symbolName(field));
+    if (owner === null) return null;
+    const doc = this.docOf(fieldDefinition);
+    const line0 = occ[fieldDefinition * OCC_WORDS] ?? 0;
+    const start = occ[fieldDefinition * OCC_WORDS + 1] ?? 0;
+    const stop = occ[fieldDefinition * OCC_WORDS + 2] ?? 0;
+    const end = docStart[doc + 1] ?? 0;
+    const first = this.firstOnLine(doc, line0);
+
+    // The getter's body leaves a reference to the field that covers the whole declaration.
+    let declarationEnd = -1;
+    for (let i = first; i < end && occ[i * OCC_WORDS] === line0; i++) {
+      if (occ[i * OCC_WORDS + 1] !== start) continue;
+      const word = occ[i * OCC_WORDS + 3] ?? 0;
+      const other = word >>> 1;
+      if ((word & 1) === 0) {
+        if (other === field) declarationEnd = Math.max(declarationEnd, occ[i * OCC_WORDS + 2] ?? 0);
+        continue;
+      }
+      if (other === field) continue;
+      // A field of the builder shares the spot; any other field there makes it ambiguous.
+      const otherOwner = fieldOwner(this.symbolName(other));
+      if (otherOwner !== null && !isNestedIn(otherOwner, owner)) return null;
+    }
+
+    const accessors = new Map<number, ScipAccessorKind>();
+    const afterDeclaration: number[] = [];
+    for (let i = first; i < end && occ[i * OCC_WORDS] === line0; i++) {
+      const word = occ[i * OCC_WORDS + 3] ?? 0;
+      if ((word & 1) === 0) continue;
+      const method = word >>> 1;
+      const methodOwnerType = methodOwner(this.symbolName(method));
+      if (methodOwnerType === null) continue;
+      const methodStart = occ[i * OCC_WORDS + 1] ?? 0;
+      const methodStop = occ[i * OCC_WORDS + 2] ?? 0;
+      if (methodOwnerType === owner) {
+        if (methodStart === start && methodStop !== stop) accessors.set(method, 'getter');
+        else if (methodStart === declarationEnd) afterDeclaration.push(method);
+      } else if (
+        isNestedIn(methodOwnerType, owner) &&
+        methodStart === start &&
+        methodStop === stop
+      ) {
+        accessors.set(method, 'builder');
+      }
+    }
+    const [trailing] = afterDeclaration;
+    if (afterDeclaration.length === 1 && trailing !== undefined) accessors.set(trailing, 'getter');
+    return { field, doc, line0, start, accessors };
+  }
+
+  private usesOf(group: AccessorGroup): ScipFieldUse[] {
+    const { symOccStart, symOcc, occ } = this.data;
+    const found: { occurrence: number; via?: ScipAccessorKind }[] = [];
+    const members: [number, ScipAccessorKind | undefined][] = [
+      [group.field, undefined],
+      ...group.accessors,
+    ];
+    for (const [member, via] of members) {
+      const end = symOccStart[member + 1] ?? 0;
+      for (let k = symOccStart[member] ?? 0; k < end; k++) {
+        const i = symOcc[k] ?? 0;
+        if (((occ[i * OCC_WORDS + 3] ?? 0) & 1) === 1) continue;
+        const doc = this.docOf(i);
+        // The field's own name, which a generated getter's body refers to.
+        if (
+          doc === group.doc &&
+          occ[i * OCC_WORDS] === group.line0 &&
+          occ[i * OCC_WORDS + 1] === group.start
+        ) {
+          continue;
+        }
+        if (this.isInGeneratedCode(i, doc)) continue;
+        found.push(via === undefined ? { occurrence: i } : { occurrence: i, via });
+      }
+    }
+    found.sort((a, b) => a.occurrence - b.occurrence);
+    return found.map(({ occurrence, via }) => {
+      const site = this.siteOf(occurrence);
+      return via === undefined ? site : { ...site, via };
+    });
+  }
+
+  // Lombok puts the code it generates on an annotation or on the field's declaration and marks
+  // it @SuppressWarnings (and @lombok.Generated when so configured), so a reference in it shares
+  // its range with a reference to one of those annotations.
+  private isInGeneratedCode(occurrence: number, doc: number): boolean {
+    const { docStart, occ } = this.data;
+    const sameRange = (i: number) =>
+      occ[i * OCC_WORDS] === occ[occurrence * OCC_WORDS] &&
+      occ[i * OCC_WORDS + 1] === occ[occurrence * OCC_WORDS + 1] &&
+      occ[i * OCC_WORDS + 2] === occ[occurrence * OCC_WORDS + 2];
+    const marksGenerated = (i: number) => {
+      const word = occ[i * OCC_WORDS + 3] ?? 0;
+      if ((word & 1) === 1) return false;
+      const name = this.symbolName(word >>> 1);
+      return GENERATED_MARKERS.some((marker) => name.endsWith(marker));
+    };
+    const first = docStart[doc] ?? 0;
+    const end = docStart[doc + 1] ?? 0;
+    for (let i = occurrence - 1; i >= first && sameRange(i); i--) {
+      if (marksGenerated(i)) return true;
+    }
+    for (let i = occurrence + 1; i < end && sameRange(i); i++) {
+      if (marksGenerated(i)) return true;
+    }
+    return false;
+  }
+
+  private firstDefinition(symbol: number): number | undefined {
+    const { symOccStart, symOcc, occ } = this.data;
+    const end = symOccStart[symbol + 1] ?? 0;
+    for (let k = symOccStart[symbol] ?? 0; k < end; k++) {
+      const i = symOcc[k] ?? 0;
+      if (((occ[i * OCC_WORDS + 3] ?? 0) & 1) === 1) return i;
+    }
+    return undefined;
   }
 
   private resultFor(symbol: number): ScipLookupResult {
@@ -164,18 +336,23 @@ export class ScipIndex {
     const end = symOccStart[symbol + 1] ?? 0;
     for (let k = symOccStart[symbol] ?? 0; k < end; k++) {
       const i = symOcc[k] ?? 0;
-      const startCol = occ[i * OCC_WORDS + 1] ?? 0;
-      const endCol = occ[i * OCC_WORDS + 2] ?? 0;
-      const site: ScipSite = {
-        path: this.data.docPaths[this.docOf(i)] ?? '',
-        line: (occ[i * OCC_WORDS] ?? 0) + 1,
-        startCol,
-        endCol: endCol === MULTI_LINE_END ? startCol : endCol,
-      };
+      const site = this.siteOf(i);
       if (((occ[i * OCC_WORDS + 3] ?? 0) & 1) === 1) definitions.push(site);
       else references.push(site);
     }
     return { definitions, references };
+  }
+
+  private siteOf(occurrence: number): ScipSite {
+    const { occ } = this.data;
+    const startCol = occ[occurrence * OCC_WORDS + 1] ?? 0;
+    const endCol = occ[occurrence * OCC_WORDS + 2] ?? 0;
+    return {
+      path: this.data.docPaths[this.docOf(occurrence)] ?? '',
+      line: (occ[occurrence * OCC_WORDS] ?? 0) + 1,
+      startCol,
+      endCol: endCol === MULTI_LINE_END ? startCol : endCol,
+    };
   }
 
   private docOf(occIndex: number): number {
@@ -690,6 +867,30 @@ class FileReader {
 function ownerTypeOf(symbol: string): string | null {
   const hash = symbol.lastIndexOf('#', symbol.length - 2);
   return hash < 0 ? null : symbol.slice(0, hash + 1);
+}
+
+// The type that declares the field "… demo/Foo#name."; null for anything but a field.
+function fieldOwner(symbol: string): string | null {
+  if (symbol.startsWith('local ') || !symbol.endsWith('.') || symbol.endsWith(').')) return null;
+  return ownerTypeOf(symbol);
+}
+
+// The type that declares the method "… demo/Foo#getName()."; null for anything but a method.
+function methodOwner(symbol: string): string | null {
+  if (symbol.startsWith('local ') || !symbol.endsWith(').')) return null;
+  return ownerTypeOf(symbol);
+}
+
+function isNestedIn(inner: string, outer: string): boolean {
+  return inner !== outer && inner.startsWith(outer);
+}
+
+interface AccessorGroup {
+  field: number;
+  doc: number;
+  line0: number;
+  start: number;
+  accessors: Map<number, ScipAccessorKind>;
 }
 
 // "semanticdb maven maven/org.springframework.data/spring-data-commons 2.7.0
