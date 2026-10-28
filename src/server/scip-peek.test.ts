@@ -389,6 +389,65 @@ describe('answerFromScipIndex on Lombok classes', () => {
   it('shows a line that uses the field and calls its getter as a direct use', async () => {
     expect((await answer('left', PAIR, 11))?.references).toEqual([use(PAIR, 8)]);
   });
+
+  describe('from the index of an older commit', () => {
+    const editedLines = (edits: Record<string, number[]>): CommitFiles => ({
+      existing: async (paths) => new Set(paths),
+      readLines: async (paths) =>
+        new Map(
+          paths.map((path) => [
+            path,
+            lines(path).map((text, i) =>
+              edits[path]?.includes(i + 1) ? `${text} // edited` : text,
+            ),
+          ]),
+        ),
+    });
+    const changesOf = (edits: Record<string, number[]>) =>
+      parseLineChanges(
+        Object.entries(edits)
+          .flatMap(([path, edited]) => [
+            `diff --git a/${path} b/${path}`,
+            `--- a/${path}`,
+            `+++ b/${path}`,
+            ...edited.flatMap((line) => [
+              `@@ -${line} +${line} @@`,
+              `-${lines(path)[line - 1]}`,
+              `+${lines(path)[line - 1]} // edited`,
+            ]),
+          ])
+          .concat('')
+          .join('\n'),
+      )!;
+    const borrowed = (name: string, path: string, line: number, edits: Record<string, number[]>) =>
+      answerFromScipIndex(
+        index,
+        name,
+        'fix1234',
+        { path, line, column: (lines(path)[line - 1] ?? '').indexOf(name) },
+        editedLines(edits),
+        changesOf(edits),
+      );
+    const byName = (path: string, line: number) => ({
+      path,
+      line,
+      text: `${lines(path)[line - 1]} // edited`,
+      source: 'name',
+    });
+
+    it('keeps changed lines that call the getter or builder of a clicked field', async () => {
+      const result = await borrowed('code', DAT, 9, { [USE]: [8, 10] });
+
+      expect(result?.definitions).toEqual([use(DAT, 9)]);
+      expect(result?.references).toEqual([byName(USE, 8), byName(USE, 10)]);
+    });
+
+    it('keeps a changed declaration of the field behind a clicked getter', async () => {
+      const result = await borrowed('getCode', USE, 8, { [DAT]: [9] });
+
+      expect(result?.definitions).toEqual([byName(DAT, 9)]);
+    });
+  });
 });
 
 describe('commitFiles', () => {

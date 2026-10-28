@@ -39,6 +39,8 @@ export interface ScipLookupResult {
   // the uses of the field and the calls of every such method, without the references that
   // Lombok's generated code leaves on the field's declaration and on its annotations.
   fieldUses?: ScipFieldUse[];
+  // Set with fieldUses: the names of that field and of those methods.
+  fieldNames?: string[];
 }
 
 // scip.proto PositionEncoding.
@@ -119,8 +121,14 @@ export class ScipIndex {
     if (best < 0) return null;
     const symbol = (occ[best * OCC_WORDS + 3] ?? 0) >>> 1;
     const result = this.resultFor(symbol);
-    const fieldUses = this.fieldUsesOf(symbol);
-    return fieldUses ? { ...result, fieldUses } : result;
+    const group = this.accessorGroupOf(symbol);
+    if (!group) return result;
+    const fieldNames = new Set<string>();
+    for (const member of [group.field, ...group.accessors.keys()]) {
+      const name = memberName(this.symbolName(member));
+      if (name !== null) fieldNames.add(name);
+    }
+    return { ...result, fieldUses: this.usesOf(group), fieldNames: [...fieldNames] };
   }
 
   private firstOnLine(doc: number, line0: number): number {
@@ -139,10 +147,10 @@ export class ScipIndex {
   // where the method's definition sits: a getter starts where the field's name starts (or,
   // when the declaration line ends in a comment, right after the declaration), and a @Builder
   // method has exactly the range of the field's name.
-  private fieldUsesOf(symbol: number): ScipFieldUse[] | undefined {
+  private accessorGroupOf(symbol: number): AccessorGroup | null {
     const name = this.symbolName(symbol);
     const definition = this.firstDefinition(symbol);
-    if (definition === undefined) return undefined;
+    if (definition === undefined) return null;
     let group: AccessorGroup | null = null;
     if (fieldOwner(name) !== null) {
       group = this.accessorGroup(definition);
@@ -156,12 +164,11 @@ export class ScipIndex {
         if ((word & 1) === 0 || fieldOwner(this.symbolName(word >>> 1)) === null) continue;
         const candidate = this.accessorGroup(i);
         if (!candidate?.accessors.has(symbol)) continue;
-        if (group !== null && group.field !== candidate.field) return undefined;
+        if (group !== null && group.field !== candidate.field) return null;
         group = candidate;
       }
     }
-    if (group === null) return undefined;
-    return this.usesOf(group);
+    return group;
   }
 
   private accessorGroup(fieldDefinition: number): AccessorGroup | null {
@@ -919,6 +926,15 @@ export function externalSymbolDisplayName(symbol: string): string {
   if (!owner) return member;
   const ownerIsType = parsed.some(({ kind }) => kind === 'type');
   return `${owner}${ownerIsType ? '#' : '.'}${member}`;
+}
+
+// "… demo/Dat#code." becomes "code" and "… demo/Dat#getCode()." becomes "getCode".
+function memberName(symbol: string): string | null {
+  const descriptors = descriptorPart(symbol);
+  const last = descriptors === null ? undefined : parseDescriptors(descriptors)?.at(-1);
+  if (last === undefined) return null;
+  if (last.kind === 'term' || last.kind === 'method') return last.name;
+  return null;
 }
 
 // Skips scheme, manager, package name and version; a doubled space is an escaped space.

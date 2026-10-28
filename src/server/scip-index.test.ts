@@ -236,6 +236,9 @@ describe('convertScipIndex on an index of Lombok classes', () => {
     ]);
     expect(at(USE, 8, 'getCode')?.fieldUses).toEqual(fromField?.fieldUses);
     expect(at(USE, 10, 'code')?.fieldUses).toEqual(fromField?.fieldUses);
+    for (const clicked of [fromField, at(USE, 8, 'getCode'), at(USE, 10, 'code')]) {
+      expect([...(clicked?.fieldNames ?? [])].sort()).toEqual(['code', 'getCode']);
+    }
   });
 
   it('keeps apart what it cannot place on the field', () => {

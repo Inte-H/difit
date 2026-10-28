@@ -173,7 +173,7 @@ interface Placed {
   line: number;
   via?: SymbolMatch['via'];
   // Set when the site's line changed since the indexed commit: the lines that replaced it,
-  // each listed when it holds the name.
+  // each listed when it holds one of the names searched for.
   replaced?: { first: number; last: number };
 }
 
@@ -245,6 +245,7 @@ export async function answerFromScipIndex(
   const clickedText = lines.get(at.path)?.[at.line - 1] ?? '';
   if (clickedText.slice(clicked.startCol, clicked.startCol + name.length) !== name) return null;
 
+  const names = [...new Set([name, ...(found.fieldNames ?? [])])];
   const toMatches = (sites: Placed[]): SymbolMatch[] => {
     const listed = new Set<string>();
     return sites.flatMap((site) => {
@@ -254,7 +255,9 @@ export async function answerFromScipIndex(
       for (let line = first; line <= last; line++) {
         const text = fileLines[line - 1] ?? '';
         const key = `${site.path}:${line}`;
-        if (listed.has(key) || (site.replaced && !holdsName(text, name))) continue;
+        if (listed.has(key) || (site.replaced && !names.some((held) => holdsName(text, held)))) {
+          continue;
+        }
         listed.add(key);
         const match: SymbolMatch = { path: site.path, line, text: clipLine(text) };
         if (site.replaced) matches.push({ ...match, source: 'name' });
