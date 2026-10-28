@@ -176,4 +176,11 @@ describe('reselect', () => {
     expect(reselect(current, result(['A.java']))?.path).toBe('A.java');
     expect(reselect(current, result([]))).toBeNull();
   });
+
+  it('keeps an implementation selected, and takes it first when there is no declaration', () => {
+    const implementation = { path: 'Impl.java', line: 3, text: 'class Impl {' };
+    const answer = { ...result(['A.java']), implementations: [implementation] };
+    expect(reselect(implementation, answer)).toEqual(implementation);
+    expect(reselect(null, answer)).toEqual(implementation);
+  });
 });

@@ -206,7 +206,13 @@ interface MatchListProps {
 
 function MatchList({ result, selected, onSelect }: MatchListProps) {
   const { library } = result;
-  if (result.definitions.length === 0 && result.references.length === 0 && !library) {
+  const implementations = result.implementations ?? [];
+  if (
+    result.definitions.length === 0 &&
+    implementations.length === 0 &&
+    result.references.length === 0 &&
+    !library
+  ) {
     return <Notice>찾지 못했습니다.</Notice>;
   }
 
@@ -264,6 +270,7 @@ function MatchList({ result, selected, onSelect }: MatchListProps) {
   return (
     <>
       {section('선언', result.definitions, library)}
+      {section('구현', implementations)}
       {section('쓰인 곳', result.references)}
       {result.truncated && <Notice>결과가 많아 일부만 보여 줍니다.</Notice>}
     </>

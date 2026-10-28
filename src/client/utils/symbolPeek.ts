@@ -100,6 +100,6 @@ export function reselect(
   current: SymbolMatch | null,
   result: SymbolSearchResponse,
 ): SymbolMatch | null {
-  const matches = [...result.definitions, ...result.references];
+  const matches = [...result.definitions, ...(result.implementations ?? []), ...result.references];
   return matches.find((match) => isSameMatch(match, current)) ?? matches[0] ?? null;
 }
