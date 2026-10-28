@@ -76,3 +76,27 @@ export function findCommentPosition(
     findLinePosition(file, fileIndex, targetLineNumber, 'old')
   );
 }
+
+export interface LinePlace {
+  file: string;
+  line: number;
+  side: DiffSide;
+}
+
+export function linePlaceAt(position: CursorPosition, files: DiffFile[]): LinePlace | null {
+  const file = files[position.fileIndex];
+  const line = file?.chunks[position.chunkIndex]?.lines[position.lineIndex];
+  if (!file || !line) return null;
+  const { oldLineNumber, newLineNumber } = line;
+  const old = oldLineNumber === undefined ? null : { line: oldLineNumber, side: 'old' as const };
+  const added = newLineNumber === undefined ? null : { line: newLineNumber, side: 'new' as const };
+  const chosen = position.side === 'left' ? (old ?? added) : (added ?? old);
+  return chosen && { file: file.path, ...chosen };
+}
+
+export function findLinePlacePosition(place: LinePlace, files: DiffFile[]): CursorPosition | null {
+  const fileIndex = files.findIndex((f) => f.path === place.file);
+  const file = files[fileIndex];
+  if (!file) return null;
+  return findLinePosition(file, fileIndex, place.line, place.side);
+}

@@ -38,9 +38,12 @@ export function useKeyboardNavigation({
   onPreviousCommit,
   onNextCommit,
   getHoveredFileIndex,
+  onJump,
 }: UseKeyboardNavigationProps): UseKeyboardNavigationReturn {
   const [cursor, setCursor] = useState<CursorPosition | null>(null);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const onJumpRef = useRef(onJump);
+  onJumpRef.current = onJump;
 
   // Remember the last cursor so navigation resumes from it after the cursor
   // is cleared (e.g. by a mouse click) instead of restarting from the top
@@ -89,10 +92,11 @@ export function useKeyboardNavigation({
 
   // Create navigation commands
   const createNavigationCommand = useCallback(
-    (filter: NavigationFilter) => {
+    (filter: NavigationFilter, isJump = false) => {
       return (direction: NavigationDirection) => {
         const result = navigate(direction, filter);
         if (result.position) {
+          if (isJump) onJumpRef.current?.(result.position);
           setCursor(result.position);
           if (result.scrollTarget) {
             scrollToElement(result.scrollTarget);
@@ -115,13 +119,13 @@ export function useKeyboardNavigation({
   );
 
   const navigateToFile = useMemo(
-    () => createNavigationCommand(filters.file),
+    () => createNavigationCommand(filters.file, true),
     [createNavigationCommand, filters.file],
   );
 
   // Navigation to comments
   const navigateToComment = useMemo(
-    () => createNavigationCommand(filters.comment),
+    () => createNavigationCommand(filters.comment, true),
     [createNavigationCommand, filters.comment],
   );
 
@@ -353,23 +357,15 @@ export function useKeyboardNavigation({
     '{',
     () => {
       if (files.length > 0) {
-        setCursor({
+        const position: CursorPosition = {
           fileIndex: 0,
           chunkIndex: 0,
           lineIndex: 0,
           side: viewMode === 'split' ? 'left' : 'right',
-        });
-        scrollToElement(
-          getElementId(
-            {
-              fileIndex: 0,
-              chunkIndex: 0,
-              lineIndex: 0,
-              side: viewMode === 'split' ? 'left' : 'right',
-            },
-            viewMode,
-          ),
-        );
+        };
+        onJumpRef.current?.(position);
+        setCursor(position);
+        scrollToElement(getElementId(position, viewMode));
       }
     },
     { ...hotkeyOptions, useKey: true },
@@ -383,23 +379,15 @@ export function useKeyboardNavigation({
         const lastFileIndex = files.length - 1;
         const lastFile = files[lastFileIndex];
         if (lastFile && lastFile.chunks.length > 0) {
-          setCursor({
+          const position: CursorPosition = {
             fileIndex: lastFileIndex,
             chunkIndex: 0,
             lineIndex: 0,
             side: viewMode === 'split' ? 'left' : 'right',
-          });
-          scrollToElement(
-            getElementId(
-              {
-                fileIndex: lastFileIndex,
-                chunkIndex: 0,
-                lineIndex: 0,
-                side: viewMode === 'split' ? 'left' : 'right',
-              },
-              viewMode,
-            ),
-          );
+          };
+          onJumpRef.current?.(position);
+          setCursor(position);
+          scrollToElement(getElementId(position, viewMode));
         }
       }
     },

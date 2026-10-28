@@ -1524,6 +1524,283 @@ describe('App Component - Returning from the review a comment was made on', () =
   });
 });
 
+describe('App Component - Back and Forward between places in one review', () => {
+  const FILE_TOPS: Record<string, number> = { 'a.ts': 0, 'b.ts': 3000, 'c.ts': 6000 };
+  const HEADER_HEIGHT = 40;
+  const LINE_HEIGHT = 20;
+  let scrolled = 0;
+  const box = (top: number, height: number) =>
+    ({ top, bottom: top + height, left: 0, right: 0, width: 0, height }) as DOMRect;
+
+  const diffAt = (target: string): DiffResponse => ({
+    ...mockDiffResponse,
+    baseCommitish: `${target}^`,
+    targetCommitish: target,
+    requestedBaseCommitish: `${target}^`,
+    requestedTargetCommitish: target,
+    files: Object.keys(FILE_TOPS).map((path) => filesByPath[path] ?? linedFile(path, 30)),
+  });
+  let filesByPath: Record<string, DiffResponse['files'][number]> = {};
+  const diffTargets = () =>
+    vi
+      .mocked(global.fetch)
+      .mock.calls.map(([url]) => String(url))
+      .filter((url) => url.startsWith('/api/diff'))
+      .map((url) => new URLSearchParams(url.split('?')[1]).get('target'));
+
+  const cursorRow = () => document.querySelector('.keyboard-cursor')?.closest('tr') ?? null;
+  const cursorFile = () =>
+    cursorRow()?.closest<HTMLElement>('[data-file-path]')?.dataset.filePath ?? null;
+  const fileListRow = (path: string) =>
+    within(document.getElementById('file-tree-panel')!).getByTitle(path);
+  const fileShown = () =>
+    Object.keys(FILE_TOPS)
+      .filter((path) => FILE_TOPS[path]! <= scrolled)
+      .at(-1) ?? null;
+  const scrollTo = async (top: number) => {
+    scrolled = top;
+    fireEvent.scroll(document.querySelector('main')!);
+    await act(() => new Promise((resolve) => requestAnimationFrame(resolve)));
+  };
+  const back = () => act(() => window.history.back());
+  const forward = () => act(() => window.history.forward());
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockDecisions = [];
+    scrolled = 0;
+    filesByPath = {};
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(
+      function (this: HTMLElement) {
+        if (this.tagName === 'MAIN') return box(0, 800);
+        const section = this.closest<HTMLElement>('[data-file-path]');
+        const fileTop = FILE_TOPS[section?.dataset.filePath ?? ''];
+        if (!section || fileTop === undefined) return box(0, 0);
+        const top = fileTop - scrolled;
+        if (this === section) return box(top, 2000);
+        if (this.closest('[data-file-header]')) return box(Math.max(0, top), HEADER_HEIGHT);
+        const row = this.closest('[data-diff-line-row="true"]');
+        if (!row || !/^file-\d+-chunk-/.test(this.id)) return box(top + 1000, LINE_HEIGHT);
+        const rowIndex = [...section.querySelectorAll('[data-diff-line-row="true"]')].indexOf(row);
+        return box(top + HEADER_HEIGHT + rowIndex * LINE_HEIGHT, LINE_HEIGHT);
+      },
+    );
+    Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.tagName === 'MAIN' ? scrolled : 0;
+      },
+      set(this: HTMLElement, top: number) {
+        if (this.tagName === 'MAIN') scrolled = top;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      value(this: HTMLElement, options: ScrollToOptions) {
+        if (this.tagName === 'MAIN') scrolled = options.top ?? scrolled;
+      },
+    });
+    vi.mocked(global.fetch).mockImplementation((input) => {
+      const url = String(input);
+      if (url === '/api/revisions') {
+        return Promise.resolve({ ok: true, json: async () => null } as Response);
+      }
+      if (url.startsWith('/api/fixups')) {
+        return Promise.resolve({ ok: true, json: async () => ({ fixups: [] }) } as Response);
+      }
+      const target = url.startsWith('/api/diff')
+        ? new URLSearchParams(url.split('?')[1]).get('target')
+        : null;
+      return Promise.resolve({
+        ok: true,
+        json: async () => diffAt(target ?? 'abc1234'),
+        blob: async () => ({ size: 1024 }),
+      } as Response);
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (HTMLElement.prototype as { scrollTop?: number }).scrollTop;
+    delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+    window.history.replaceState(null, '');
+  });
+
+  it.each(['split', 'unified'])(
+    'in %s view, goes back from a file picked in the file list to the line that was at the top',
+    async (mode) => {
+      window.localStorage.setItem('difit.diffViewMode', mode);
+      renderApp();
+      await screen.findAllByTitle('c.ts');
+      await scrollTo(3100);
+      const lengthBefore = window.history.length;
+
+      fireEvent.click(fileListRow('c.ts'));
+      await waitFor(() => expect(scrolled).toBe(6000));
+      expect(window.history.length).toBe(lengthBefore + 1);
+
+      back();
+      await waitFor(() => expect(scrolled).toBe(3000 + 5 * LINE_HEIGHT - 8));
+      forward();
+      await waitFor(() => expect(scrolled).toBe(6000));
+      expect(window.history.length).toBe(lengthBefore + 1);
+    },
+  );
+
+  it('goes back to a deleted line whose row also shows a later added line', async () => {
+    const lines: DiffResponse['files'][number]['chunks'][number]['lines'] = [
+      ...[1, 2, 3, 4, 5].map((n) => ({
+        type: 'delete' as const,
+        content: `old ${n}`,
+        oldLineNumber: n,
+      })),
+      { type: 'add', content: 'new 1', newLineNumber: 1 },
+      ...[6, 7, 8, 9].map((n) => ({
+        type: 'normal' as const,
+        content: `same ${n}`,
+        oldLineNumber: n,
+        newLineNumber: n - 4,
+      })),
+    ];
+    filesByPath = {
+      'b.ts': {
+        path: 'b.ts',
+        status: 'modified',
+        additions: 1,
+        deletions: 5,
+        chunks: [
+          {
+            header: '@@ -1,9 +1,5 @@',
+            oldStart: 1,
+            oldLines: 9,
+            newStart: 1,
+            newLines: 5,
+            lines,
+          },
+        ],
+      },
+    };
+    renderApp();
+    await screen.findAllByTitle('c.ts');
+    await scrollTo(3000 + 3 * LINE_HEIGHT);
+
+    fireEvent.click(fileListRow('c.ts'));
+    await waitFor(() => expect(scrolled).toBe(6000));
+    back();
+
+    await waitFor(() => expect(scrolled).toBe(3000 + 3 * LINE_HEIGHT - 8));
+  });
+
+  it('counts ] and Shift+N as jumps but not j and k, and Back puts the cursor back', async () => {
+    mockComments = [createMockThread({ id: 'n1', filePath: 'c.ts', line: 5, body: 'Note' })];
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findAllByTitle('c.ts');
+    const lengthBefore = window.history.length;
+
+    await user.keyboard('jjjk');
+    expect(cursorFile()).toBe('a.ts');
+    const startRow = cursorRow()!.textContent;
+    expect(window.history.length).toBe(lengthBefore);
+
+    await user.keyboard(']');
+    await waitFor(() => expect(cursorFile()).toBe('b.ts'));
+    await scrollTo(3000);
+    await user.keyboard('{Shift>}N{/Shift}');
+    await waitFor(() => expect(cursorRow()).toHaveTextContent('line 5'));
+    expect(cursorFile()).toBe('c.ts');
+    await scrollTo(6000);
+    expect(window.history.length).toBe(lengthBefore + 2);
+
+    back();
+    await waitFor(() => expect(cursorFile()).toBe('b.ts'));
+    back();
+    await waitFor(() => expect(cursorFile()).toBe('a.ts'));
+    expect(cursorRow()!.textContent).toBe(startRow);
+    forward();
+    await waitFor(() => expect(cursorFile()).toBe('b.ts'));
+    expect(window.history.length).toBe(lengthBefore + 2);
+  });
+
+  it('goes back from a comment picked in the panel, and forward to it again', async () => {
+    mockComments = [createMockThread({ id: 'n1', filePath: 'c.ts', line: 20, body: 'Far note' })];
+    renderApp();
+    await screen.findAllByTitle('c.ts');
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle comments panel' }));
+    const lengthBefore = window.history.length;
+
+    await userEvent.click(within(commentsPanel()!).getByRole('button', { name: /Far note/ }));
+    await waitFor(() => expect(fileShown()).toBe('c.ts'));
+    expect(window.history.length).toBe(lengthBefore + 1);
+
+    back();
+    await waitFor(() => expect(fileShown()).toBe('a.ts'));
+    forward();
+    await waitFor(() => expect(fileShown()).toBe('c.ts'));
+    expect(cursorRow()).toHaveTextContent('line 20');
+  });
+
+  it('stops at the header of a file marked viewed since, and leaves it folded', async () => {
+    mockComments = [createMockThread({ id: 'n1', filePath: 'b.ts', line: 20, body: 'Middle' })];
+    renderApp();
+    await screen.findAllByTitle('c.ts');
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle comments panel' }));
+    await userEvent.click(within(commentsPanel()!).getByRole('button', { name: /Middle/ }));
+    await waitFor(() => expect(fileShown()).toBe('b.ts'));
+    back();
+    await waitFor(() => expect(fileShown()).toBe('a.ts'));
+
+    const bHeader = document
+      .getElementById(getFileElementId('b.ts'))!
+      .querySelector<HTMLElement>('[data-file-header]')!;
+    fireEvent.click(within(bHeader).getByTitle('Mark as reviewed'));
+    await waitFor(() => expect(within(bHeader).getByTitle(/^Expand file/)).toBeInTheDocument());
+    forward();
+
+    await waitFor(() => expect(scrolled).toBe(3000));
+    expect(within(bHeader).getByTitle(/^Expand file/)).toBeInTheDocument();
+  });
+
+  it('switches back to the earlier review and then to the spot it showed', async () => {
+    mockComments = [
+      {
+        ...createMockThread({ id: 'old', filePath: 'a.ts', line: 1, body: 'Old remark' }),
+        codeSnapshot: { content: 'line 0', commit: 'def5678' },
+      },
+    ];
+    renderApp();
+    await screen.findAllByTitle('c.ts');
+    await scrollTo(6100);
+
+    fireEvent.click(await screen.findByRole('button', { name: '이 지적을 달던 시점으로' }));
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('def5678'));
+    await screen.findAllByTitle('c.ts');
+    await scrollTo(0);
+
+    back();
+    await waitFor(() => expect(diffTargets().at(-1)).toBe('abc1234'));
+    await waitFor(() => expect(scrolled).toBe(6000 + 5 * LINE_HEIGHT - 8));
+  });
+
+  it('shows the spot of the entry when Back loads the page afresh', async () => {
+    window.history.replaceState(
+      {
+        difitReviewTarget: { baseCommitish: 'abc1234^', targetCommitish: 'abc1234' },
+        difitPlace: { kind: 'file', file: 'c.ts' },
+      },
+      '',
+    );
+    vi.spyOn(performance, 'getEntriesByType').mockReturnValue([
+      { type: 'back_forward' } as unknown as PerformanceEntry,
+    ]);
+
+    renderApp();
+
+    await waitFor(() => expect(scrolled).toBe(6000));
+  });
+});
+
 describe('App Component - Sidebar persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();

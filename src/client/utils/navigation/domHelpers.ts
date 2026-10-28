@@ -6,8 +6,23 @@ import type { CursorPosition, ViewMode } from '../../hooks/keyboardNavigation/ty
  * Format: file-{fileIndex}-chunk-{chunkIndex}-line-{lineIndex}[-{side}]
  */
 export function getElementId(position: CursorPosition, viewMode: ViewMode): string {
-  const baseId = `file-${position.fileIndex}-chunk-${position.chunkIndex}-line-${position.lineIndex}`;
+  const baseId = `${getFileLineIdPrefix(position.fileIndex)}${position.chunkIndex}-line-${position.lineIndex}`;
   return viewMode === 'split' ? `${baseId}-${position.side}` : baseId;
+}
+
+export function getFileLineIdPrefix(fileIndex: number): string {
+  return `file-${fileIndex}-chunk-`;
+}
+
+export function positionFromElementId(id: string): CursorPosition | null {
+  const match = /^file-(\d+)-chunk-(\d+)-line-(\d+)(?:-(left|right))?$/.exec(id);
+  if (!match) return null;
+  return {
+    fileIndex: Number(match[1]),
+    chunkIndex: Number(match[2]),
+    lineIndex: Number(match[3]),
+    side: match[4] === 'left' ? 'left' : 'right',
+  };
 }
 
 /**
