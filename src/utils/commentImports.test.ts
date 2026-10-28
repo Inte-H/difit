@@ -755,10 +755,22 @@ describe('commentImports', () => {
           ...made!.messages,
           {
             id: 'r1',
-            body: 'Fixed all three',
+            body: 'Which name?',
             author: 'Agent',
             createdAt: '2024-01-02T00:00:00.000Z',
             updatedAt: '2024-01-02T00:00:00.000Z',
+            choices: [
+              { id: 'A', name: 'placeholder', description: 'Keep one template.' },
+              { id: 'B', name: 'format', description: 'Use a formatter.' },
+            ],
+          },
+          {
+            id: 'r2',
+            body: '고름: A — placeholder',
+            author: 'User',
+            createdAt: '2024-01-03T00:00:00.000Z',
+            updatedAt: '2024-01-03T00:00:00.000Z',
+            answer: { messageId: 'r1', choice: 'A' },
           },
         ],
       };
@@ -775,14 +787,19 @@ describe('commentImports', () => {
           author: t.messages[0]!.author,
           createdAt: t.messages[0]!.createdAt,
           codeSnapshot: t.codeSnapshot,
+          view: t.view,
+          fixupTarget: t.fixupTarget,
         },
         ...t.messages.slice(1).map((message) => ({
           type: 'reply',
+          id: message.id,
           filePath: t.filePath,
           position: t.position,
           body: message.body,
           author: message.author,
           createdAt: message.createdAt,
+          choices: message.choices,
+          answer: message.answer,
         })),
       ]);
 
@@ -797,7 +814,11 @@ describe('commentImports', () => {
         id: 'multi',
         position: POSITION,
         codeSnapshot: { extraContents: ['x', 'y\nz'] },
-        messages: [{ body: multiImport.body }, { body: 'Fixed all three' }],
+        messages: [
+          { body: multiImport.body },
+          { id: 'r1', choices: thread.messages[1]!.choices },
+          { id: 'r2', answer: { messageId: 'r1', choice: 'A' } },
+        ],
       });
     });
 
