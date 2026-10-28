@@ -468,14 +468,15 @@ export const FileList = memo(function FileList({
     if (focusedRowIndex === -1 || activeRowKey === null || rowRefs.current.has(activeRowKey)) {
       return;
     }
-    const shownKeys = new Set(shownRows.map((row) => row.key));
-    const survivor =
-      oldRows.slice(focusedRowIndex + 1).find((row) => shownKeys.has(row.key)) ??
-      oldRows
-        .slice(0, focusedRowIndex)
-        .reverse()
-        .find((row) => shownKeys.has(row.key));
-    focusRow(survivor && shownRows.find((row) => row.key === survivor.key));
+    // Focus goes to the row now below the nearest old row above that is still shown, so rows that
+    // left together are skipped; with no such row below, to that row itself.
+    const shownIndexOf = new Map(shownRows.map((row, index) => [row.key, index]));
+    let aboveIndex = -1;
+    for (let index = focusedRowIndex - 1; index >= 0 && aboveIndex === -1; index -= 1) {
+      const key = oldRows[index]?.key;
+      if (key !== undefined) aboveIndex = shownIndexOf.get(key) ?? -1;
+    }
+    focusRow(shownRows[aboveIndex + 1] ?? shownRows[aboveIndex]);
   });
 
   const shownRowOfFile = (fileIndex: number | null) => {

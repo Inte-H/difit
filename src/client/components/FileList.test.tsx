@@ -548,6 +548,36 @@ describe('FileList unviewed filter', () => {
     expect(document.activeElement).toBe(getTreeRow('src/a.ts'));
   });
 
+  it('focuses the row that comes back where the focused one was', () => {
+    const { rerender } = renderList(new Set(['README.md', 'src/a.ts']));
+    fireEvent.click(toggle());
+    getTreeRow('src/b.ts').focus();
+
+    rerender(new Set(['README.md', 'src/b.ts']));
+
+    expect(document.activeElement).toBe(getTreeRow('src/a.ts'));
+  });
+
+  it('focuses the nearest row above when the last folder leaves with the focused file', () => {
+    const { rerender } = renderList(new Set(['README.md']));
+    fireEvent.click(toggle());
+    getTreeRow('src/b.ts').focus();
+
+    rerender(new Set(['README.md', 'src/a.ts', 'src/b.ts']));
+
+    expect(document.activeElement).toBe(getTreeRow('docs/guide.md'));
+  });
+
+  it('focuses the first row when no row around the focused one is left', () => {
+    const { rerender } = renderList(new Set(['README.md', 'docs/guide.md']));
+    fireEvent.click(toggle());
+    getTreeRow('src/a.ts').focus();
+
+    rerender(new Set(['README.md', 'src/a.ts', 'src/b.ts']));
+
+    expect(document.activeElement).toBe(getTreeRow('docs'));
+  });
+
   it('says when the file filter leaves no file, also with the unviewed filter off', () => {
     renderList(new Set());
 
