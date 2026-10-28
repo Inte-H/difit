@@ -40,7 +40,7 @@ export type ExtraLineRange = DiffLineRange | { side: DiffSide; start: number; en
 export type DiffCommentPosition =
   | {
       side: DiffSide;
-      // The bottom-most range, under which the comment's card sits.
+      // The range that ended lowest in the view the comment was written in.
       line: DiffLineRange;
       // The comment's other ranges, ascending on each side, those on `side` above `line`; the
       // screen writes those on `side` first. Optional so a record stays version 2 and an older
