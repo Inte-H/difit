@@ -133,6 +133,9 @@ export interface SymbolMatch {
   line: number;
   // Cut short when the source line is very long.
   text: string;
+  // Set on a use of the clicked field that goes through a method Lombok generated from it: a
+  // getter call, or a call of a @Builder method.
+  via?: 'getter' | 'builder';
 }
 
 export interface SymbolSearchResponse {

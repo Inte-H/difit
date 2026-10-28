@@ -206,6 +206,57 @@ describe('answerFromScipIndex', () => {
   });
 });
 
+describe('answerFromScipIndex on Lombok classes', () => {
+  // scip-index.test.ts says how this fixture was made.
+  const dir = join(__dirname, 'scip-index-lombok-fixture');
+  const DAT = 'src/main/java/demo/Dat.java';
+  const PAIR = 'src/main/java/demo/Pair.java';
+  const USE = 'src/main/java/demo/Use.java';
+  const lines = (path: string) => readFileSync(join(dir, path), 'utf8').split('\n');
+  const files: CommitFiles = {
+    existing: async (paths) => new Set(paths),
+    readLines: async (paths) => new Map(paths.map((path) => [path, lines(path)])),
+  };
+  let index: ScipIndex;
+
+  beforeAll(async () => {
+    index = await convertScipIndex(join(dir, 'index.scip'));
+  });
+
+  const answer = (name: string, path: string, line: number) =>
+    answerFromScipIndex(
+      index,
+      name,
+      'abc1234',
+      { path, line, column: (lines(path)[line - 1] ?? '').indexOf(name) },
+      files,
+    );
+  const use = (path: string, line: number, via?: 'getter' | 'builder') => ({
+    path,
+    line,
+    text: lines(path)[line - 1],
+    ...(via ? { via } : {}),
+  });
+
+  it('lists the getter and builder calls among the uses of a field and marks them', async () => {
+    const fromField = await answer('code', DAT, 9);
+
+    expect(fromField).toEqual({
+      name: 'code',
+      ref: 'abc1234',
+      definitions: [use(DAT, 9)],
+      references: [use(USE, 8, 'getter'), use(USE, 10, 'builder')],
+      truncated: false,
+      source: 'index',
+    });
+    expect((await answer('getCode', USE, 8))?.references).toEqual(fromField?.references);
+  });
+
+  it('shows a line that uses the field and calls its getter as a direct use', async () => {
+    expect((await answer('left', PAIR, 11))?.references).toEqual([use(PAIR, 8)]);
+  });
+});
+
 describe('commitFiles', () => {
   afterAll(() => {
     vi.unstubAllEnvs();

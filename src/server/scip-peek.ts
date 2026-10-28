@@ -138,16 +138,17 @@ interface Site {
   line: number;
   startCol: number;
   endCol: number;
+  via?: SymbolMatch['via'];
 }
 
 function oneSitePerLine(sites: Site[]): Site[] {
-  const seen = new Set<string>();
-  return sites.filter((site) => {
+  const byLine = new Map<string, Site>();
+  for (const site of sites) {
     const key = `${site.path}\0${site.line}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+    const kept = byLine.get(key);
+    if (!kept || (kept.via && !site.via)) byLine.set(key, site);
+  }
+  return [...byLine.values()];
 }
 
 // Null when the index cannot answer for that spot: it counts columns in a unit other than
@@ -183,14 +184,15 @@ export async function answerFromScipIndex(
     return null;
   }
 
+  const uses: Site[] = found.fieldUses ?? found.references;
   const committed = await files.existing([
     at.path,
     ...found.definitions.map((site) => site.path),
-    ...found.references.map((site) => site.path),
+    ...uses.map((site) => site.path),
   ]);
   if (!committed.has(at.path)) return null;
   const definitions = oneSitePerLine(found.definitions).filter((site) => committed.has(site.path));
-  const references = oneSitePerLine(found.references).filter((site) => committed.has(site.path));
+  const references = oneSitePerLine(uses).filter((site) => committed.has(site.path));
   const shownDefinitions = definitions.slice(0, MAX_DEFINITIONS);
   const shownReferences = references.slice(0, MAX_REFERENCES);
   const lines = await files.readLines([
@@ -205,6 +207,7 @@ export async function answerFromScipIndex(
     path: site.path,
     line: site.line,
     text: clipLine(lines.get(site.path)?.[site.line - 1] ?? ''),
+    ...(site.via ? { via: site.via } : {}),
   });
   return {
     name,

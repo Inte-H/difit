@@ -21,23 +21,28 @@ const PORT = 'src/main/java/demo/Port.java';
 const CACHE = 'src/main/java/demo/Cache.java';
 const MEMBERS = 'src/main/java/demo/MemberRepository.java';
 
-function sourceLine(path: string, line: number): string {
-  return readFileSync(join(FIXTURE_DIR, path), 'utf8').split('\n')[line - 1] ?? '';
+function fixtureSource(dir: string) {
+  const sourceLine = (path: string, line: number): string =>
+    readFileSync(join(dir, path), 'utf8').split('\n')[line - 1] ?? '';
+
+  // Column of the n-th (0-based) `name` on that line, as a JavaScript string index.
+  const columnOf = (path: string, line: number, name: string, nth = 0): number => {
+    const text = sourceLine(path, line);
+    let column = -1;
+    for (let i = 0; i <= nth; i++) column = text.indexOf(name, column + 1);
+    if (column < 0) throw new Error(`${name} not on ${path}:${line}`);
+    return column;
+  };
+
+  const site = (path: string, line: number, name: string, nth = 0) => {
+    const startCol = columnOf(path, line, name, nth);
+    return { path, line, startCol, endCol: startCol + name.length };
+  };
+
+  return { sourceLine, columnOf, site };
 }
 
-// Column of the n-th (0-based) `name` on that line, as a JavaScript string index.
-function columnOf(path: string, line: number, name: string, nth = 0): number {
-  const text = sourceLine(path, line);
-  let column = -1;
-  for (let i = 0; i <= nth; i++) column = text.indexOf(name, column + 1);
-  if (column < 0) throw new Error(`${name} not on ${path}:${line}`);
-  return column;
-}
-
-function site(path: string, line: number, name: string, nth = 0) {
-  const startCol = columnOf(path, line, name, nth);
-  return { path, line, startCol, endCol: startCol + name.length };
-}
+const { sourceLine, columnOf, site } = fixtureSource(FIXTURE_DIR);
 
 describe('convertScipIndex on a scip-java index', () => {
   let index: ScipIndex;
@@ -176,6 +181,95 @@ describe('convertScipIndex on a scip-java index', () => {
     const conversion = convertScipIndex(FIXTURE, { sliceMs: 0, signal: controller.signal });
     controller.abort(new Error('stopped'));
     await expect(conversion).rejects.toThrow('stopped');
+  });
+});
+
+// Made from the Java sources beside it by `scip-java index` (semanticdb-javac 0.12.3), with
+// Lombok 1.18.48 as the annotation processor.
+const LOMBOK_DIR = join(__dirname, 'scip-index-lombok-fixture');
+const FOO = 'src/main/java/demo/Foo.java';
+const DAT = 'src/main/java/demo/Dat.java';
+const BAR = 'src/main/java/demo/Bar.java';
+const HAND = 'src/main/java/demo/Hand.java';
+const PAIR = 'src/main/java/demo/Pair.java';
+const USE = 'src/main/java/demo/Use.java';
+
+describe('convertScipIndex on an index of Lombok classes', () => {
+  const lombok = fixtureSource(LOMBOK_DIR);
+  let index: ScipIndex;
+
+  beforeAll(async () => {
+    index = await convertScipIndex(join(LOMBOK_DIR, 'index.scip'));
+  });
+
+  const at = (path: string, line: number, name: string, nth = 0) =>
+    index.lookup(path, line, lombok.columnOf(path, line, name, nth));
+
+  it('lists the calls of a class-level getter with the uses of its field', () => {
+    const fromField = at(PAIR, 11, 'left');
+    expect(fromField?.fieldUses).toEqual([
+      lombok.site(PAIR, 8, 'left'),
+      { ...lombok.site(PAIR, 8, 'getLeft'), via: 'getter' },
+    ]);
+    expect(at(PAIR, 8, 'getLeft')?.fieldUses).toEqual(fromField?.fieldUses);
+  });
+
+  it('finds a getter that starts after the declaration when a comment ends its line', () => {
+    const expected = [{ ...lombok.site(USE, 6, 'getName'), via: 'getter' }];
+    expect(at(FOO, 8, 'name')?.fieldUses).toEqual(expected);
+    expect(at(USE, 6, 'getName')?.fieldUses).toEqual(expected);
+    expect(at(FOO, 9, 'count')?.fieldUses).toEqual([
+      { ...lombok.site(USE, 7, 'getCount'), via: 'getter' },
+    ]);
+  });
+
+  it('lists @Builder calls and leaves out the code Lombok put on the annotations', () => {
+    const fromField = at(DAT, 9, 'code');
+    // Generated equals, toString, builder and getter bodies refer to the field from the
+    // @Data and @Builder lines and from its own declaration.
+    expect(fromField?.references.map(({ line }) => line)).toEqual(
+      expect.arrayContaining([6, 7, 9]),
+    );
+    expect(fromField?.fieldUses).toEqual([
+      { ...lombok.site(USE, 8, 'getCode'), via: 'getter' },
+      { ...lombok.site(USE, 10, 'code'), via: 'builder' },
+    ]);
+    expect(at(USE, 8, 'getCode')?.fieldUses).toEqual(fromField?.fieldUses);
+    expect(at(USE, 10, 'code')?.fieldUses).toEqual(fromField?.fieldUses);
+  });
+
+  it('keeps apart what it cannot place on the field', () => {
+    expect(at(HAND, 4, 'size')?.fieldUses).toEqual([lombok.site(HAND, 7, 'size')]);
+    expect(at(USE, 13, 'getSize')?.fieldUses).toBeUndefined();
+    // Field-level @Getter and every @Setter sit on their annotation.
+    expect(at(BAR, 9, 'title')?.fieldUses).toEqual([]);
+    expect(at(USE, 11, 'getTitle')?.fieldUses).toBeUndefined();
+    expect(at(USE, 12, 'setTitle')?.fieldUses).toBeUndefined();
+    expect(at(USE, 9, 'setCode')?.fieldUses).toBeUndefined();
+    // scip-java put this getter's definition on its call in the class.
+    expect(at(FOO, 7, 'active')?.fieldUses).toEqual([lombok.site(FOO, 12, 'active')]);
+    expect(at(USE, 5, 'isActive')?.fieldUses).toBeUndefined();
+    // @Builder on a constructor makes builder methods of its parameters, not of fields.
+    expect(at(USE, 14, 'id')?.fieldUses).toBeUndefined();
+  });
+
+  it('answers the same from the stored file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'difit-scip-lombok-'));
+    try {
+      const path = join(dir, 'index.bin');
+      await writeScipIndex(index, path);
+      const loaded = await readScipIndex(path);
+      for (const [file, line, name] of [
+        [DAT, 9, 'code'],
+        [USE, 10, 'code'],
+        [FOO, 8, 'name'],
+      ] as const) {
+        const column = lombok.columnOf(file, line, name);
+        expect(loaded?.lookup(file, line, column)).toEqual(index.lookup(file, line, column));
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -326,6 +420,31 @@ describe('convertScipIndex on hand-written indexes', () => {
     // Without a one-line enclosing range the site keeps only its start.
     expect(index.lookup('Member.java', 4, 12)?.definitions).toEqual([
       { path: 'Member.java', line: 4, startCol: 10, endCol: 10 },
+    ]);
+  });
+
+  it('leaves out the declaration a getter refers to even when nothing marks it generated', async () => {
+    // No @SuppressWarnings or @lombok.Generated reference shares a range with these.
+    const raw = Buffer.from([
+      ...lengthDelimited(2, [
+        ...text(1, 'Member.java'),
+        ...lengthDelimited(2, occurrence([2, 19, 23], 'pkg Member#name.', 1)),
+        ...lengthDelimited(2, occurrence([2, 19, 24], 'pkg Member#name.')),
+        ...lengthDelimited(2, occurrence([2, 19, 24], 'pkg Member#getName().', 1)),
+        ...lengthDelimited(2, occurrence([6, 15, 19], 'pkg Member#name.')),
+      ]),
+      ...lengthDelimited(2, [
+        ...text(1, 'Use.java'),
+        ...lengthDelimited(2, occurrence([4, 8, 15], 'pkg Member#getName().')),
+      ]),
+    ]);
+    const path = join(dir, 'unmarked.scip');
+    writeFileSync(path, raw);
+    const index = await convertScipIndex(path);
+
+    expect(index.lookup('Member.java', 3, 19)?.fieldUses).toEqual([
+      { path: 'Member.java', line: 7, startCol: 15, endCol: 19 },
+      { path: 'Use.java', line: 5, startCol: 8, endCol: 15, via: 'getter' },
     ]);
   });
 
