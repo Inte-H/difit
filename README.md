@@ -195,6 +195,17 @@ npm i -g https://github.com/Inte-H/difit/releases/latest/download/difit.tgz
 
 특정 빌드를 깔려면 `https://github.com/Inte-H/difit/releases/download/v<버전>/difit-<버전>.tgz`를 쓴다. 버전은 `5.0.12-inteh.3`처럼 원래 difit 버전 뒤에 포크 표시가 붙는다.
 
+### 자동 업데이트
+
+릴리스로 깐 difit은 리뷰를 열 때 하루에 한 번 새 릴리스가 있는지 확인한다. 확인과 설치는 따로 떨어진 프로세스가 하므로 difit이 뜨는 시간은 그대로다. 새 릴리스는 `~/.difit/versions/<버전>`에 버전마다 따로 깔리고, 설치가 끝까지 성공한 폴더만 쓰인다. 새 버전은 다음에 difit을 켤 때부터 쓰이고, 이미 떠 있는 difit은 원래 폴더의 파일로 계속 화면을 보여 준다. npm으로 깐 `difit` 명령은 `~/.difit/versions`에서 가장 새 버전을 찾아 실행을 넘기기만 하고, 그 자신은 바뀌지 않는다. 오래된 버전 폴더는 가장 새 두 버전과 지금 떠 있는 difit이 쓰는 버전만 남기고 지운다.
+
+- `difit update`: 하루를 기다리지 않고 지금 확인해 설치한다
+- `DIFIT_DISABLE_AUTOUPDATE=1`: 자동 확인을 끈다. 이미 받아 둔 버전은 계속 쓰이고 `difit update`도 그대로 된다
+- 특정 빌드에 머물기: `~/.difit/versions`에 npm으로 깐 빌드보다 새 버전이 있으면 `difit`은 그 새 버전으로 뜬다. 특정 빌드를 계속 쓰려면 그 빌드를 `npm i -g`로 깐 뒤 `~/.difit/versions`에서 그보다 새 버전 폴더를 지우고 `DIFIT_DISABLE_AUTOUPDATE=1`을 둔다
+- 직접 빌드한 버전(`5.0.12-inteh.local.<커밋>`)이나 원래 difit 버전은 확인도 하지 않고 받아 둔 버전으로 넘기지도 않는다
+
+이 기능이 없던 difit(직접 빌드한 것 포함)에서 옮겨 오려면, 떠 있는 difit을 모두 끈 뒤 위의 `npm i -g` 한 줄을 한 번 실행한다. 이 기능이 들어간 릴리스부터는 그 뒤로 다시 깔 일이 없다. npm으로 다시 까는 것은 떠 있는 difit의 파일을 그 자리에서 바꾸므로, 열려 있는 리뷰 화면이 깨질 수 있다.
+
 ### 리뷰 흐름
 
 1. **리뷰 열기**: `difit feature main`처럼 브랜치 이름으로 연다. 리뷰는 연 순간의 커밋에 머문다

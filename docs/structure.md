@@ -161,7 +161,7 @@ dist/
 
 ### Entry Point
 
-- Binary: `dist/cli/index.js` (via package.json bin field)
+- Binary: `dist/cli/launcher.js` (via package.json bin field), which runs `dist/cli/index.js` of the newest installed fork release or of its own package
 - Shebang: `#!/usr/bin/env node`
 
 ## Error Handling
