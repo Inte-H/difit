@@ -384,7 +384,8 @@ export async function startServer(options: ServerOptions): Promise<{
     }
     return known;
   };
-  // The nearest ancestor with an index, and an ancestor nearer still whose index is being built.
+  // The nearest ancestor with an index, and an ancestor nearer still whose index is queued or
+  // being built.
   const indexedAncestor = async (
     commit: string,
   ): Promise<{ ready: string | null; building: string | null }> => {
@@ -392,7 +393,7 @@ export async function startServer(options: ServerOptions): Promise<{
     if (!symbolIndex) return { ready: null, building };
     for (const ancestor of await ancestorsOf(commit)) {
       const status = symbolIndex.state(ancestor).status;
-      if (status === 'building') building ??= ancestor;
+      if (status === 'queued' || status === 'building') building ??= ancestor;
       else if (status === 'ready' || (await symbolIndex.useStored(ancestor))) {
         return { ready: ancestor, building };
       }
@@ -817,9 +818,8 @@ export async function startServer(options: ServerOptions): Promise<{
 
       const fromAncestor = async () => {
         const status = commit ? symbolIndex?.state(commit).status : undefined;
-        if (!commit || !at || !symbolIndex || status === 'ready' || status === 'building') {
-          return null;
-        }
+        if (!commit || !at || !symbolIndex) return null;
+        if (status === 'ready' || status === 'queued' || status === 'building') return null;
         try {
           const ancestor = await indexedAncestor(commit);
           borrowIndex(ancestor);

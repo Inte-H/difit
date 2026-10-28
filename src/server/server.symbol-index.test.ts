@@ -716,6 +716,26 @@ describe('symbol peek of a commit review', () => {
       },
     );
 
+    posixOnly('waits for a nearer commit whose build waits its turn', async () => {
+      const gate = join(home, 'gate');
+      cleanups.push(() => rmSync(gate, { force: true }));
+      const fixed = fixupOfHead();
+      const next = git('commit-tree', `${fixed}^{tree}`, '-p', head, '-m', 'next');
+      const fixup = git('commit-tree', `${fixed}^{tree}`, '-p', next, '-m', 'fixup! next');
+      const tool = fakeScipJava(gate);
+      const { api, peek } = await openReview({ selection: createDiffSelection(base, head) });
+      await waitFor(async () => (tool.pids().length > 0 ? true : undefined));
+      expect((await fetch(api(`/api/diff?base=${next}&target=${fixup}`))).ok).toBe(true);
+      const left = await peek({ ...FIND_BY_ID, ref: next });
+      expect(left.body.index).toMatchObject({ commit: next, status: 'queued', after: head });
+
+      const waiting = await peek({ ...RENAMED_CALLER, ref: fixup });
+
+      expect(waiting.body.source).toBe('name');
+      expect(waiting.body.index).toMatchObject({ commit: next, status: 'queued' });
+      writeFileSync(gate, '');
+    });
+
     posixOnly('builds a fixup commit that has no indexed commit under it', async () => {
       const fixup = fixupOfHead();
       const tool = fakeScipJava();
@@ -728,7 +748,7 @@ describe('symbol peek of a commit review', () => {
     });
   });
 
-    it('builds nothing without scip-java, and says so', async () => {
+  it('builds nothing without scip-java, and says so', async () => {
     process.env.DIFIT_SCIP_JAVA = join(home, 'missing-scip-java');
     const { api, peek, settle } = await openReview();
     await settle();
