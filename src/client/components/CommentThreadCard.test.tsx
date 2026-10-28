@@ -1206,6 +1206,25 @@ describe('CommentThreadCard', () => {
       expect(screen.getByRole('button', { name: '그래도 고르기' })).toBeVisible();
       expect(screen.queryByTestId('review-state-chip')).not.toBeInTheDocument();
     });
+
+    it('offers no edit on a pick reply, only on a reply in words', () => {
+      renderCard({
+        ...offered,
+        messages: [
+          ...offered.messages,
+          {
+            ...mockThread.messages[0]!,
+            id: 'message-3',
+            body: '고름: B — 묶음',
+            answer: { messageId: 'message-2', choice: 'B' },
+          },
+          { ...mockThread.messages[0]!, id: 'message-4', body: '테스트도 같이 바꿔 주세요.' },
+        ],
+      });
+
+      expect(screen.getAllByRole('button', { name: 'Edit message' })).toHaveLength(2);
+      expect(screen.getAllByRole('button', { name: 'Delete reply' })).toHaveLength(2);
+    });
   });
 
   it('always shows an inline reply trigger below the last message', () => {

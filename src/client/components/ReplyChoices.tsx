@@ -5,8 +5,9 @@ import {
   type ChoiceAnswer,
   type DiffCommentMessage,
   type ReplyChoice,
-  REVIEWER_AUTHOR,
+  REVIEWER_EDIT_AUTHOR,
 } from '../../types/diff';
+import { isAgentMessage } from '../../utils/reviewDecisions';
 
 const PREVIEW_LINES = 3;
 
@@ -41,10 +42,11 @@ export function ReplyChoices({ message, later, onPick }: ReplyChoicesProps) {
         answer?.messageId === message.id && choices.some((choice) => choice.id === answer.choice),
     )
     .at(-1)?.choice;
-  const answeredInWords = later.some(
-    (reply) => reply.author === REVIEWER_AUTHOR && reply.answer === undefined,
-  );
-  const isOpen = (picked === undefined && !answeredInWords) || isChanging;
+  const answers = later.filter((reply) => !isAgentMessage(reply) && reply.answer === undefined);
+  const answeredInWords = answers.length > 0;
+  const answeredBy = answers.at(-1)?.author === REVIEWER_EDIT_AUTHOR ? '코드를 고쳐' : '글로';
+  const superseded = later.some((reply) => isAgentMessage(reply) && reply.choices?.length);
+  const isOpen = !superseded && ((picked === undefined && !answeredInWords) || isChanging);
 
   const pick = async (choice: ReplyChoice) => {
     if (!isOpen || isSending) return;
@@ -95,7 +97,12 @@ export function ReplyChoices({ message, later, onPick }: ReplyChoicesProps) {
       그대로 두기
     </button>
   );
-  const header = isOpen ? (
+  const header = superseded ? (
+    <span>
+      아래 새 고를 거리로 넘어갔습니다
+      {picked !== undefined && <> · {picked} 고름</>}
+    </span>
+  ) : isOpen ? (
     <>
       <Info size={12} aria-hidden className="shrink-0" />
       {isChanging && picked !== undefined ? (
@@ -111,7 +118,7 @@ export function ReplyChoices({ message, later, onPick }: ReplyChoicesProps) {
     </>
   ) : picked === undefined ? (
     <span>
-      글로 답했습니다 ·{' '}
+      {answeredBy} 답했습니다 ·{' '}
       <button type="button" className={LINK_CLASS} onClick={() => setIsChanging(true)}>
         그래도 고르기
       </button>

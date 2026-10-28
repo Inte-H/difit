@@ -125,7 +125,7 @@ difit comment add --port <port> '{"type":"reply","filePath":"src/config.ts","pos
 ```
 
 - Each choice needs `id` (unique within the reply), `name` and `description`; `preview` (`text`, optional `label`) and `recommended` are optional. The card shows three preview lines and folds the rest behind `더 보기`.
-- While that reply is the last message, the thread shows `[고를 차례]`, the user's turn like `[답변 완료]`.
+- Until the user posts anything after that reply, the thread shows `[고를 차례]`, the user's turn like `[답변 완료]`; a later reply of yours without choices keeps it. Only your latest reply with choices can be picked from: a newer one closes the earlier choices.
 - A pick arrives as an ordinary user reply whose body reads `고름: B — <name>`, with `"answer": {"messageId": "<id of your reply>", "choice": "B"}`; `difit comment wait` and the session message carry `answer` next to `message`. Changing the pick adds a new reply `바꿈: C — <name>` and leaves the earlier one; follow the latest. The user may also answer in words instead, which comes without `answer`.
 - The text output of `comment get` lists the choices under your reply (`Choices:`) and adds `Picked B from Reply <n>` under the pick.
 

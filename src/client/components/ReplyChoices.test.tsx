@@ -170,6 +170,48 @@ describe('ReplyChoices', () => {
     });
   });
 
+  it('closes the cards once the reviewer answers by editing the code', async () => {
+    const user = userEvent.setup();
+    const { onPick } = renderChoices([
+      { ...reply('src/a.ts 를 고쳤습니다'), author: 'reviewer-edit' },
+    ]);
+
+    expect(screen.getByText(/코드를 고쳐 답했습니다/)).toBeVisible();
+    for (const element of screen.getAllByRole('radio')) {
+      expect(element).toHaveAttribute('aria-disabled', 'true');
+    }
+    await user.click(card('A'));
+
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('closes the cards for good once the agent offers newer choices', async () => {
+    const user = userEvent.setup();
+    const newer: DiffCommentMessage = { ...ask, id: 'm4', body: '다시 골라 주세요.' };
+    const { onPick } = renderChoices([
+      reply('고름: B — review.overlay.enabled 묶음', { messageId: 'm2', choice: 'B' }),
+      newer,
+    ]);
+
+    expect(screen.getByText(/아래 새 고를 거리로 넘어갔습니다/)).toBeVisible();
+    expect(card('B')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('button', { name: '다른 걸로 바꾸기' })).not.toBeInTheDocument();
+    await user.click(card('A'));
+
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
+  it('closes unpicked cards when newer choices come after them', async () => {
+    const user = userEvent.setup();
+    const { onPick } = renderChoices([{ ...ask, id: 'm4' }]);
+
+    expect(screen.queryByText(/하나를 고르세요/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '그래도 고르기' })).not.toBeInTheDocument();
+    await user.click(card('A'));
+
+    expect(onPick).not.toHaveBeenCalled();
+  });
+
   it('ignores a pick that answers another question', () => {
     renderChoices([reply('고름: A — x', { messageId: 'other', choice: 'A' })]);
 

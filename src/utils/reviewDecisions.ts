@@ -132,8 +132,17 @@ export function isOpenedByEdit(thread: ThreadMessages): boolean {
   return thread.messages?.[0]?.author === REVIEWER_EDIT_AUTHOR;
 }
 
-const isAgentMessage = (message: { author?: string }) =>
+export const isAgentMessage = (message: { author?: string }) =>
   message.author !== REVIEWER_AUTHOR && message.author !== REVIEWER_EDIT_AUTHOR;
+
+function openChoicesAt(messages: ReadonlyArray<{ author?: string; choices?: unknown[] }>): number {
+  const at = messages.reduce(
+    (latest, message, index) =>
+      isAgentMessage(message) && message.choices?.length ? index : latest,
+    -1,
+  );
+  return at >= 0 && messages.slice(at + 1).every(isAgentMessage) ? at : -1;
+}
 
 // The fixups under judgment are approved together, so the latest approval and those recorded at
 // the same instant form one approval, undone by a later undo or a later rejection of any of them.
@@ -200,7 +209,7 @@ export function deriveThreadReviewState(
     const agentReplied =
       last !== undefined && isAgentMessage(last) && !messages.every(isAgentMessage);
     if (!agentReplied) return 'awaiting-fix';
-    return last.choices?.length ? 'choosing' : 'answered';
+    return openChoicesAt(messages) >= 0 ? 'choosing' : 'answered';
   }
   return isOpenedByEdit(thread) ? 'withdrawn' : 'rejected';
 }

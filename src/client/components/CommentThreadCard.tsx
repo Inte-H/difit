@@ -175,7 +175,7 @@ function ThreadMessageItem({
               >
                 {isCopied ? <Check size={12} /> : <Copy size={12} />}
               </button>
-              {isUserAuthoredMessage && (
+              {isUserAuthoredMessage && message.answer === undefined && (
                 <button
                   type="button"
                   onClick={handleStartEdit}

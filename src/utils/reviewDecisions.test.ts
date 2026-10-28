@@ -249,7 +249,21 @@ describe('deriveThreadReviewState', () => {
     ).toBe('awaiting-fix');
     expect(
       deriveThreadReviewState('t1', [], [], {
-        messages: [...offered.messages, { author: AGENT_AUTHOR }],
+        messages: [...offered.messages, { author: REVIEWER_EDIT_AUTHOR }],
+      }),
+    ).toBe('awaiting-fix');
+  });
+
+  it('keeps waiting for the pick after a later agent reply without choices', () => {
+    const offered = [
+      { author: REVIEWER_AUTHOR },
+      { author: AGENT_AUTHOR, choices: [{ id: 'A' }] },
+      { author: AGENT_AUTHOR },
+    ];
+    expect(deriveThreadReviewState('t1', [], [], { messages: offered })).toBe('choosing');
+    expect(
+      deriveThreadReviewState('t1', [], [], {
+        messages: [...offered.slice(0, 2), { author: REVIEWER_AUTHOR }, { author: AGENT_AUTHOR }],
       }),
     ).toBe('answered');
   });
