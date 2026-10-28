@@ -46,6 +46,7 @@ The detailed procedure is as follows.
 - **Reuse before launch**
   - Keep at most one live difit server per Git root and review target. If a difit server you started earlier is still running for the same target, do not launch another or reopen its URL; add the new findings to it with `<difit-command> comment add --port <port> '<json>'` (same JSON shape as `--comment`) and let the open page pick them up.
   - If review rounds are expected to repeat, launch with `--keep-alive` or `--background` (a detached keep-alive server that prints JSON connection info such as `{"port":4966,"url":"http://localhost:4966","pid":123}` without auto-opening a browser), then use `comment add` / `comment get --port <port>` for later rounds.
+  - In a later round, a reply that asks the user to choose between options can carry `choices`, which the user picks from in the thread; the shape and how the pick comes back are in the difit skill, "Asking the user to pick".
 - **difit launch options**
   - Use `<difit-command> <target> [compare-with]` to specify the target diff.
   - For uncommitted changes use `<difit-command> .`, for working tree changes use `<difit-command> working`, and for staged changes use `<difit-command> staged`.

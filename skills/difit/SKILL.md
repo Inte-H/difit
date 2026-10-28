@@ -93,6 +93,7 @@ Each comment thread carries a state in the text output of `comment get`:
 | ---------------- | --------------------------------------------------------------- | ---------------------------------- |
 | `[수정 중]`      | No fix yet                                                      | Fix it                             |
 | `[답변 완료]`    | You replied in words after the user, with no fixup yet          | Wait                               |
+| `[고를 차례]`    | Your reply offers choices the user has not picked from yet      | Wait                               |
 | `[승인 대기]`    | A fixup is waiting for the user's decision                      | Wait, or answer a reply after it   |
 | `[승인됨]`       | Approved, not folded yet                                        | Fold at wrap-up, or answer a reply |
 | `[접힘]`         | Folded into the target commit                                   | None                               |
@@ -101,7 +102,7 @@ Each comment thread carries a state in the text output of `comment get`:
 
 ### Learning when it is your turn
 
-A background command wakes you only when it exits, so while a review server you started is running, keep one `difit comment wait --port <port>` running as a background command. It exits as soon as a thread is your turn, printing each such thread as one JSON line: `threadId`, `filePath`, `position`, `message` (the latest message), and on pinned reviews `state` (`awaiting-fix`, `awaiting-approval`, `approved`, `rejected`, `withdrawn` or `deleted`), `label` and, when fixups to drop are still in the range, `rejectedFixupShas` with all of them and `rejectedFixupSha` with the first, plus `fixupTarget` when the comment names the commit to fix into. Answer every thread it brings as below, then start `difit comment wait` again the same way. It also prints threads that became your turn before it started, so nothing is lost between runs; a thread you have not answered comes back at once.
+A background command wakes you only when it exits, so while a review server you started is running, keep one `difit comment wait --port <port>` running as a background command. It exits as soon as a thread is your turn, printing each such thread as one JSON line: `threadId`, `filePath`, `position`, `message` (the latest message), and on pinned reviews `state` (`awaiting-fix`, `awaiting-approval`, `approved`, `rejected`, `withdrawn` or `deleted`), `label` and, when fixups to drop are still in the range, `rejectedFixupShas` with all of them and `rejectedFixupSha` with the first, plus `fixupTarget` when the comment names the commit to fix into, and `answer` when the latest message picks one of the choices you offered (see "Asking the user to pick"). Answer every thread it brings as below, then start `difit comment wait` again the same way. It also prints threads that became your turn before it started, so nothing is lost between runs; a thread you have not answered comes back at once.
 
 - A thread is your turn when it is `[수정 중]` and the user spoke last, `[승인 대기]` and the user replied after the fixup was written, `[승인됨]` and the user replied after approving, or replied after the fixup was written while it is still in the range and you have not answered, `[다시 수정 중]` with no new fixup and no reply from you after the rejection, `[되돌림]` while its fixup is still in the range, or `[지움]`. On reviews without a pinned commit, any thread where the user spoke last is your turn. To answer in words instead of a fix (a question, or disagreeing with a rejection), add a reply with `comment add` (`"type": "reply"` with the thread's `filePath` and `position`); that also ends your turn, and a `[수정 중]` thread shows `[답변 완료]` until the user replies.
 - On `[승인 대기]` and `[승인됨]`, the decision stays with the user: reply in words; the user's reply does not undo an approval. When the reply asks for more changes, fold them into the existing fixup and reply too, since amending keeps the author date the turn is measured against and does not end it. Amending more changes into an approved fixup sends it back to `[승인 대기]` for the user to judge again. A reply the user wrote before approving is compared with the fixup's author date, so when the user's browser and the machine that made the fixup disagree on the time, a thread can come back with `message` still being the comment your fixup already answers and no new reply from the user. In that case reply in words, and it stops coming back.
@@ -114,6 +115,19 @@ Once a thread reaches you either way, its card shows `응답 중` until you repl
 The user can also edit code in the viewer. difit then commits a `fixup! <target SHA>` commit with a `Review-Thread` trailer on top of HEAD and records it as approved. Its author is `reviewer-edit`.
 
 The user can also reword a commit from the commit list. difit then commits an `amend! <target SHA>` commit that changes no file, whose message below the first paragraph is the new message with a `Review-Thread` trailer, and records it as approved under a new thread whose `filePath` is `/COMMIT_MSG` (line 1), with `fixupTarget` the reworded commit and author `reviewer-edit`. It needs nothing from you until folding.
+
+### Asking the user to pick
+
+When the user has to choose between options, attach them to a reply instead of listing them in the body; the user picks one by clicking its card in the thread. Only `"type": "reply"` takes `choices`.
+
+```bash
+difit comment add --port <port> '{"type":"reply","filePath":"src/config.ts","position":{"side":"new","line":40},"body":"Pick the shape of the setting.","choices":[{"id":"A","name":"Top-level boolean","description":"Simplest."},{"id":"B","name":"review.overlay.enabled","description":"Sits with the other review settings.","preview":{"label":"~/.difit/config.json","text":"{\n  \"review\": {}\n}"},"recommended":true}]}'
+```
+
+- Each choice needs `id` (unique within the reply), `name` and `description`; `preview` (`text`, optional `label`) and `recommended` are optional. The card shows three preview lines and folds the rest behind `더 보기`.
+- Until the user posts anything after that reply, the thread shows `[고를 차례]`, the user's turn like `[답변 완료]`; a later reply of yours without choices keeps it. Only your latest reply with choices can be picked from: a newer one closes the earlier choices.
+- A pick arrives as an ordinary user reply whose body reads `고름: B — <name>`, with `"answer": {"messageId": "<id of your reply>", "choice": "B"}`; `difit comment wait` and the session message carry `answer` next to `message`. Changing the pick adds a new reply `바꿈: C — <name>` and leaves the earlier one; follow the latest. The user may also answer in words instead, which comes without `answer`.
+- The text output of `comment get` lists the choices under your reply (`Choices:`) and adds `Picked B from Reply <n>` under the pick.
 
 ### Answering a comment
 
@@ -214,7 +228,7 @@ When a fixup targets a commit in the middle of the range and a later commit chan
 
 ### Moving comments to the folded commit
 
-Folding changes the target SHA, and a review reopened on the new SHA starts without the comments. Copy them from the old server, keeping thread ids and `codeSnapshot` so trailers and decisions still point at the same comments, along with `view` and `fixupTarget`:
+Folding changes the target SHA, and a review reopened on the new SHA starts without the comments. Copy them from the old server, keeping thread ids and `codeSnapshot` so trailers and decisions still point at the same comments, along with `view` and `fixupTarget`, and reply ids with `choices` and `answer` so a pick still names the reply it answers:
 
 ```bash
 difit comment get --port <old port> --format json > old.json
@@ -223,8 +237,8 @@ difit comment add --port <new port> "$(jq '[.threads[] | . as $t
   | ($t.messages[0] | {type: "thread", id: $t.id, filePath: $t.filePath, position: $t.position,
                        body, author, createdAt, codeSnapshot: $t.codeSnapshot,
                        view: $t.view, fixupTarget: $t.fixupTarget}),
-    ($t.messages[1:][] | {type: "reply", filePath: $t.filePath, position: $t.position,
-                          body, author, createdAt})
+    ($t.messages[1:][] | {type: "reply", id, filePath: $t.filePath, position: $t.position,
+                          body, author, createdAt, choices, answer})
   | with_entries(select(.value != null))]' old.json)"
 
 jq '.decisions' old.json | curl -X POST "http://localhost:<new port>/api/decisions" \

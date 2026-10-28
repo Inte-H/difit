@@ -1,4 +1,11 @@
-import type { BaseMode, Comment, CommentThread, DiffSide, ThreadReviewState } from '../types/diff';
+import type {
+  BaseMode,
+  Comment,
+  CommentThread,
+  DiffCommentMessage,
+  DiffSide,
+  ThreadReviewState,
+} from '../types/diff';
 
 import { reviewStateLabel } from './reviewDecisions.js';
 import { hasSuggestionBlock, parseSuggestionBlocks } from './suggestionUtils.js';
@@ -90,6 +97,26 @@ export function formatCommentContent(body: string, codeContent?: string): string
   return body;
 }
 
+function formatChoices(message: DiffCommentMessage, messages: DiffCommentMessage[]): string[] {
+  const lines = (message.choices ?? []).flatMap((choice) => {
+    const head = `- ${choice.id}${choice.recommended ? ' (recommended)' : ''}: ${choice.name}`;
+    const preview = choice.preview
+      ? [
+          `  ${choice.preview.label ? `preview (${choice.preview.label})` : 'preview'}:`,
+          ...choice.preview.text.split('\n').map((line) => `    ${line}`),
+        ]
+      : [];
+    return [choice.description ? `${head} — ${choice.description}` : head, ...preview];
+  });
+  if (lines.length > 0) lines.unshift('Choices:');
+  const { answer } = message;
+  if (answer) {
+    const asked = messages.findIndex((candidate) => candidate.id === answer.messageId);
+    lines.push(`Picked ${answer.choice}${asked > 0 ? ` from Reply ${asked}` : ''}`);
+  }
+  return lines;
+}
+
 function normalizeLegacyComment(comment: Comment): CommentThread {
   return {
     id: comment.id,
@@ -150,15 +177,13 @@ export function formatCommentThreadPrompt(
   }
 
   thread.messages.forEach((message, index) => {
-    if (index === 0) {
-      sections.push(formatCommentContent(message.body, thread.codeContent));
-      return;
+    if (index > 0) {
+      sections.push(`Reply ${index} (${message.author?.trim() || 'Unknown'})`);
     }
-
-    const replyIndex = index;
-    const authorLabel = message.author?.trim() || 'Unknown';
-    sections.push(`Reply ${replyIndex} (${authorLabel})`);
-    sections.push(formatCommentContent(message.body, thread.codeContent));
+    sections.push(
+      formatCommentContent(message.body, thread.codeContent),
+      ...formatChoices(message, thread.messages),
+    );
   });
 
   return sections.filter(Boolean).join('\n');

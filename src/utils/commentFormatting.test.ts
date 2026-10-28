@@ -242,6 +242,73 @@ Related entries are below.`);
     });
   });
 
+  describe('choices on a reply', () => {
+    const at = '2024-01-01T00:00:00Z';
+    const thread: CommentThread = {
+      id: 't1',
+      file: 'src/config.ts',
+      line: 40,
+      side: 'new',
+      createdAt: at,
+      updatedAt: at,
+      messages: [
+        {
+          id: 'm1',
+          body: '설정이 있어야 하지 않나요?',
+          author: 'User',
+          createdAt: at,
+          updatedAt: at,
+        },
+        {
+          id: 'm2',
+          body: '하나를 골라 주세요.',
+          author: 'Claude',
+          createdAt: at,
+          updatedAt: at,
+          choices: [
+            { id: 'A', name: '최상위 불리언', description: '가장 단순합니다.' },
+            {
+              id: 'B',
+              name: '묶음',
+              description: '',
+              preview: { label: 'config.json', text: '{\n  "review": {}\n}' },
+              recommended: true,
+            },
+          ],
+        },
+        {
+          id: 'm3',
+          body: '고름: B — 묶음',
+          author: 'User',
+          createdAt: at,
+          updatedAt: at,
+          answer: { messageId: 'm2', choice: 'B' },
+        },
+      ],
+    };
+
+    it('lists the choices under the reply and names the pick', () => {
+      expect(formatCommentThreadPrompt(thread)).toBe(
+        [
+          'src/config.ts:L40',
+          '설정이 있어야 하지 않나요?',
+          'Reply 1 (Claude)',
+          '하나를 골라 주세요.',
+          'Choices:',
+          '- A: 최상위 불리언 — 가장 단순합니다.',
+          '- B (recommended): 묶음',
+          '  preview (config.json):',
+          '    {',
+          '      "review": {}',
+          '    }',
+          'Reply 2 (User)',
+          '고름: B — 묶음',
+          'Picked B from Reply 1',
+        ].join('\n'),
+      );
+    });
+  });
+
   describe('formatAllCommentsPrompt', () => {
     it('should return empty string for empty comments array', () => {
       const result = formatAllCommentsPrompt([]);

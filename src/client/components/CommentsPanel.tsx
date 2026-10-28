@@ -45,6 +45,10 @@ const STATUS_CHIP: Record<CommentPanelStatus, { label: string; className: string
       'border-github-warning text-github-warning fixup-review:border-github-text-primary fixup-review:text-github-text-primary',
   },
   answered: { label: '답함', className: 'border-blue-500 text-blue-400' },
+  choosing: {
+    label: '고를 차례',
+    className: 'border-github-warning bg-github-warning/15 text-github-warning',
+  },
   resolved: { label: '해결', className: 'border-github-border text-github-text-muted' },
 };
 
@@ -100,6 +104,7 @@ export function CommentsPanel({
     [listed, statusById],
   );
   const shown = filter === 'remaining' ? remaining : listed;
+  const choosingCount = listed.filter((thread) => statusById.get(thread.id) === 'choosing').length;
 
   let activeIndex = shown.findIndex((thread) => thread.id === activeThreadId);
   if (activeIndex === -1 && shown.length > 0) {
@@ -195,6 +200,14 @@ export function CommentsPanel({
           >
             전체 {listed.length}
           </button>
+          {choosingCount > 0 && (
+            <span
+              data-testid="choosing-count"
+              className="inline-flex h-7 items-center rounded-md border border-github-warning px-2.5 text-xs text-github-warning"
+            >
+              고를 차례 {choosingCount}
+            </span>
+          )}
         </div>
       </div>
 
