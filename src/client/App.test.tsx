@@ -5127,3 +5127,111 @@ describe('App Component - Commits of the review', () => {
     expect(diffQueries().at(-1)).toEqual([COMMITS[0]!.parentSha, COMMITS[0]!.sha]);
   });
 });
+
+describe.each(['unified', 'split'] as const)('App Component - picking lines (%s)', (mode) => {
+  const hunk = (start: number) => ({
+    header: `@@ -${start},3 +${start},3 @@`,
+    oldStart: start,
+    oldLines: 3,
+    newStart: start,
+    newLines: 3,
+    lines: [0, 1, 2].map((offset) => ({
+      type: 'normal' as const,
+      content: `line ${start + offset}`,
+      oldLineNumber: start + offset,
+      newLineNumber: start + offset,
+    })),
+  });
+  const twoHunks: DiffResponse = {
+    ...mockDiffResponse,
+    files: [{ ...linedFile('test.ts', 0), chunks: [hunk(1), hunk(20)] }],
+  };
+
+  beforeEach(() => {
+    mockComments = [];
+    window.localStorage.setItem('difit.diffViewMode', mode);
+    mockFetch(twoHunks);
+  });
+
+  const newNumberCell = (lineNumber: number) =>
+    waitFor(() => {
+      // Both layouts put the old number before the new one.
+      const cell = Array.from(document.querySelectorAll('[data-line-number-cell]')).find(
+        (candidate, index) => index % 2 === 1 && candidate.textContent === String(lineNumber),
+      );
+      expect(cell).toBeDefined();
+      return cell!;
+    });
+  const picked = () =>
+    Array.from(document.querySelectorAll('[data-diff-line-row="true"]'))
+      .filter(
+        (row) =>
+          row.classList.contains('comment-selected') ||
+          row.querySelector('[class*="after:bg-diff-selected-bg"]'),
+      )
+      .map((row) => row.lastElementChild?.textContent?.match(/line \d+/)?.[0]);
+  // What a mouse does on a line number: the hover puts the comment button over the number, so
+  // a click in the middle of the number lands on that button.
+  const clickNumber = async (
+    lineNumber: number,
+    modifiers: { ctrlKey?: boolean; metaKey?: boolean },
+    where: 'middle' | 'edge',
+  ) => {
+    const cell = await newNumberCell(lineNumber);
+    fireEvent.mouseEnter(cell.closest('tr')!.lastElementChild!);
+    const target =
+      where === 'middle'
+        ? within(cell as HTMLElement).getByRole('button', { name: 'Add a comment' })
+        : cell;
+    fireEvent.mouseDown(target, { button: 0, ...modifiers });
+    fireEvent.mouseUp(target, { button: 0, ...modifiers });
+    fireEvent.click(target, { button: 0, ...modifiers });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  };
+  // A browser renders a cancelled form before the click reaches the line, which fireEvent does
+  // not, so the cancel itself is what to watch.
+  const cancels = vi.fn();
+  const countCancels = (event: MouseEvent) => {
+    if (event.target instanceof Element && event.target.closest('[data-comment-cancel="true"]')) {
+      cancels();
+    }
+  };
+  beforeEach(() => {
+    cancels.mockClear();
+    document.addEventListener('click', countCancels, true);
+  });
+  afterEach(() => document.removeEventListener('click', countCancels, true));
+
+  it.each(['middle', 'edge'] as const)(
+    'keeps every line Ctrl+clicked on the %s of a line number, across parts',
+    async (where) => {
+      renderApp();
+
+      await clickNumber(2, { ctrlKey: true }, where);
+      await clickNumber(3, { ctrlKey: true }, where);
+      await clickNumber(21, { metaKey: true }, where);
+
+      expect(picked()).toEqual(['line 2', 'line 3', 'line 21']);
+      expect(screen.getByTestId('picked-ranges')).toHaveTextContent('L2-L3, L21');
+      expect(cancels).not.toHaveBeenCalled();
+    },
+  );
+
+  it('keeps lines added by plain clicks while 줄 더하기 is on', async () => {
+    renderApp();
+
+    await clickNumber(2, { ctrlKey: true }, 'edge');
+    // happy-dom misses that the toggle sits inside the form, so it is pressed on a form with text.
+    const box = screen.getByPlaceholderText('Leave a comment...');
+    fireEvent.change(box, { target: { value: 'x' } });
+    fireEvent.click(screen.getByRole('button', { name: '줄 더하기' }));
+    fireEvent.change(box, { target: { value: '' } });
+    await clickNumber(21, {}, 'middle');
+    await clickNumber(22, {}, 'edge');
+
+    expect(picked()).toEqual(['line 2', 'line 21', 'line 22']);
+    expect(cancels).not.toHaveBeenCalled();
+  });
+});

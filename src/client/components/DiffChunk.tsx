@@ -170,10 +170,12 @@ export const DiffChunk = memo(function DiffChunk({
 
   const handleCommentButtonMouseDown = ({
     isShiftClick,
+    addsLine,
     selection,
     row,
   }: {
     isShiftClick: boolean;
+    addsLine: boolean;
     selection: LineSelection | null;
     row: DiffLine;
   }) => {
@@ -183,6 +185,8 @@ export const DiffChunk = memo(function DiffChunk({
       openShiftClickComment(selection);
       return;
     }
+
+    if (addsLine) return;
 
     startCommentDrag(selection, row);
   };
@@ -462,7 +466,11 @@ export const DiffChunk = memo(function DiffChunk({
   const selected = codeSelection.selected;
 
   return (
-    <div ref={containerRef} className="group/hunk relative bg-github-bg-primary">
+    <div
+      ref={containerRef}
+      className="group/hunk relative bg-github-bg-primary"
+      data-adds-lines={linePick.addMode || undefined}
+    >
       {editHunk && <EditHunkButton onClick={editHunk} />}
       {selected && onAddComment && (
         <SelectionCommentBar
@@ -551,14 +559,24 @@ export const DiffChunk = memo(function DiffChunk({
                     onAddComment &&
                     ((e) => {
                       e.stopPropagation();
-                      if (e.shiftKey) {
+                      const addsLine = e.ctrlKey || e.metaKey || linePick.addMode;
+                      if (e.shiftKey || addsLine) {
                         e.preventDefault();
                       }
                       handleCommentButtonMouseDown({
                         isShiftClick: e.shiftKey,
+                        addsLine,
                         selection,
                         row: line,
                       });
+                    })
+                  }
+                  onCommentButtonClick={
+                    onAddComment &&
+                    ((e) => {
+                      if (selection && (e.ctrlKey || e.metaKey || linePick.addMode)) {
+                        linePick.toggle(selection);
+                      }
                     })
                   }
                   onComment={

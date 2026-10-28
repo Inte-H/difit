@@ -19,6 +19,7 @@ interface DiffLineRowProps {
   onMouseLeave: () => void;
   onMouseMove: () => void;
   onCommentButtonMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onCommentButtonClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onComment?: () => void;
   onLineNumberMouseDown: (e: React.MouseEvent<HTMLTableCellElement>) => void;
   canHover: boolean;
@@ -58,6 +59,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
     onMouseLeave,
     onMouseMove,
     onCommentButtonMouseDown,
+    onCommentButtonClick,
     onComment,
     onLineNumberMouseDown,
     canHover,
@@ -103,6 +105,7 @@ export const DiffLineRow: React.FC<DiffLineRowProps> = React.memo(
             <LineNumberActions
               canHover={canHover}
               onCommentMouseDown={onCommentButtonMouseDown}
+              onCommentClick={onCommentButtonClick}
               onComment={onComment}
               onEditLine={onEditLine}
               onOpenInEditor={onOpenInEditor}

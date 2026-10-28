@@ -2248,9 +2248,12 @@ function App() {
     const isCommentButton = target.closest('[data-comment-button="true"]');
     const isOpenInEditorButton = target.closest('[data-open-in-editor-button="true"]');
     const isShiftRangeClick = e.shiftKey && target.closest('[data-diff-line-row="true"]');
+    const isLinePickClick =
+      (e.ctrlKey || e.metaKey || target.closest('[data-adds-lines="true"]')) &&
+      target.closest('[data-line-number-cell]');
 
     // Close empty comment forms (unless clicking on a comment button)
-    if (!isCommentButton && !isOpenInEditorButton && !isShiftRangeClick) {
+    if (!isCommentButton && !isOpenInEditorButton && !isShiftRangeClick && !isLinePickClick) {
       closeEmptyCommentForms(e);
     }
   };

@@ -252,9 +252,11 @@ export function SideBySideDiffChunk({
 
   const handleCommentButtonMouseDown = ({
     isShiftClick,
+    addsLine,
     selection,
   }: {
     isShiftClick: boolean;
+    addsLine: boolean;
     selection: LineSelection | null;
   }) => {
     if (!selection) return;
@@ -263,6 +265,8 @@ export function SideBySideDiffChunk({
       openShiftClickComment(selection);
       return;
     }
+
+    if (addsLine) return;
 
     startCommentDrag(selection);
   };
@@ -542,10 +546,16 @@ export function SideBySideDiffChunk({
       ? {
           onCommentMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
-            if (e.shiftKey) {
+            const addsLine = e.ctrlKey || e.metaKey || linePick.addMode;
+            if (e.shiftKey || addsLine) {
               e.preventDefault();
             }
-            handleCommentButtonMouseDown({ isShiftClick: e.shiftKey, selection });
+            handleCommentButtonMouseDown({ isShiftClick: e.shiftKey, addsLine, selection });
+          },
+          onCommentClick: (e: React.MouseEvent<HTMLButtonElement>) => {
+            if (selection && (e.ctrlKey || e.metaKey || linePick.addMode)) {
+              linePick.toggle(selection);
+            }
           },
           onComment: () => {
             if (selection) handleAddComment(selection.side, selection.lineNumber);
@@ -560,7 +570,11 @@ export function SideBySideDiffChunk({
   };
 
   return (
-    <div ref={containerRef} className="group/hunk relative bg-github-bg-primary overflow-hidden">
+    <div
+      ref={containerRef}
+      className="group/hunk relative bg-github-bg-primary overflow-hidden"
+      data-adds-lines={linePick.addMode || undefined}
+    >
       {editHunk && <EditHunkButton onClick={editHunk} />}
       {selected && onAddComment && (
         <SelectionCommentBar
