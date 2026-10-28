@@ -22,6 +22,7 @@ const REVIEW_DECISION_KINDS: ReviewDecision['kind'][] = [
 const REVIEW_STATE_LABEL: Record<ThreadReviewState, string> = {
   'awaiting-fix': '수정 중',
   answered: '답변 완료',
+  choosing: '고를 차례',
   'awaiting-approval': '승인 대기',
   approved: '승인됨',
   folded: '접힘',
@@ -117,7 +118,9 @@ export function isThreadResolved(threadId: string, decisions: ReviewDecision[]):
   return latestOf(own, ['resolved', 'unresolved'])?.kind === 'resolved';
 }
 
-type ThreadMessages = { messages?: ReadonlyArray<{ author?: string; createdAt?: string }> };
+type ThreadMessages = {
+  messages?: ReadonlyArray<{ author?: string; createdAt?: string; choices?: unknown[] }>;
+};
 
 export function isThreadDeleted(threadId: string, decisions: ReviewDecision[]): boolean {
   return decisions.some(
@@ -196,14 +199,17 @@ export function deriveThreadReviewState(
     const last = messages.at(-1);
     const agentReplied =
       last !== undefined && isAgentMessage(last) && !messages.every(isAgentMessage);
-    return agentReplied ? 'answered' : 'awaiting-fix';
+    if (!agentReplied) return 'awaiting-fix';
+    return last.choices?.length ? 'choosing' : 'answered';
   }
   return isOpenedByEdit(thread) ? 'withdrawn' : 'rejected';
 }
 
 // States with no fixup under judgment, where an edit in the viewer can still answer the thread.
 export function isAnswerableByEdit(state: ThreadReviewState): boolean {
-  return state === 'awaiting-fix' || state === 'answered' || state === 'rejected';
+  return (
+    state === 'awaiting-fix' || state === 'answered' || state === 'choosing' || state === 'rejected'
+  );
 }
 
 // States whose fixups are on the card, where an edit on the card stacks a fixup on them.
@@ -229,13 +235,14 @@ export function selectOpenThreads<T extends { id: string } & ThreadMessages>(
   });
 }
 
-// open: the agent's move. answered: the reviewer's move. resolved: nobody's.
-export type CommentPanelStatus = 'open' | 'answered' | 'resolved';
+// open: the agent's move. answered and choosing: the reviewer's move. resolved: nobody's.
+export type CommentPanelStatus = 'open' | 'answered' | 'choosing' | 'resolved';
 
 const COMMENT_PANEL_STATUS: Record<ThreadReviewState, CommentPanelStatus | null> = {
   'awaiting-fix': 'open',
   rejected: 'open',
   answered: 'answered',
+  choosing: 'choosing',
   'awaiting-approval': 'answered',
   // Resolved until the reviewer reopens it; reopened, it stays out of the open count.
   approved: 'answered',
@@ -400,12 +407,14 @@ export function selectThreadsAwaitingAgent(
   return threads.flatMap((thread): ThreadAwaitingAgent[] => {
     const turn = agentTurnOn(thread, fixupsByThread, decisions);
     if (!turn) return [];
+    const last = thread.messages.at(-1);
     return [
       {
         threadId: thread.id,
         filePath: thread.filePath,
         position: thread.position,
-        message: thread.messages.at(-1)?.body ?? '',
+        message: last?.body ?? '',
+        ...(last?.answer ? { answer: { ...last.answer } } : {}),
         ...(thread.fixupTarget === undefined ? {} : { fixupTarget: thread.fixupTarget }),
         ...turn,
       },

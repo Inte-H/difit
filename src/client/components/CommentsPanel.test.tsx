@@ -116,6 +116,21 @@ describe('CommentsPanel', () => {
     expect(rows[2]).toHaveTextContent('On a twenty, later');
   });
 
+  it('marks and counts the comments waiting for the reviewer to pick', () => {
+    render(<Harness statusById={new Map([...STATUSES, ['b5', 'choosing']])} />);
+
+    const row = screen.getByRole('button', { name: /b\.ts:5/ });
+    expect(row).toHaveTextContent('고를 차례');
+    expect(screen.getByTestId('choosing-count')).toHaveTextContent('고를 차례 1');
+    expect(screen.getByRole('button', { name: '남은 것 3' })).toBeInTheDocument();
+  });
+
+  it('shows no pick count when nothing waits for a pick', () => {
+    render(<Harness />);
+
+    expect(screen.queryByTestId('choosing-count')).not.toBeInTheDocument();
+  });
+
   it('names only the file of a comment on the whole file and lists it before the lines', () => {
     const onFile = { ...thread('a-file', 'src/a.ts', undefined, 'On all of a'), line: undefined };
     render(

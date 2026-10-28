@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 
 import {
+  type ChoiceAnswer,
   type DiffChunk as DiffChunkType,
   type DiffLine,
   type DiffSide,
@@ -52,7 +53,7 @@ interface SideBySideDiffChunkProps {
     side?: DiffSide,
   ) => Promise<void>;
   onResolveThread: (threadId: string) => void;
-  onReplyToThread: (threadId: string, body: string) => Promise<void>;
+  onReplyToThread: (threadId: string, body: string, answer?: ChoiceAnswer) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];

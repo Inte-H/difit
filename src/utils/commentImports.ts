@@ -1,5 +1,6 @@
 import {
   AGENT_AUTHOR,
+  type ChoiceAnswer,
   type CommentImport,
   type DiffCommentPosition,
   type DiffCommentThread,
@@ -7,6 +8,7 @@ import {
   type DiffCommentCodeSnapshot,
   type DiffCommentMessage,
   type DiffSelection,
+  type ReplyChoice,
   type ReplyCommentImport,
   type ThreadCommentImport,
 } from '../types/diff.js';
@@ -169,6 +171,101 @@ function normalizeRequiredBody(value: unknown): string {
   return trimmed;
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizePreview(value: unknown): ReplyChoice['preview'] {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    throw new Error('Invalid comment import field: choices');
+  }
+  const { label, text } = value;
+  if (typeof text !== 'string' || (label !== undefined && typeof label !== 'string')) {
+    throw new Error('Invalid comment import field: choices');
+  }
+  return { ...(label === undefined ? {} : { label }), text };
+}
+
+function normalizeChoice(value: unknown): ReplyChoice {
+  if (
+    !isRecord(value) ||
+    !isNonEmptyString(value.id) ||
+    !isNonEmptyString(value.name) ||
+    typeof value.description !== 'string' ||
+    (value.recommended !== undefined && typeof value.recommended !== 'boolean')
+  ) {
+    throw new Error('Invalid comment import field: choices');
+  }
+  const preview = normalizePreview(value.preview);
+  return {
+    id: value.id.trim(),
+    name: value.name.trim(),
+    description: value.description.trim(),
+    ...(preview === undefined ? {} : { preview }),
+    ...(value.recommended ? { recommended: true } : {}),
+  };
+}
+
+function normalizeChoices(value: unknown): ReplyChoice[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('Invalid comment import field: choices');
+  }
+  const choices = value.map(normalizeChoice);
+  if (new Set(choices.map((choice) => choice.id)).size !== choices.length) {
+    throw new Error('Invalid comment import field: choices');
+  }
+  return choices;
+}
+
+function normalizeAnswer(value: unknown): ChoiceAnswer | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value) || !isNonEmptyString(value.messageId) || !isNonEmptyString(value.choice)) {
+    throw new Error('Invalid comment import field: answer');
+  }
+  return { messageId: value.messageId, choice: value.choice };
+}
+
+function cloneChoice(choice: ReplyChoice): ReplyChoice {
+  return {
+    id: choice.id,
+    name: choice.name,
+    description: choice.description,
+    ...(choice.preview === undefined
+      ? {}
+      : {
+          preview: {
+            ...(choice.preview.label === undefined ? {} : { label: choice.preview.label }),
+            text: choice.preview.text,
+          },
+        }),
+    ...(choice.recommended ? { recommended: true } : {}),
+  };
+}
+
+function choiceFields(source: {
+  choices?: ReplyChoice[];
+  answer?: ChoiceAnswer;
+}): Pick<DiffCommentMessage, 'choices' | 'answer'> {
+  return {
+    ...(source.choices === undefined ? {} : { choices: source.choices.map(cloneChoice) }),
+    ...(source.answer === undefined
+      ? {}
+      : { answer: { messageId: source.answer.messageId, choice: source.answer.choice } }),
+  };
+}
+
+function choicesKey(message: { choices?: ReplyChoice[]; answer?: ChoiceAnswer }): string {
+  return JSON.stringify(choiceFields(message));
+}
+
 function normalizeCommentImportEntry(value: unknown): CommentImport {
   if (!isRecord(value)) {
     throw new Error('Comment import must be an object');
@@ -184,6 +281,9 @@ function normalizeCommentImportEntry(value: unknown): CommentImport {
 
   const createdAt = normalizeTimestamp(value.createdAt, 'createdAt');
   const updatedAt = normalizeTimestamp(value.updatedAt, 'updatedAt');
+  if (value.type === 'thread' && (value.choices !== undefined || value.answer !== undefined)) {
+    throw new Error('Invalid comment import field: choices and answer belong on a reply');
+  }
 
   const normalized = {
     type: value.type,
@@ -198,6 +298,10 @@ function normalizeCommentImportEntry(value: unknown): CommentImport {
     ...viewFields({
       view: normalizeView(value.view),
       fixupTarget: normalizeFixupTarget(value.fixupTarget),
+    }),
+    ...choiceFields({
+      choices: normalizeChoices(value.choices),
+      answer: normalizeAnswer(value.answer),
     }),
   };
 
@@ -266,7 +370,7 @@ function messageMatchesImport(
     return false;
   }
 
-  return true;
+  return choicesKey(message) === choicesKey(commentImport.type === 'reply' ? commentImport : {});
 }
 
 function rootThreadMatchesImport(
@@ -342,6 +446,7 @@ function createImportedReply(commentImport: ReplyCommentImport, now: string): Di
     author: commentImport.author,
     createdAt,
     updatedAt,
+    ...choiceFields(commentImport),
   };
 }
 
@@ -388,6 +493,7 @@ function cloneMessage(message: DiffCommentMessage): DiffCommentMessage {
     author: message.author,
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
+    ...choiceFields(message),
   };
 }
 
@@ -413,7 +519,11 @@ function messagesMatch(left: DiffCommentMessage, right: DiffCommentMessage): boo
     return false;
   }
 
-  return left.body === right.body && left.createdAt === right.createdAt;
+  return (
+    left.body === right.body &&
+    left.createdAt === right.createdAt &&
+    choicesKey(left) === choicesKey(right)
+  );
 }
 
 function threadsMatch(left: DiffCommentThread, right: DiffCommentThread): boolean {
@@ -543,6 +653,7 @@ export function serializeCommentImports(commentImports: CommentImport[]): string
           }
         : undefined,
       fixupTarget: commentImport.fixupTarget,
+      ...(commentImport.type === 'reply' ? choiceFields(commentImport) : {}),
     })),
   );
 }

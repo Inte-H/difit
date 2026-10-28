@@ -3372,6 +3372,73 @@ describe('Server Integration Tests', () => {
       if (socketDir) await fs.rm(socketDir, { recursive: true, force: true });
     });
 
+    it('hands over the reviewer’s pick among the agent’s choices and keeps both', async () => {
+      const { port } = await startPinned();
+      await postFromPage(port, { threads: [reviewerThread('c1')] });
+      const addReply = (reply: Record<string, unknown>) =>
+        fetch(`http://localhost:${port}/api/comment-imports${PINNED}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'reply',
+            filePath: 'test.js',
+            position: { side: 'new', line: 3 },
+            author: 'Claude',
+            ...reply,
+          }),
+        });
+      const readThread = async () =>
+        (
+          (await (await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)).json()) as {
+            threads: Array<{ messages: Array<Record<string, unknown>> }>;
+          }
+        ).threads[0]!;
+      const choices = [
+        { id: 'A', name: '불리언', description: '단순합니다.' },
+        { id: 'B', name: '묶음', description: '넓힐 수 있습니다.', recommended: true },
+      ];
+
+      await addReply({ body: '하나를 골라 주세요.', choices });
+      const output = await (
+        await fetch(`http://localhost:${port}/api/comments-output${PINNED}`)
+      ).text();
+      const asked = await readThread();
+      const answer = { messageId: asked.messages[1]!.id, choice: 'B' };
+      const at = new Date(Date.now() + 1000).toISOString();
+      await postFromPage(port, {
+        threads: [
+          {
+            ...asked,
+            messages: [
+              ...asked.messages,
+              {
+                id: 'pick',
+                body: '고름: B — 묶음',
+                author: 'User',
+                createdAt: at,
+                updatedAt: at,
+                answer,
+              },
+            ],
+          },
+        ],
+      });
+      const waited = JSON.parse((await readWait(port)).split('data: ')[1]!.split('\n')[0]!);
+      await addReply({ body: 'B로 하겠습니다.' });
+
+      expect(output).toContain('test.js:L3 [고를 차례]');
+      expect(output).toContain('- B (recommended): 묶음 — 넓힐 수 있습니다.');
+      expect(waited).toEqual([
+        expect.objectContaining({ threadId: 'c1', message: '고름: B — 묶음', answer }),
+      ]);
+      expect((await readThread()).messages).toEqual([
+        expect.anything(),
+        expect.objectContaining({ choices }),
+        expect.objectContaining({ answer }),
+        expect.objectContaining({ body: 'B로 하겠습니다.' }),
+      ]);
+    });
+
     it('answers at once with a comment the reviewer left before the wait started', async () => {
       const { port } = await startPinned();
       await postFromPage(port, { threads: [reviewerThread('c1')] });

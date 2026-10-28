@@ -1117,6 +1117,97 @@ describe('CommentThreadCard', () => {
     expect(screen.queryByText('1111111')).not.toBeInTheDocument();
   });
 
+  describe('choices in the agent’s reply', () => {
+    const offered: CommentThread = {
+      ...mockThread,
+      messages: [
+        mockThread.messages[0]!,
+        {
+          ...mockThread.messages[1]!,
+          author: 'Claude',
+          body: '하나를 골라 주세요.',
+          choices: [
+            { id: 'A', name: '불리언', description: '단순합니다.' },
+            { id: 'B', name: '묶음', description: '넓힐 수 있습니다.', recommended: true },
+          ],
+        },
+      ],
+    };
+    const renderCard = (
+      thread: CommentThread,
+      onReplyToThread = vi.fn().mockResolvedValue(undefined),
+      review?: Parameters<typeof CommentThreadCard>[0]['review'],
+    ) =>
+      render(
+        <CommentThreadCard
+          thread={thread}
+          {...(review ? { review } : {})}
+          onResolveThread={vi.fn()}
+          onReplyToThread={onReplyToThread}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />,
+      );
+    const radio = (name: RegExp) => screen.getByRole('radio', { name });
+
+    it('shows the thread as the reviewer’s pick in yellow', () => {
+      renderCard(offered);
+
+      const chip = screen.getByTestId('review-state-chip');
+      expect(chip).toHaveTextContent('고를 차례');
+      expect(chip).toHaveClass('text-github-warning');
+    });
+
+    it('shows the pick state on a pinned review too', () => {
+      renderCard(offered, undefined, { ...awaitingReview, state: 'choosing', pendingFixups: [] });
+
+      expect(screen.getByTestId('review-state-chip')).toHaveTextContent('고를 차례');
+    });
+
+    it('replies with the pick and the choice it answers', async () => {
+      const user = userEvent.setup();
+      const onReplyToThread = vi.fn().mockResolvedValue(undefined);
+      renderCard(offered, onReplyToThread);
+
+      await user.click(radio(/묶음/));
+
+      expect(onReplyToThread).toHaveBeenCalledWith('thread-1', '고름: B — 묶음', {
+        messageId: 'message-2',
+        choice: 'B',
+      });
+    });
+
+    it('turns the cards aside once the reviewer answers in the reply box', async () => {
+      const user = userEvent.setup();
+      const onReplyToThread = vi.fn().mockResolvedValue(undefined);
+      const { rerender } = renderCard(offered, onReplyToThread);
+
+      await user.click(screen.getByRole('button', { name: 'Write a reply...' }));
+      await user.type(screen.getByPlaceholderText('Write a reply...'), '둘 다 받으면 안 되나요?');
+      await user.click(screen.getByRole('button', { name: 'Reply' }));
+      expect(onReplyToThread).toHaveBeenCalledWith('thread-1', '둘 다 받으면 안 되나요?');
+      rerender(
+        <CommentThreadCard
+          thread={{
+            ...offered,
+            messages: [
+              ...offered.messages,
+              { ...mockThread.messages[0]!, id: 'message-3', body: '둘 다 받으면 안 되나요?' },
+            ],
+          }}
+          onResolveThread={vi.fn()}
+          onReplyToThread={onReplyToThread}
+          onRemoveMessage={vi.fn()}
+          onUpdateMessage={vi.fn()}
+        />,
+      );
+
+      expect(screen.getByText(/글로 답했습니다/)).toBeVisible();
+      expect(screen.getByRole('button', { name: '그래도 고르기' })).toBeVisible();
+      expect(screen.queryByTestId('review-state-chip')).not.toBeInTheDocument();
+    });
+  });
+
   it('always shows an inline reply trigger below the last message', () => {
     render(
       <CommentThreadCard

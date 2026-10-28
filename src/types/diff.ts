@@ -187,12 +187,28 @@ export interface LegacyDiffComment {
   codeSnapshot?: DiffCommentCodeSnapshot;
 }
 
+export interface ReplyChoice {
+  id: string;
+  name: string;
+  description: string;
+  preview?: { label?: string; text: string };
+  recommended?: boolean;
+}
+
+// The reviewer's pick among the choices an earlier message of the thread offered.
+export interface ChoiceAnswer {
+  messageId: string;
+  choice: string;
+}
+
 export interface DiffCommentMessage {
   id: string;
   body: string;
   author?: string;
   createdAt: string;
   updatedAt: string;
+  choices?: ReplyChoice[];
+  answer?: ChoiceAnswer;
 }
 
 // New data structures for enhanced comment and viewed state management
@@ -233,6 +249,8 @@ export interface ThreadCommentImport extends CommentImportBase {
 
 export interface ReplyCommentImport extends CommentImportBase {
   type: 'reply';
+  choices?: ReplyChoice[];
+  answer?: ChoiceAnswer;
 }
 
 export type CommentImport = ThreadCommentImport | ReplyCommentImport;
@@ -313,6 +331,8 @@ export type ThreadReviewState =
   | 'awaiting-fix'
   // No fixup yet, and the agent replied to the reviewer: the reviewer's turn.
   | 'answered'
+  // Like answered, with choices in the agent's reply for the reviewer to pick from.
+  | 'choosing'
   | 'awaiting-approval'
   | 'approved'
   | 'folded'
@@ -350,6 +370,8 @@ export interface ThreadAwaitingAgent {
   filePath: string;
   position: DiffCommentPosition;
   message: string;
+  // Present when the latest message picks one of the choices the agent offered.
+  answer?: ChoiceAnswer;
   fixupTarget?: string;
 }
 

@@ -570,4 +570,126 @@ describe('commentImports', () => {
       expect(mergeCommentThreads([fileThread!], [fileThread!]).threads).toEqual([fileThread]);
     });
   });
+
+  describe('choices on a reply and the pick that answers them', () => {
+    const choices = [
+      { id: 'A', name: '최상위 불리언', description: '가장 단순합니다.' },
+      {
+        id: 'B',
+        name: 'review.overlay.enabled 묶음',
+        description: '다른 리뷰 설정과 같은 자리입니다.',
+        preview: { label: '~/.difit/config.json', text: '{\n  "review": {}\n}' },
+        recommended: true,
+      },
+    ];
+    const askReply = {
+      type: 'reply',
+      filePath: 'src/example.ts',
+      position: { side: 'new', line: 10 },
+      body: '하나를 골라 주세요.',
+      createdAt: '2024-02-01T00:00:00.000Z',
+      choices,
+    };
+
+    const askedThread = (): DiffCommentThread =>
+      mergeCommentImports(
+        [createThread({ id: 'thread-1', body: '설정이 있어야 하지 않나요?' })],
+        parseCommentImportValue(JSON.stringify(askReply)),
+      ).threads[0]!;
+
+    const picked = (thread: DiffCommentThread): DiffCommentThread => ({
+      ...thread,
+      messages: [
+        ...thread.messages,
+        {
+          id: 'pick-1',
+          body: '고름: B — review.overlay.enabled 묶음',
+          author: 'User',
+          createdAt: '2024-03-01T00:00:00.000Z',
+          updatedAt: '2024-03-01T00:00:00.000Z',
+          answer: { messageId: thread.messages[1]!.id, choice: 'B' },
+        },
+      ],
+    });
+
+    it('stores the choices on the agent reply', () => {
+      const reply = askedThread().messages[1];
+
+      expect(reply).toMatchObject({ author: 'Agent', body: '하나를 골라 주세요.', choices });
+    });
+
+    it('keeps the choices and the pick when the agent adds another comment', () => {
+      const stored = picked(askedThread());
+
+      const { threads } = mergeCommentImports(
+        [stored],
+        parseCommentImportValue(
+          JSON.stringify({ ...askReply, body: 'B로 하겠습니다.', choices: undefined }),
+        ),
+      );
+
+      expect(threads[0]!.messages[1]!.choices).toEqual(choices);
+      expect(threads[0]!.messages[2]!.answer).toEqual(stored.messages[2]!.answer);
+      expect(threads[0]!.messages[3]!.body).toBe('B로 하겠습니다.');
+    });
+
+    it('keeps the choices and the pick when a stale page push is merged', () => {
+      const stored = picked(askedThread());
+
+      const { threads } = mergeCommentThreads([stored], [stored]);
+
+      expect(threads[0]!.messages).toEqual(stored.messages);
+    });
+
+    it('adds a second question with the same words but other choices', () => {
+      const thread = askedThread();
+
+      const { threads } = mergeCommentImports(
+        [thread],
+        parseCommentImportValue(JSON.stringify({ ...askReply, choices: [choices[0]] })),
+      );
+
+      expect(threads[0]!.messages).toHaveLength(3);
+      expect(threads[0]!.messages[2]!.choices).toEqual([choices[0]]);
+    });
+
+    it('skips the same question sent twice', () => {
+      const thread = askedThread();
+
+      const { threads } = mergeCommentImports(
+        [thread],
+        parseCommentImportValue(JSON.stringify(askReply)),
+      );
+
+      expect(threads[0]!.messages).toHaveLength(2);
+    });
+
+    it('carries the choices and the pick into the import id', () => {
+      const [ask] = parseCommentImportValue(JSON.stringify(askReply));
+      const plain = serializeCommentImports(
+        parseCommentImportValue(JSON.stringify({ ...askReply, choices: undefined })),
+      );
+
+      expect(JSON.parse(serializeCommentImports([ask!]))[0].choices).toEqual(choices);
+      expect(plain).not.toContain('choices');
+    });
+
+    it.each([
+      ['an empty list', { choices: [] }],
+      ['a choice without a name', { choices: [{ id: 'A', description: '' }] }],
+      ['two choices with one id', { choices: [choices[0], choices[0]] }],
+      ['a preview without text', { choices: [{ ...choices[0], preview: { label: 'x' } }] }],
+      ['a pick without the message it answers', { answer: { choice: 'A' } }],
+    ])('rejects %s', (_name, fields) => {
+      expect(() => normalizeCommentImports({ ...askReply, choices: undefined, ...fields })).toThrow(
+        /Invalid comment import field/,
+      );
+    });
+
+    it('takes choices only on a reply', () => {
+      expect(() => normalizeCommentImports({ ...askReply, type: 'thread' })).toThrow(
+        'choices and answer belong on a reply',
+      );
+    });
+  });
 });

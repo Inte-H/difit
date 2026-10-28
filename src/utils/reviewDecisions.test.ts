@@ -235,6 +235,25 @@ describe('deriveThreadReviewState', () => {
     expect(deriveThreadReviewState('t1', [fixup('aaaa')], [], answered)).toBe('awaiting-approval');
   });
 
+  it('waits for the reviewer to pick while the agent’s last reply offers choices', () => {
+    const asked = { messages: [{ author: REVIEWER_AUTHOR }] };
+    const offered = {
+      messages: [...asked.messages, { author: AGENT_AUTHOR, choices: [{ id: 'A' }] }],
+    };
+    expect(deriveThreadReviewState('t1', [], [], offered)).toBe('choosing');
+    expect(reviewStateLabel('choosing')).toBe('고를 차례');
+    expect(
+      deriveThreadReviewState('t1', [], [], {
+        messages: [...offered.messages, { author: REVIEWER_AUTHOR }],
+      }),
+    ).toBe('awaiting-fix');
+    expect(
+      deriveThreadReviewState('t1', [], [], {
+        messages: [...offered.messages, { author: AGENT_AUTHOR }],
+      }),
+    ).toBe('answered');
+  });
+
   it('counts any author other than the reviewer and the reviewer’s edits as the agent', () => {
     expect(
       deriveThreadReviewState('t1', [], [], {
@@ -446,8 +465,14 @@ describe('commentPanelStatus', () => {
     id: string,
     fixups: ThreadFixup[],
     decisions: ReviewDecision[],
-    thread: { messages: { author?: string }[] } = asked,
+    thread: { messages: { author?: string; choices?: unknown[] }[] } = asked,
   ) => commentPanelStatus({ id, ...thread }, fixups, decisions);
+
+  it('shows it as the reviewer’s pick while the agent’s reply offers choices', () => {
+    const offered = { messages: [...asked.messages, { author: AGENT_AUTHOR, choices: [{}] }] };
+    expect(status('t1', [], [], offered)).toBe('choosing');
+    expect(status('t1', [], [decision('resolved', '')], offered)).toBe('resolved');
+  });
 
   it('shows it as open when the move is the agent: no answer yet, or the fixup was rejected', () => {
     expect(status('t1', [], [])).toBe('open');
@@ -702,6 +727,34 @@ describe('selectThreadsAwaitingAgent', () => {
         message: 'User 0',
       },
     ]);
+  });
+
+  it('hands over the reviewer’s pick with the choice it answers', () => {
+    const asked = thread('t1', ['User'], [undefined]);
+    const offered = {
+      ...asked,
+      messages: [asked.messages[0]!, { ...asked.messages[1]!, choices: [{ id: 'B' }] }],
+    };
+    const pick = {
+      id: 't1-2',
+      body: '고름: B — 묶음',
+      author: 'User',
+      createdAt: '2026-01-02T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+      answer: { messageId: 't1-1', choice: 'B' },
+    };
+    const picked = { ...offered, messages: [...offered.messages, pick] };
+
+    expect(ids([offered], new Map())).toEqual([]);
+    expect(selectThreadsAwaitingAgent([picked], new Map(), [])).toEqual([
+      expect.objectContaining({
+        threadId: 't1',
+        message: '고름: B — 묶음',
+        answer: { messageId: 't1-1', choice: 'B' },
+        state: 'awaiting-fix',
+      }),
+    ]);
+    expect(selectThreadsAwaitingAgent([picked], undefined, [])[0]).toHaveProperty('answer');
   });
 
   it('leaves out a resolved thread with or without fixups', () => {

@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 
 import type {
+  ChoiceAnswer,
   CommentThread,
   DiffFile,
   DiffSide,
@@ -33,7 +34,7 @@ export type DiffViewerBodyProps = {
     side?: DiffSide,
   ) => Promise<void>;
   onResolveThread: (threadId: string) => void;
-  onReplyToThread: (threadId: string, body: string) => Promise<void>;
+  onReplyToThread: (threadId: string, body: string, answer?: ChoiceAnswer) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
   onOpenInEditor?: (filePath: string, lineNumber: number) => void;

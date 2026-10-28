@@ -2,6 +2,7 @@ import { Check, ChevronDown, ChevronRight, Copy, Edit2, MessageSquare, Trash2 } 
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
+  type ChoiceAnswer,
   type AnchorStaleReason,
   type CommentThread,
   type DiffCommentMessage,
@@ -10,7 +11,11 @@ import {
 import { formatCommentContent } from '../../utils/commentFormatting';
 import { locationLabel } from '../../utils/commentPosition';
 import { isSameCommit } from '../../utils/diffSelection';
-import { appearsResolved, reviewStateLabel } from '../../utils/reviewDecisions';
+import {
+  appearsResolved,
+  deriveThreadReviewState,
+  reviewStateLabel,
+} from '../../utils/reviewDecisions';
 import { type ThreadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayContext';
 import { usePickedThreadId } from '../contexts/PickedThreadContext';
 import { useClickOutside } from '../hooks/useClickOutside';
@@ -18,6 +23,7 @@ import { copyTextToClipboard } from '../utils/clipboard';
 
 import { CommentBodyRenderer } from './CommentBodyRenderer';
 import { CommentForm } from './CommentForm';
+import { ReplyChoices } from './ReplyChoices';
 import type { AppearanceSettings } from './SettingsModal';
 
 // Hidden until the message is hovered only where hovering is possible; touch screens keep it shown.
@@ -227,7 +233,7 @@ interface CommentThreadCardProps {
   review?: ThreadReviewControls;
   showAuthorBadges?: boolean;
   onResolveThread: (threadId: string) => void;
-  onReplyToThread: (threadId: string, body: string) => Promise<void>;
+  onReplyToThread: (threadId: string, body: string, answer?: ChoiceAnswer) => Promise<void>;
   onRemoveMessage: (threadId: string, messageId: string) => void;
   onUpdateMessage: (threadId: string, messageId: string, newBody: string) => void;
   // Absent when this comment cannot be answered by editing the code here.
@@ -275,6 +281,8 @@ export function CommentThreadCard({
     if (isResolved) recordDecision(thread.id, 'unresolved', '');
     else onResolveThread(thread.id);
   };
+
+  const reviewState = review?.state ?? deriveThreadReviewState(thread.id, [], [], thread);
 
   const messageText = (message: DiffCommentMessage) =>
     formatCommentContent(message.body, thread.codeContent);
@@ -335,14 +343,20 @@ export function CommentThreadCard({
               해결됨
             </span>
           )}
-          {review && !isResolved && !review.responding && (
-            <span
-              data-testid="review-state-chip"
-              className="inline-flex h-5 shrink-0 items-center rounded-full border border-github-border px-2 text-[10px] font-medium text-github-text-secondary"
-            >
-              {reviewStateLabel(review.state)}
-            </span>
-          )}
+          {!isResolved &&
+            !review?.responding &&
+            (review !== undefined || reviewState === 'choosing') && (
+              <span
+                data-testid="review-state-chip"
+                className={`inline-flex h-5 shrink-0 items-center rounded-full border px-2 text-[10px] font-medium ${
+                  reviewState === 'choosing'
+                    ? 'border-github-warning text-github-warning'
+                    : 'border-github-border text-github-text-secondary'
+                }`}
+              >
+                {reviewStateLabel(reviewState)}
+              </span>
+            )}
           {review?.responding && (
             <span
               data-testid="responding-chip"
@@ -438,7 +452,7 @@ export function CommentThreadCard({
             deleteLabel="Delete comment"
           />
 
-          {thread.messages.slice(1).map((message) => (
+          {thread.messages.slice(1).map((message, index) => (
             <div key={message.id} className="ml-4 border-l border-github-border pl-3">
               <ThreadMessageItem
                 message={message}
@@ -450,6 +464,16 @@ export function CommentThreadCard({
                 onCopy={() => messageText(message)}
                 onDelete={() => onRemoveMessage(thread.id, message.id)}
               />
+              {message.choices && message.choices.length > 0 && (
+                <ReplyChoices
+                  message={{ ...message, choices: message.choices }}
+                  later={thread.messages.slice(index + 2)}
+                  onPick={async (body, answer) => {
+                    await onReplyToThread(thread.id, body, answer);
+                    if (isResolved) recordDecision(thread.id, 'unresolved', '');
+                  }}
+                />
+              )}
             </div>
           ))}
 

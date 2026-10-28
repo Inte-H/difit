@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 
 import {
+  type ChoiceAnswer,
   type CommitMessageResponse,
   type DiffCommentThread,
   type DiffResponse,
@@ -2018,8 +2019,8 @@ function App() {
   };
 
   const handleReplyToThread = useCallback(
-    (threadId: string, body: string): Promise<void> => {
-      replyToThread({ threadId, body });
+    (threadId: string, body: string, answer?: ChoiceAnswer): Promise<void> => {
+      replyToThread({ threadId, body, ...(answer ? { answer } : {}) });
       return Promise.resolve();
     },
     [replyToThread],

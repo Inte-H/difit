@@ -8,6 +8,7 @@
 | ------------ | ------------------------------------------- | ------------------------- |
 | 수정 중      | 에이전트가 아직 답하지 않았다               | 기다린다                  |
 | 답변 완료    | 에이전트가 고치지 않고 말로 답했다          | 답을 읽고 답글이나 해결   |
+| 고를 차례    | 에이전트가 고를 거리를 붙여 물었다          | 카드를 눌러 고르거나 답글 |
 | 승인 대기    | 수정이 도착해 줄 아래에 겹쳐 보인다         | `승인` 또는 `거절`        |
 | 승인됨       | 승인했지만 아직 원래 커밋에 합쳐지지 않았다 | 잘못 눌렀으면 `승인 취소` |
 | 접힘         | 승인한 수정이 원래 커밋에 합쳐졌다          | 없음                      |
@@ -41,6 +42,7 @@ difit comment wait --port <port>
 ```
 
 - `fixupTarget`은 그 지적에 답할 fixup을 걸 커밋이다. 없으면 리뷰 대상 커밋에 건다.
+- 리뷰어가 고를 거리 가운데 하나를 골랐으면 `answer`가 붙는다. 아래 「고를 거리를 붙여 묻기」를 본다.
 - 알리는 경우는 여섯이다. 리뷰어가 마지막으로 말한 `[수정 중]`, fixup을 만든 뒤에 리뷰어가 답글을 단 `[승인 대기]`, 승인한 뒤에 리뷰어가 답글을 달았거나 fixup을 만든 뒤에 단 답글에 에이전트가 아직 답하지 않은 `[승인됨]`(뒤의 경우는 승인한 fixup이 아직 범위에 있을 때만), 새 fixup도 그 뒤의 답도 없는 `[다시 수정 중]`, 되돌린 fixup이 아직 남은 `[되돌림]`, 리뷰어가 지운 `[지움]`. `rejectedFixupShas`는 버려야 할 fixup을 모두 담고, `rejectedFixupSha`는 그 가운데 첫째다. 고정할 커밋이 없는 리뷰에서는 리뷰어가 마지막으로 말한 지적을 모두 알린다.
 - `[승인 대기]`와 승인 전에 단 답글의 `[승인됨]`은 답글 시각을 fixup의 author date와 견준다. 리뷰어의 브라우저와 fixup을 만든 컴퓨터의 시계가 어긋나면 fixup 직후에 단 답글이 오지 않거나, fixup으로 이미 답한 지적이 다시 올 수 있다. 다시 온 지적에는 말로 답하면 더 오지 않는다.
 - 띄우자마자 지금 차례인 지적을 모두 찍으므로, 두 번 띄우는 사이에 생긴 지적도 놓치지 않는다. 답한 뒤 다시 띄운다. 답하지 않은 지적은 다시 띄우자마자 또 나온다.
@@ -100,6 +102,35 @@ Claude Code 세션이 띄운 difit(`--background` 포함)은 세션의 메시지
    리뷰어는 지적 아래 fixup 카드 안에서도 줄을 고친다. 그러면 같은 `Review-Thread` 트레일러와 같은 대상 커밋으로 리뷰어의 fixup이 에이전트의 fixup 위에 하나 더 생기고, 두 fixup이 함께 승인되어 지적이 닫힌다. 에이전트가 할 일은 없다. 리뷰어가 이 수정을 `되돌리기`로 거절하면 지적은 `[승인 대기]`로 돌아가 리뷰어가 에이전트의 fixup을 다시 판정하고, wait는 이 지적을 알리지 않는다. 되돌린 fixup은 `decisions`의 `rejected`로만 남으니 마무리 때 다른 거절된 fixup과 함께 버린다.
 
 5. 리뷰어가 커밋 목록에서 커밋 메시지를 고치면, difit은 파일을 바꾸지 않는 `amend! <대상 SHA>` 커밋을 HEAD 위에 만들고 승인으로 기록한다. 그 커밋 메시지의 첫 문단 아래가 새 메시지이고, 끝에 `Review-Thread` 트레일러가 붙는다. 스레드는 새로 열리고 `filePath`가 `/COMMIT_MSG`(1번 줄), `fixupTarget`이 메시지를 고친 커밋, author가 `reviewer-edit`이다. 접을 때까지 할 일은 없다.
+
+## 고를 거리를 붙여 묻기
+
+리뷰어가 정해야 할 것이 있으면 답글에 고를 거리를 붙인다. 리뷰어는 지적 카드 안에서 카드 하나를 눌러 고른다. 답글(`"type": "reply"`)에만 붙일 수 있다.
+
+```sh
+difit comment add --port <port> '{
+  "type": "reply",
+  "filePath": "src/server/fixup-overlay.ts",
+  "position": { "side": "new", "line": 40 },
+  "body": "설정을 넣겠습니다. 설정 키 모양을 하나 골라 주세요.",
+  "choices": [
+    { "id": "A", "name": "최상위 불리언 fixupOverlay", "description": "가장 단순합니다." },
+    {
+      "id": "B",
+      "name": "review.overlay.enabled 묶음",
+      "description": "다른 리뷰 설정과 같은 자리에 놓입니다.",
+      "preview": { "label": "~/.difit/config.json", "text": "{\n  \"review\": { \"overlay\": { \"enabled\": false } }\n}" },
+      "recommended": true
+    }
+  ]
+}'
+```
+
+- `id`, `name`, `description`은 반드시 넣는다. `id`는 그 답글 안에서 겹치지 않아야 한다. `preview`(`label`은 빼도 된다)와 `recommended`는 넣고 싶을 때만 넣는다. 미리 보기는 카드에 세 줄까지 보이고 나머지는 `더 보기`로 펼친다. `recommended`를 단 카드에는 `추천`이 붙는다.
+- 고를 거리를 단 답글이 마지막 글이면 지적이 `[고를 차례]`가 된다. `[답변 완료]`처럼 리뷰어 차례다.
+- 리뷰어가 고르면 `고름: B — <name>` 답글이 달리고, 그 답글에 `"answer": { "messageId": "<고를 거리를 단 답글 id>", "choice": "B" }`가 붙는다. 고른 것을 바꾸면 앞 답글은 그대로 두고 `바꿈: C — <name>` 답글이 새로 달린다. 어느 쪽이든 여느 리뷰어 답글처럼 에이전트 차례가 되어 wait와 세션 메시지가 그 답글을 `message`와 `answer`로 알린다. 마지막에 고른 것을 따른다.
+- 리뷰어가 고르지 않고 답글 칸에 글로 답할 수도 있다. 그때는 `answer` 없는 여느 답글이 온다.
+- 텍스트 출력은 고를 거리를 단 답글 아래에 `Choices:` 목록을, 고른 답글 아래에 `Picked B from Reply <n>`을 붙인다.
 
 ## 승인된 수정 접기와 기록 올리기
 
@@ -164,7 +195,7 @@ fixup이 범위 중간의 커밋을 향하고 그 뒤 커밋이 같은 줄을 �
 
 ## 접은 뒤의 커밋으로 지적 옮기기
 
-접으면 리뷰 대상 커밋의 SHA가 바뀐다. 새 SHA로 리뷰를 다시 열면 지적은 옛 SHA의 리뷰에 남아 있으므로, 옛 서버에서 꺼내 새 서버에 넣는다. `comment get`은 지적마다 메시지를 배열로 주고 `comment add`는 첫 메시지를 `thread`, 나머지를 `reply`로 받으므로 모양을 바꿔 넣는다. 지적 id와 `codeSnapshot`(줄 내용과 지적을 단 커밋)을 그대로 실어야 fixup 트레일러와 결정 기록이 같은 지적을 가리키고, 화면이 지적의 자리를 다시 찾을 수 있다. 커밋 하나를 보며 단 지적의 `view`와 `fixupTarget`도 함께 싣는다.
+접으면 리뷰 대상 커밋의 SHA가 바뀐다. 새 SHA로 리뷰를 다시 열면 지적은 옛 SHA의 리뷰에 남아 있으므로, 옛 서버에서 꺼내 새 서버에 넣는다. `comment get`은 지적마다 메시지를 배열로 주고 `comment add`는 첫 메시지를 `thread`, 나머지를 `reply`로 받으므로 모양을 바꿔 넣는다. 지적 id와 `codeSnapshot`(줄 내용과 지적을 단 커밋)을 그대로 실어야 fixup 트레일러와 결정 기록이 같은 지적을 가리키고, 화면이 지적의 자리를 다시 찾을 수 있다. 커밋 하나를 보며 단 지적의 `view`와 `fixupTarget`도 함께 싣는다. 답글도 id와 `choices`, `answer`를 그대로 실어야 고른 답글이 어느 답글의 고를 거리를 골랐는지 이어진다.
 
 ```sh
 difit comment get --port <옛 port> --format json > old.json
@@ -173,8 +204,8 @@ difit comment add --port <새 port> "$(jq '[.threads[] | . as $t
   | ($t.messages[0] | {type: "thread", id: $t.id, filePath: $t.filePath, position: $t.position,
                        body, author, createdAt, codeSnapshot: $t.codeSnapshot,
                        view: $t.view, fixupTarget: $t.fixupTarget}),
-    ($t.messages[1:][] | {type: "reply", filePath: $t.filePath, position: $t.position,
-                          body, author, createdAt})
+    ($t.messages[1:][] | {type: "reply", id, filePath: $t.filePath, position: $t.position,
+                          body, author, createdAt, choices, answer})
   | with_entries(select(.value != null))]' old.json)"
 
 jq '.decisions' old.json | curl -X POST "http://localhost:<새 port>/api/decisions" \

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 
 import {
   type BaseMode,
+  type ChoiceAnswer,
   type CommentImport,
   type CommentThread,
   type DiffContextStorage,
@@ -39,6 +40,7 @@ interface AddThreadParams {
 interface ReplyToThreadParams {
   threadId: string;
   body: string;
+  answer?: ChoiceAnswer;
 }
 
 interface UseDiffCommentsReturn {
@@ -350,7 +352,7 @@ export function useDiffComments(
   );
 
   const replyToThread = useCallback(
-    ({ threadId, body }: ReplyToThreadParams) => {
+    ({ threadId, body, answer }: ReplyToThreadParams) => {
       const now = new Date().toISOString();
       const newThreads = threads.map((thread) =>
         thread.id === threadId
@@ -365,6 +367,7 @@ export function useDiffComments(
                   author: REVIEWER_AUTHOR,
                   createdAt: now,
                   updatedAt: now,
+                  ...(answer ? { answer } : {}),
                 },
               ],
             }
