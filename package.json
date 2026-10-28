@@ -24,7 +24,7 @@
     "url": "https://github.com/yoshiko-pg/difit.git"
   },
   "bin": {
-    "difit": "./dist/cli/index.js"
+    "difit": "./dist/cli/launcher.js"
   },
   "files": [
     "dist",

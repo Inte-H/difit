@@ -22,6 +22,11 @@ import {
   shortHash,
 } from './utils.js';
 import { createCommentCommand } from './comment.js';
+import {
+  createUpdateCommand,
+  registerRunningProcess,
+  scheduleBackgroundUpdate,
+} from './self-update.js';
 import { getPrPatch, getPrCommentImports } from './github.js';
 import {
   BACKGROUND_CHILD_ENV,
@@ -102,6 +107,7 @@ program
   .version(pkg.version, '-v, --version', 'output the version number')
   .enablePositionalOptions()
   .addCommand(createCommentCommand())
+  .addCommand(createUpdateCommand())
   .argument(
     '[commit-ish]',
     'Git commit, tag, branch, HEAD~n reference, or "working"/"staged"/"."',
@@ -147,10 +153,16 @@ program
         process.exit(1);
       }
 
+      if (!isBackgroundChild) {
+        scheduleBackgroundUpdate();
+      }
+
       if (options.background && !isBackgroundChild) {
         await startBackgroundProcess();
         return;
       }
+
+      registerRunningProcess();
 
       try {
         manualCommentImports = parseCommentOptions(options.comment);
