@@ -268,6 +268,16 @@ interface StoredEntry extends CacheEntry {
 
 class BuildError extends Error {}
 
+interface QueuedBuild {
+  sha: string;
+  run: () => Promise<void>;
+}
+
+export interface IndexRequestOptions {
+  // Built ahead of queued builds nobody asked for.
+  urgent?: boolean;
+}
+
 export class ScipIndexBuilder {
   private readonly repoPath: string;
   private readonly cacheRoot: string;
@@ -286,7 +296,9 @@ export class ScipIndexBuilder {
   private readonly children = new Set<ChildProcess>();
   private readonly abort = new AbortController();
   private tool: Promise<string | null> | null = null;
-  private queue: Promise<unknown> = Promise.resolve();
+  private readonly waiting: QueuedBuild[] = [];
+  private readonly urgent = new Set<string>();
+  private building: Promise<void> | null = null;
   private stopping: Promise<void> | null = null;
   private sweep: Promise<void> | null = null;
   private trimming: Promise<void> = Promise.resolve();
@@ -322,19 +334,58 @@ export class ScipIndexBuilder {
 
   // Starts indexing a full commit sha unless it is already indexed, and settles with the
   // final state. Builds run one at a time.
-  async request(sha: string): Promise<ScipBuildState> {
+  async request(sha: string, options: IndexRequestOptions = {}): Promise<ScipBuildState> {
     this.requestedSinceTrimStarted.add(sha);
+    if (options.urgent) this.markUrgent(sha);
     let job = this.jobs.get(sha);
     if (!job) {
       job = this.run(sha);
       this.jobs.set(sha, job);
     }
     const state = await job;
+    this.urgent.delete(sha);
     if (state.status === 'ready') {
       await this.markUsed(sha);
       await this.trimCache(sha);
     }
     return state;
+  }
+
+  // Settles as soon as it is known whether the index is ready, being built or cannot be built.
+  start(sha: string, options: IndexRequestOptions = {}): Promise<ScipBuildState> {
+    const current = this.state(sha);
+    if (current.status === 'building' || current.status === 'ready') {
+      if (options.urgent) this.hurry(sha);
+      return Promise.resolve(current);
+    }
+    return new Promise((resolvePromise) => {
+      const settle = (state: ScipBuildState) => {
+        stopListening();
+        resolvePromise(state);
+      };
+      const stopListening = this.onChange((changed, state) => {
+        if (changed === sha) settle(state);
+      });
+      this.request(sha, options).then(settle, () => settle(this.state(sha)));
+    });
+  }
+
+  async useStored(sha: string): Promise<boolean> {
+    if (this.state(sha).status === 'ready') {
+      this.requestedSinceTrimStarted.add(sha);
+      return true;
+    }
+    if (!FULL_SHA.test(sha) || this.jobs.has(sha)) return false;
+    if (!(await this.exists(this.compactPath(sha))) || this.jobs.has(sha)) return false;
+    const ready: ScipBuildState = { status: 'ready' };
+    this.requestedSinceTrimStarted.add(sha);
+    this.jobs.set(sha, Promise.resolve(ready));
+    this.setState(sha, ready);
+    return true;
+  }
+
+  hurry(sha: string): void {
+    if (this.state(sha).status === 'building') this.markUrgent(sha);
   }
 
   // The commit's index once it is ready, or null.
@@ -370,7 +421,7 @@ export class ScipIndexBuilder {
     this.stopping ??= (async () => {
       this.abort.abort();
       await Promise.all([...this.children].map((child) => killProcessTree(child, this.platform)));
-      await Promise.all([this.queue, this.sweep, this.trimming]);
+      await Promise.all([this.building, this.sweep, this.trimming]);
       this.unhookProcess();
     })();
     return this.stopping;
@@ -553,11 +604,36 @@ export class ScipIndexBuilder {
     }
 
     this.setState(sha, { status: 'building' });
-    const build = this.queue.then(() => this.build(sha, tool));
-    this.queue = build.catch(() => undefined);
-    const result = await build;
+    const result = await this.enqueue(sha, () => this.build(sha, tool));
     this.setState(sha, result);
     return result;
+  }
+
+  private enqueue(sha: string, build: () => Promise<ScipBuildState>): Promise<ScipBuildState> {
+    return new Promise((resolvePromise, reject) => {
+      const queued: QueuedBuild = { sha, run: () => build().then(resolvePromise, reject) };
+      if (this.urgent.has(sha)) this.waiting.splice(this.urgentCount(), 0, queued);
+      else this.waiting.push(queued);
+      this.building ??= this.drain();
+    });
+  }
+
+  private async drain(): Promise<void> {
+    for (let next = this.waiting.shift(); next; next = this.waiting.shift()) await next.run();
+    this.building = null;
+  }
+
+  private urgentCount(): number {
+    const index = this.waiting.findIndex((queued) => !this.urgent.has(queued.sha));
+    return index === -1 ? this.waiting.length : index;
+  }
+
+  private markUrgent(sha: string): void {
+    if (this.urgent.has(sha)) return;
+    const at = this.waiting.findIndex((queued) => queued.sha === sha);
+    const [queued] = at === -1 ? [] : this.waiting.splice(at, 1);
+    if (queued) this.waiting.splice(this.urgentCount(), 0, queued);
+    this.urgent.add(sha);
   }
 
   private async build(sha: string, tool: string): Promise<ScipBuildState> {

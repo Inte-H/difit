@@ -72,6 +72,7 @@ interface SideBySideDiffChunkProps {
   } | null;
   onCommentTriggerHandled?: () => void;
   filename?: string;
+  oldFilename?: string;
   onOpenInEditor?: (filePath: string, lineNumber: number) => void;
   foldedLines?: readonly FoldedLines[];
 }
@@ -174,6 +175,7 @@ export function SideBySideDiffChunk({
   commentTrigger,
   onCommentTriggerHandled,
   filename,
+  oldFilename,
   onOpenInEditor,
   foldedLines = NO_FOLDS,
 }: SideBySideDiffChunkProps) {
@@ -804,7 +806,7 @@ export function SideBySideDiffChunk({
                       <div
                         className="flex items-center relative min-h-[20px] px-3"
                         data-symbol-side="old"
-                        data-symbol-path={filename}
+                        data-symbol-path={oldFilename ?? filename}
                         data-symbol-line={sideLine.oldLineNumber}
                       >
                         {sideLine.wordLevelDiff ? (
