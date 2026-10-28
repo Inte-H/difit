@@ -16,6 +16,7 @@ import {
   memo,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -369,6 +370,17 @@ export const FileList = memo(function FileList({
       .filter((group) => group.files.length > 0);
   }, [fixupOnly, filterText]);
 
+  const emptyListMessage = (() => {
+    if ((filteredFileTree.children?.length ?? 0) > 0) return null;
+    if (onlyUnviewed && unviewedCount === 0) {
+      return filteredFixupOnly.length > 0
+        ? 'fixup에서만 수정한 파일만 남았습니다'
+        : '모든 파일을 확인했습니다';
+    }
+    if (filteredFixupOnly.length > 0 || (!onlyUnviewed && !filterText.trim())) return null;
+    return '조건에 맞는 파일이 없습니다';
+  })();
+
   const revealFixupFile = ({ fixupSha, path }: FixupFileRef) => {
     onRevealFixupFile?.(fixupSha, path);
     onFileSelected?.();
@@ -444,11 +456,19 @@ export const FileList = memo(function FileList({
     if (container) scrollRowIntoList(container, row, shouldUseStickyDirectoryHeaders);
   };
 
-  // The row is about to leave the unviewed-only list, so focus would fall to the page.
-  const moveFocusPastRow = (key: string) => {
-    if (!rowRefs.current.get(key)?.contains(document.activeElement)) return;
-    focusRow(shownRows[shownRows.findIndex((row) => row.key === key) + 1]);
-  };
+  // Read during render, before the DOM changes: when the focused row leaves the list, the row that
+  // takes its place, or the last row, gets focus instead of the page.
+  const committedRowsRef = useRef(shownRows);
+  const focusedRowIndex =
+    activeRowKey !== null && rowRefs.current.get(activeRowKey)?.contains(document.activeElement)
+      ? committedRowsRef.current.findIndex((row) => row.key === activeRowKey)
+      : -1;
+  useLayoutEffect(() => {
+    committedRowsRef.current = shownRows;
+    if (focusedRowIndex === -1 || activeRowKey === null || rowRefs.current.has(activeRowKey))
+      return;
+    focusRow(shownRows[Math.min(focusedRowIndex, shownRows.length - 1)]);
+  });
 
   const shownRowOfFile = (fileIndex: number | null) => {
     const path = fileIndex === null ? undefined : files[fileIndex]?.path;
@@ -681,7 +701,6 @@ export const FileList = memo(function FileList({
           <Checkbox
             checked={isReviewed}
             onChange={() => {
-              if (onlyUnviewed && !isReviewed) moveFocusPastRow(fileRowKey(file.path));
               onToggleReviewed(file.path);
             }}
             title={isReviewed ? 'Mark as not reviewed' : 'Mark as reviewed'}
@@ -796,8 +815,8 @@ export const FileList = memo(function FileList({
         tabIndex={-1}
       >
         {filteredFileTree.children?.map((child) => renderTreeNode(child))}
-        {onlyUnviewed && unviewedCount === 0 && (
-          <p className="m-0 px-4 py-3 text-sm text-github-text-muted">모든 파일을 확인했습니다</p>
+        {emptyListMessage !== null && (
+          <p className="m-0 px-4 py-3 text-sm text-github-text-muted">{emptyListMessage}</p>
         )}
         {filteredFixupOnly.map(({ fixup, files: fixupFiles }) => (
           <section
