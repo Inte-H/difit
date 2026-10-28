@@ -163,6 +163,11 @@ const COMMENTS_PANEL_WIDTH_STORAGE_KEY = 'difit.commentsPanelWidth';
 const COMMENTS_PANEL_MIN_WIDTH = 240;
 const COMMENTS_PANEL_MAX_WIDTH = 600;
 const COMMENTS_PANEL_DEFAULT_WIDTH = 320;
+const RESIZE_HANDLE_WIDTH = 4;
+const DIFF_MIN_WIDTH = 640;
+// The panel not resized last gives way first. The one resized last keeps a factor of 1, because
+// flex lets a lone item with a factor below 1 absorb only that fraction of the overflow.
+const YIELDING_PANEL_SHRINK = 1000;
 
 const parseDiffViewMode = (value: unknown): DiffViewMode | null => {
   switch (value) {
@@ -352,6 +357,10 @@ function App() {
   const fileListRef = useRef<FileListHandle>(null);
   const [isCommitDrawerOpen, setIsCommitDrawerOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [lastResizedPanel, setLastResizedPanel] = useState<'fileList' | 'comments' | null>(null);
+  const fileListBoxRef = useRef<HTMLDivElement>(null);
+  const commentsPanelBoxRef = useRef<HTMLDivElement>(null);
+  const headerFileListAreaRef = useRef<HTMLDivElement>(null);
   const [showSparkles, setShowSparkles] = useState(false);
   const [hasTriggeredSparkles, setHasTriggeredSparkles] = useState(false);
   const [isCommentsPanelOpen, setIsCommentsPanelOpen] = useState(getInitialCommentsPanelOpen);
@@ -447,6 +456,24 @@ function App() {
   });
   const hasCommitList = review !== undefined && review.commits.length > 1;
   const showsCommitList = !isMobile && hasCommitList;
+  const reservedPanelWidth =
+    (isFileTreeOpen ? SIDEBAR_MIN_WIDTH + RESIZE_HANDLE_WIDTH : 0) +
+    (isCommentsPanelOpen ? COMMENTS_PANEL_MIN_WIDTH + RESIZE_HANDLE_WIDTH : 0);
+  const panelFlex = (panel: 'fileList' | 'comments', isOpen: boolean, width: number) =>
+    `0 ${lastResizedPanel === null || lastResizedPanel === panel ? 1 : YIELDING_PANEL_SHRINK} ${isOpen ? width : 0}px`;
+  const attachFileListBox = useCallback((box: HTMLDivElement | null) => {
+    fileListBoxRef.current = box;
+    if (!box || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry) return;
+      headerFileListAreaRef.current?.style.setProperty(
+        '--file-list-width',
+        `${entry.contentRect.width}px`,
+      );
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
 
   // New diff-aware comment system
   const {
@@ -1173,18 +1200,35 @@ function App() {
 
   const startResize =
     (
-      startWidth: number,
+      panel: 'fileList' | 'comments',
       setWidth: (width: number) => void,
       clamp: (width: number) => number,
       direction: 1 | -1,
     ) =>
     (e: React.MouseEvent) => {
+      const [box, isOpen, minWidth] =
+        panel === 'fileList'
+          ? [fileListBoxRef.current, isFileTreeOpen, SIDEBAR_MIN_WIDTH]
+          : [commentsPanelBoxRef.current, isCommentsPanelOpen, COMMENTS_PANEL_MIN_WIDTH];
+      const row = diffScrollContainerRef.current?.parentElement;
       e.preventDefault();
+      if (!box || !row || !isOpen) return;
       setIsDragging(true);
+      // A panel caught mid open or close starts from the width it settles at.
+      for (const child of row.children) {
+        for (const animation of child.getAnimations?.() ?? []) animation.finish();
+      }
       const startX = e.clientX;
+      const startWidth = box.getBoundingClientRect().width;
+      const rowWidth = row.getBoundingClientRect().width;
+      const maxWidth = Math.floor(
+        minWidth + Math.max(0, rowWidth - reservedPanelWidth - DIFF_MIN_WIDTH),
+      );
 
       const handleMouseMove = (e: MouseEvent) => {
-        setWidth(clamp(startWidth + direction * (e.clientX - startX)));
+        const dragged = direction * (e.clientX - startX);
+        setLastResizedPanel(panel);
+        setWidth(Math.round(clamp(Math.min(startWidth + dragged, maxWidth))));
       };
 
       const handleMouseUp = () => {
@@ -2262,11 +2306,16 @@ function App() {
           }`}
         >
           <div
+            ref={headerFileListAreaRef}
             className={`flex items-center justify-between w-full ${
               isMobile ? 'px-3 py-2 gap-3' : 'px-4 py-3 gap-4 w-auto'
-            } ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+            }`}
             style={{
-              width: isMobile ? '100%' : isFileTreeOpen ? `${sidebarWidth}px` : 'auto',
+              width: isMobile
+                ? '100%'
+                : isFileTreeOpen
+                  ? `var(--file-list-width, ${sidebarWidth}px)`
+                  : 'auto',
               minWidth: isMobile ? '0px' : isFileTreeOpen ? `${SIDEBAR_MIN_WIDTH}px` : 'auto',
               maxWidth: isMobile ? 'none' : isFileTreeOpen ? `${SIDEBAR_MAX_WIDTH}px` : 'none',
             }}
@@ -2616,9 +2665,11 @@ function App() {
 
         <div className="flex flex-1 overflow-hidden relative">
           <div
+            ref={attachFileListBox}
             className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
             style={{
-              width: isMobile ? '0px' : isFileTreeOpen ? `${sidebarWidth}px` : '0px',
+              flex: isMobile ? '0 0 0px' : panelFlex('fileList', isFileTreeOpen, sidebarWidth),
+              minWidth: !isMobile && isFileTreeOpen ? `${SIDEBAR_MIN_WIDTH}px` : '0px',
             }}
           >
             <aside
@@ -2630,7 +2681,11 @@ function App() {
                   : 'relative border-r border-github-border'
               }`}
               style={{
-                width: isMobile ? 'min(85vw, 360px)' : `${sidebarWidth}px`,
+                width: isMobile
+                  ? 'min(85vw, 360px)'
+                  : isFileTreeOpen
+                    ? '100%'
+                    : `${sidebarWidth}px`,
                 minWidth: isMobile ? '0px' : `${SIDEBAR_MIN_WIDTH}px`,
                 maxWidth: isMobile ? 'none' : `${SIDEBAR_MAX_WIDTH}px`,
                 height: '100%',
@@ -2702,11 +2757,11 @@ function App() {
 
           {!isMobile && (
             <div
-              className={`bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+              className={`shrink-0 bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
               style={{
                 width: isFileTreeOpen ? '4px' : '0px',
               }}
-              onMouseDown={startResize(sidebarWidth, setSidebarWidth, clampSidebarWidth, 1)}
+              onMouseDown={startResize('fileList', setSidebarWidth, clampSidebarWidth, 1)}
               title="Drag to resize file list"
             />
           )}
@@ -2715,6 +2770,11 @@ function App() {
             <main
               ref={diffScrollContainerRef}
               className={`flex-1 overflow-y-auto ${showMobileCommentsBar ? 'pb-16' : ''}`}
+              style={
+                isMobile
+                  ? undefined
+                  : { minWidth: `min(${DIFF_MIN_WIDTH}px, calc(100% - ${reservedPanelWidth}px))` }
+              }
             >
               {diffData.files.map((file, fileIndex) => {
                 const fileThreads = threadsByFile.get(file.path) ?? EMPTY_COMMENT_THREADS;
@@ -2822,10 +2882,10 @@ function App() {
 
           {!isMobile && (
             <div
-              className={`bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
+              className={`shrink-0 bg-github-border hover:bg-github-text-muted cursor-col-resize ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
               style={{ width: isCommentsPanelOpen ? '4px' : '0px' }}
               onMouseDown={startResize(
-                commentsPanelWidth,
+                'comments',
                 setCommentsPanelWidth,
                 clampCommentsPanelWidth,
                 -1,
@@ -2836,16 +2896,19 @@ function App() {
 
           {!isMobile && (
             <div
+              ref={commentsPanelBoxRef}
               data-comments-panel-box
               className={`relative overflow-hidden ${!isDragging ? '!transition-all !duration-300 !ease-in-out' : ''}`}
-              style={{ width: isCommentsPanelOpen ? `${commentsPanelWidth}px` : '0px' }}
+              style={{
+                flex: panelFlex('comments', isCommentsPanelOpen, commentsPanelWidth),
+                minWidth: isCommentsPanelOpen ? `${COMMENTS_PANEL_MIN_WIDTH}px` : '0px',
+              }}
             >
               {isCommentsPanelOpen && (
                 <aside
                   id="comments-panel"
                   aria-label="코멘트 패널"
-                  className="h-full border-l border-github-border bg-github-bg-secondary"
-                  style={{ width: `${commentsPanelWidth}px` }}
+                  className="h-full w-full border-l border-github-border bg-github-bg-secondary"
                 >
                   {commentsPanelBody}
                 </aside>

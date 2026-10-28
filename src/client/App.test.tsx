@@ -239,6 +239,17 @@ const linedFile = (path: string, count: number): DiffResponse['files'][number] =
 
 const commentsPanel = () => document.getElementById('comments-panel');
 const commentsPanelBox = () => document.querySelector<HTMLElement>('[data-comments-panel-box]')!;
+const fileListBox = () => document.getElementById('file-tree-panel')!.parentElement!;
+const diffColumn = () => document.querySelector('main')!;
+// happy-dom does no layout, so a test states the widths the browser would give.
+const layOut = (widths: { row: number; diff: number; fileList?: number; comments?: number }) => {
+  const set = (element: Element, width: number) =>
+    vi.spyOn(element, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, width, 0));
+  set(diffColumn().parentElement!, widths.row);
+  set(diffColumn(), widths.diff);
+  if (widths.fileList !== undefined) set(fileListBox(), widths.fileList);
+  if (widths.comments !== undefined) set(commentsPanelBox(), widths.comments);
+};
 const commentsPanelHasFocus = () => commentsPanel()?.contains(document.activeElement) ?? false;
 const fileListHasFocus = () =>
   document.getElementById('file-tree-panel')?.contains(document.activeElement) ?? false;
@@ -1839,19 +1850,20 @@ describe('App Component - Sidebar persistence', () => {
     renderApp();
 
     const handle = await screen.findByTitle('Drag to resize file list');
-    const box = document.getElementById('file-tree-panel')!.parentElement!;
-    expect(box.style.width).toBe('280px');
+    expect(fileListBox().style.flexBasis).toBe('280px');
 
+    layOut({ row: 1920, diff: 1636, fileList: 280 });
     fireEvent.mouseDown(handle, { clientX: 300 });
     fireEvent.mouseMove(document, { clientX: 350 });
     fireEvent.mouseUp(document);
-    expect(box.style.width).toBe('330px');
+    expect(fileListBox().style.flexBasis).toBe('330px');
     expect(window.localStorage.getItem('difit.sidebarWidth')).toBe('330');
 
+    layOut({ row: 1920, diff: 1586, fileList: 330 });
     fireEvent.mouseDown(handle, { clientX: 300 });
     fireEvent.mouseMove(document, { clientX: 900 });
     fireEvent.mouseUp(document);
-    expect(box.style.width).toBe('600px');
+    expect(fileListBox().style.flexBasis).toBe('600px');
   });
 });
 
@@ -2119,7 +2131,7 @@ describe('App Component - Comments panel persistence', () => {
 
     await waitFor(async () => expect(await toggle()).toHaveAttribute('aria-expanded', 'true'));
     expect(window.localStorage.getItem('difit.commentsPanelOpen')).toBe('true');
-    expect(commentsPanelBox().style.width).toBe('450px');
+    expect(commentsPanelBox().style.flexBasis).toBe('450px');
     expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('450');
   });
 
@@ -2128,33 +2140,176 @@ describe('App Component - Comments panel persistence', () => {
     window.localStorage.setItem('difit.commentsPanelWidth', '400');
     const { unmount } = renderApp();
     await toggle();
-    expect(commentsPanelBox().style.width).toBe('400px');
+    expect(commentsPanelBox().style.flexBasis).toBe('400px');
     unmount();
 
     window.localStorage.setItem('difit.commentsPanelWidth', '900');
     const second = renderApp();
     await toggle();
-    expect(commentsPanelBox().style.width).toBe('600px');
+    expect(commentsPanelBox().style.flexBasis).toBe('600px');
     second.unmount();
 
     window.localStorage.setItem('difit.commentsPanelWidth', '100');
     renderApp();
     await toggle();
-    expect(commentsPanelBox().style.width).toBe('240px');
+    expect(commentsPanelBox().style.flexBasis).toBe('240px');
   });
 
   it('widens by the distance dragged to the left and remembers the width', async () => {
     renderApp();
     fireEvent.click(await toggle());
-    expect(commentsPanelBox().style.width).toBe('320px');
+    expect(commentsPanelBox().style.flexBasis).toBe('320px');
 
+    layOut({ row: 1920, diff: 1312, fileList: 280, comments: 320 });
     const handle = screen.getByTitle('Drag to resize comments panel');
     fireEvent.mouseDown(handle, { clientX: 1000 });
     fireEvent.mouseMove(document, { clientX: 900 });
     fireEvent.mouseUp(document);
 
-    expect(commentsPanelBox().style.width).toBe('420px');
+    expect(commentsPanelBox().style.flexBasis).toBe('420px');
     expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('420');
+  });
+});
+
+describe('App Component - Side panels in a narrow window', () => {
+  const handleOf = (title: string) => screen.getByTitle(title);
+  const drag = (title: string, from: number, to: number) => {
+    fireEvent.mouseDown(handleOf(title), { clientX: from });
+    fireEvent.mouseMove(document, { clientX: to });
+    fireEvent.mouseUp(document);
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockComments = [];
+    mockDecisions = [];
+    vi.mocked(useViewport).mockReturnValue({ isMobile: false, isDesktop: true });
+    window.localStorage.setItem('difit.commentsPanelOpen', 'true');
+    mockFetch(mockDiffResponse);
+  });
+
+  afterEach(() => {
+    resetClientSettingsForTests();
+  });
+
+  it('keeps 640px for the diff, or what the open panels leave at their minimums', async () => {
+    renderApp();
+    const toggle = await screen.findByRole('button', { name: 'Toggle comments panel' });
+
+    expect(diffColumn().style.minWidth).toBe('min(640px, calc(100% - 448px))');
+    expect(fileListBox().style.minWidth).toBe('200px');
+    expect(commentsPanelBox().style.minWidth).toBe('240px');
+
+    fireEvent.click(toggle);
+    expect(diffColumn().style.minWidth).toBe('min(640px, calc(100% - 204px))');
+  });
+
+  it('lets both panels give way until one is resized, then the other gives way first', async () => {
+    renderApp();
+    await screen.findByTitle('Drag to resize file list');
+    expect(fileListBox().style.flexShrink).toBe('1');
+    expect(commentsPanelBox().style.flexShrink).toBe('1');
+
+    layOut({ row: 1920, diff: 1312, fileList: 280, comments: 320 });
+    drag('Drag to resize file list', 300, 310);
+    expect(fileListBox().style.flexShrink).toBe('1');
+    expect(commentsPanelBox().style.flexShrink).toBe('1000');
+
+    fireEvent.mouseDown(handleOf('Drag to resize comments panel'), { clientX: 1000 });
+    expect(fileListBox().style.flexShrink).toBe('1');
+    expect(commentsPanelBox().style.flexShrink).toBe('1000');
+    expect(commentsPanelBox().style.flexBasis).toBe('320px');
+
+    fireEvent.mouseMove(document, { clientX: 990 });
+    fireEvent.mouseUp(document);
+    expect(commentsPanelBox().style.flexShrink).toBe('1');
+    expect(fileListBox().style.flexShrink).toBe('1000');
+  });
+
+  it('widens a panel by what the other panel can still give up when the diff is at 640px', async () => {
+    window.localStorage.setItem('difit.sidebarWidth', '400');
+    renderApp();
+    await screen.findByTitle('Drag to resize file list');
+    layOut({ row: 1250, diff: 640, fileList: 362, comments: 240 });
+
+    drag('Drag to resize comments panel', 1000, 700);
+
+    expect(commentsPanelBox().style.flexBasis).toBe('402px');
+    expect(window.localStorage.getItem('difit.sidebarWidth')).toBe('400');
+  });
+
+  it('gives a panel the room a closing panel leaves, though the close is still on screen', async () => {
+    renderApp();
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle file tree panel' }));
+    layOut({ row: 1250, diff: 640, fileList: 350, comments: 240 });
+
+    drag('Drag to resize comments panel', 1000, 700);
+
+    expect(commentsPanelBox().style.flexBasis).toBe('540px');
+  });
+
+  it('keeps the room an opening panel will take, though the open is still on screen', async () => {
+    window.localStorage.setItem('difit.commentsPanelOpen', 'false');
+    renderApp();
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle comments panel' }));
+    layOut({ row: 1250, diff: 900, fileList: 280, comments: 40 });
+
+    drag('Drag to resize file list', 300, 600);
+
+    expect(fileListBox().style.flexBasis).toBe('362px');
+  });
+
+  it('finishes the panels opening or closing before reading where a drag starts', async () => {
+    renderApp();
+    await screen.findByTitle('Drag to resize file list');
+    layOut({ row: 1920, diff: 1312, fileList: 280, comments: 320 });
+    const finish = vi.fn(() => {
+      vi.spyOn(commentsPanelBox(), 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(0, 0, 330, 0),
+      );
+    });
+    const finishOther = vi.fn();
+    Object.assign(commentsPanelBox(), { getAnimations: () => [{ finish }] });
+    Object.assign(fileListBox(), { getAnimations: () => [{ finish: finishOther }] });
+
+    drag('Drag to resize comments panel', 1000, 990);
+
+    expect(finish).toHaveBeenCalled();
+    expect(finishOther).toHaveBeenCalled();
+    expect(commentsPanelBox().style.flexBasis).toBe('340px');
+  });
+
+  it('does not resize a panel that is closing', async () => {
+    renderApp();
+    fireEvent.click(await screen.findByRole('button', { name: 'Toggle comments panel' }));
+    layOut({ row: 1250, diff: 960, fileList: 280, comments: 100 });
+    const savedWidth = window.localStorage.getItem('difit.commentsPanelWidth');
+
+    expect(fireEvent.mouseDown(handleOf('Drag to resize comments panel'), { clientX: 1000 })).toBe(
+      false,
+    );
+    fireEvent.mouseMove(document, { clientX: 900 });
+    fireEvent.mouseUp(document);
+
+    expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe(savedWidth);
+    expect(fileListBox().style.flexShrink).toBe('1');
+  });
+
+  it('starts a drag from the width on screen and stops where the diff reaches 640px', async () => {
+    window.localStorage.setItem('difit.sidebarWidth', '280');
+    window.localStorage.setItem('difit.commentsPanelWidth', '320');
+    renderApp();
+    await screen.findByTitle('Drag to resize file list');
+    layOut({ row: 1107, diff: 649, fileList: 210, comments: 240 });
+
+    drag('Drag to resize file list', 300, 500);
+
+    expect(fileListBox().style.flexBasis).toBe('219px');
+    expect(window.localStorage.getItem('difit.sidebarWidth')).toBe('219');
+    expect(window.localStorage.getItem('difit.commentsPanelWidth')).toBe('320');
+
+    drag('Drag to resize file list', 300, 270);
+    expect(fileListBox().style.flexBasis).toBe('200px');
   });
 });
 
