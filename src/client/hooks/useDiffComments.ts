@@ -7,6 +7,7 @@ import {
   type CommentThread,
   type DiffContextStorage,
   type DiffCommentThread,
+  type DiffLineRange,
   type DiffSide,
   type LegacyDiffComment,
   type FixupRef,
@@ -21,7 +22,7 @@ import {
 } from '../../utils/commentFormatting';
 import { createId } from '../../utils/createId';
 import { mergeCommentImports } from '../../utils/commentImports';
-import { lineOfPosition } from '../../utils/commentPosition';
+import { extraLinesOfPosition, lineOfPosition } from '../../utils/commentPosition';
 import { isCommitTarget, type ViewBinding } from '../../utils/diffSelection';
 import { mergeReviewDecisions } from '../../utils/reviewDecisions';
 import { storageService } from '../services/StorageService';
@@ -32,7 +33,9 @@ interface AddThreadParams {
   body: string;
   side: DiffSide;
   // Left out for a comment on the whole file.
-  line?: number | { start: number; end: number };
+  line?: DiffLineRange;
+  // The comment's other ranges, above `line` and ascending.
+  extraRanges?: DiffLineRange[];
   codeSnapshot?: DiffCommentThread['codeSnapshot'];
   binding?: ViewBinding;
 }
@@ -82,10 +85,12 @@ interface UseDiffCommentsReturn {
 
 function normalizeThread(thread: DiffCommentThread): CommentThread {
   const line = lineOfPosition(thread.position);
+  const extraLines = extraLinesOfPosition(thread.position);
   return {
     id: thread.id,
     file: thread.filePath,
     ...(line === undefined ? {} : { line }),
+    ...(extraLines ? { extraLines } : {}),
     side: thread.position.side,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
@@ -311,7 +316,11 @@ export function useDiffComments(
         position:
           params.line === undefined
             ? { side: params.side, scope: 'file' }
-            : { side: params.side, line: params.line },
+            : {
+                side: params.side,
+                line: params.line,
+                ...(params.extraRanges?.length ? { extraRanges: params.extraRanges } : {}),
+              },
         codeSnapshot: {
           ...(params.codeSnapshot ?? {
             content: '',

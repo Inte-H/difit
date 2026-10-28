@@ -36,12 +36,21 @@ export type DiffSide = 'old' | 'new';
 export type DiffLineRange = number | { start: number; end: number };
 
 export type DiffCommentPosition =
-  | { side: DiffSide; line: DiffLineRange }
+  | {
+      side: DiffSide;
+      // The bottom-most range, under which the comment's card sits.
+      line: DiffLineRange;
+      // The comment's other ranges on the same side, in ascending order. Optional so a record
+      // stays version 2 and an older difit still reads it, as a comment on `line` alone.
+      extraRanges?: DiffLineRange[];
+    }
   // On the whole file rather than on any of its lines; `old` for a file the diff deletes.
   | { side: DiffSide; scope: 'file' };
 
 export interface DiffCommentCodeSnapshot {
   content: string;
+  // The code of each of the position's `extraRanges`, in the same order.
+  extraContents?: string[];
   language?: string;
   // The target commit the content was read from; absent when the target was not a commit.
   commit?: string;
@@ -187,6 +196,13 @@ export interface Comment {
 export interface LineSelection {
   side: DiffSide;
   lineNumber: number;
+}
+
+// The ranges a new comment takes besides the one its card sits under, ascending, with the code
+// of each.
+export interface ExtraCommentLines {
+  lines: LineNumber[];
+  contents: string[];
 }
 
 export interface LegacyDiffComment {
@@ -534,6 +550,8 @@ export interface CommentThread {
   // Where the thread is drawn now, relocated by snapshot content; may differ from the stored position.
   // Absent on a thread about the whole file.
   line?: LineNumber;
+  // The thread's other ranges, in ascending order, placed like `line`.
+  extraLines?: LineNumber[];
   side?: DiffSide;
   createdAt: string;
   updatedAt: string;

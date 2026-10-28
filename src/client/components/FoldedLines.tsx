@@ -17,15 +17,17 @@ export const NO_FOLDS: readonly FoldedLines[] = [];
 export const foldAt = (folds: readonly FoldedLines[], index: number) =>
   folds.find((fold) => index >= fold.start && index <= fold.end);
 
+type PickedLines = { side: DiffSide; lineNumber: LineNumber };
+
 export function lockFoldsUnderForms(
   folds: readonly FoldedLines[],
   lines: DiffLine[],
-  commentingLine: { side: DiffSide; lineNumber: LineNumber } | null,
+  commentingLines: PickedLines | readonly PickedLines[] | null,
   editing: EditRange | null,
 ): readonly FoldedLines[] {
   const forms: { side: DiffSide; range: EditRange }[] = [];
-  if (commentingLine) {
-    forms.push({ side: commentingLine.side, range: rangeOfLine(commentingLine.lineNumber) });
+  for (const { side, lineNumber } of [commentingLines ?? []].flat()) {
+    forms.push({ side, range: rangeOfLine(lineNumber) });
   }
   if (editing) forms.push({ side: 'new', range: editing });
   if (folds.length === 0 || forms.length === 0) return folds;

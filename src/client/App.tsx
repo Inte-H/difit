@@ -24,6 +24,7 @@ import {
   type DirectEditResponse,
   type ReviewDecision,
   type DiffSide,
+  type ExtraCommentLines,
   type LineNumber,
   type CommentThread,
   type RevisionsResponse,
@@ -34,6 +35,7 @@ import {
   type RewordResponse,
 } from '../types/diff';
 import { amendedMessagesByCommit } from '../utils/amendedMessages';
+import { rangeOfLineNumber } from '../utils/commentPosition';
 import { DEFAULT_DIFF_VIEW_MODE, normalizeDiffViewMode } from '../utils/diffMode';
 import { mergeCommentThreads } from '../utils/commentImports';
 import {
@@ -268,12 +270,13 @@ const getInitialCommentsPanelOpen = () => getStoredCommentsPanelOpen() ?? false;
 
 const placedLine = (placement: Placement): ThreadPlacement => ({
   line: placement.line,
+  ...(placement.extraLines ? { extraLines: placement.extraLines } : {}),
   isOutdated: placement.kind === 'stale',
   ...(placement.kind === 'stale' ? { outdatedReason: placement.reason } : {}),
 });
 
 const withPlacement = (
-  { outdatedReason: _outdatedReason, ...thread }: CommentThread,
+  { outdatedReason: _outdatedReason, extraLines: _extraLines, ...thread }: CommentThread,
   placement: ThreadPlacement,
 ): CommentThread => ({ ...thread, ...placement });
 
@@ -328,13 +331,21 @@ const newThread = (
   codeContent: string | undefined,
   side: DiffSide | undefined,
   binding: ViewBinding | undefined,
+  extra: ExtraCommentLines | undefined,
 ) => ({
   filePath,
   body,
   side: side || ('new' as const),
-  line: typeof line === 'number' ? line : { start: line[0], end: line[1] },
+  line: rangeOfLineNumber(line),
+  ...(extra?.lines.length ? { extraRanges: extra.lines.map(rangeOfLineNumber) } : {}),
   codeSnapshot:
-    codeContent !== undefined ? { content: codeContent, language: undefined } : undefined,
+    codeContent !== undefined
+      ? {
+          content: codeContent,
+          ...(extra?.lines.length ? { extraContents: extra.contents } : {}),
+          language: undefined,
+        }
+      : undefined,
   binding,
 });
 
@@ -917,7 +928,13 @@ function App() {
       answeredThreadsRef.current,
       reviewPlacement.normalizedThreads
         .filter((thread) => !reviewPlacement.hiddenThreadIds.has(thread.id))
-        .map(({ id, file, line, isOutdated }) => ({ id, file, line, isOutdated })),
+        .map(({ id, file, line, extraLines, isOutdated }) => ({
+          id,
+          file,
+          line,
+          ...(extraLines ? { extraLines } : {}),
+          isOutdated,
+        })),
       sameAnsweredThread,
     );
     return answeredThreadsRef.current;
@@ -1937,11 +1954,12 @@ function App() {
       file: string,
       line: LineNumber | undefined,
       side: DiffSide,
+      extraLines?: readonly LineNumber[],
     ): Promise<ViewBinding | undefined> => {
       if (!review || !resolvedSelection || !isViewOfReview(resolvedSelection, review)) {
         return undefined;
       }
-      const fixupTarget = await fetchFixupTarget(resolvedSelection, file, line, side);
+      const fixupTarget = await fetchFixupTarget(resolvedSelection, file, line, side, extraLines);
       return bindingForView(review, resolvedSelection, fixupTarget);
     },
     [review, resolvedSelection],
@@ -1953,9 +1971,10 @@ function App() {
       body: string,
       codeContent?: string,
       side?: DiffSide,
+      extra?: ExtraCommentLines,
     ): Promise<void> => {
-      const binding = await bindNewThread(file, line, side || 'new');
-      addThreadRef.current(newThread(file, line, body, codeContent, side, binding));
+      const binding = await bindNewThread(file, line, side || 'new', extra?.lines);
+      addThreadRef.current(newThread(file, line, body, codeContent, side, binding, extra));
     },
     [bindNewThread],
   );
@@ -1974,6 +1993,7 @@ function App() {
       body: string,
       codeContent?: string,
       side?: DiffSide,
+      extra?: ExtraCommentLines,
     ): Promise<void> => {
       const group = fixupOnlyRef.current.find(({ fixup }) => fixup.sha === fixupSha);
       const fixupTarget =
@@ -1983,7 +2003,7 @@ function App() {
           .find((target) => target !== undefined) ??
         targetCommit;
       const binding = fixupTarget ? { fixupTarget, snapshotCommit: fixupSha } : undefined;
-      addThreadRef.current(newThread(file, line, body, codeContent, side, binding));
+      addThreadRef.current(newThread(file, line, body, codeContent, side, binding, extra));
       return Promise.resolve();
     },
     [targetCommit],
@@ -2228,18 +2248,24 @@ function App() {
     const isCommentButton = target.closest('[data-comment-button="true"]');
     const isOpenInEditorButton = target.closest('[data-open-in-editor-button="true"]');
     const isShiftRangeClick = e.shiftKey && target.closest('[data-diff-line-row="true"]');
+    const pickingInFile =
+      (e.ctrlKey || e.metaKey || target.closest('[data-adds-lines="true"]')) &&
+      target.closest('[data-line-number-cell]')
+        ? target.closest('[data-file-path]')
+        : null;
 
     // Close empty comment forms (unless clicking on a comment button)
     if (!isCommentButton && !isOpenInEditorButton && !isShiftRangeClick) {
-      closeEmptyCommentForms(e);
+      closeEmptyCommentForms(e, pickingInFile);
     }
   };
 
-  const closeEmptyCommentForms = (e: React.MouseEvent) => {
+  // A form in `pickingInFile` stays open: the click picks lines for it.
+  const closeEmptyCommentForms = (e: React.MouseEvent, pickingInFile: Element | null) => {
     const emptyForms = document.querySelectorAll('form[data-empty="true"]');
     emptyForms.forEach((form) => {
       // Don't close if clicking inside the form itself
-      if (!form.contains(e.target as Node)) {
+      if (!form.contains(e.target as Node) && !pickingInFile?.contains(form)) {
         const cancelButton = form.querySelector<HTMLButtonElement>('[data-comment-cancel="true"]');
         cancelButton?.click();
       }

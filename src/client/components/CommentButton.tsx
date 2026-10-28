@@ -3,11 +3,12 @@ import React from 'react';
 
 interface CommentButtonProps {
   onMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onClick?: () => void;
   title?: string;
 }
 
 export const CommentButton: React.FC<CommentButtonProps> = React.memo(
-  ({ onMouseDown, title = 'Add a comment' }) => {
+  ({ onMouseDown, onClick, title = 'Add a comment' }) => {
     return (
       <button
         type="button"
@@ -27,7 +28,10 @@ export const CommentButton: React.FC<CommentButtonProps> = React.memo(
           e.currentTarget.style.borderColor = 'var(--color-yellow-btn-border)';
         }}
         onMouseDown={onMouseDown}
-        onClick={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClick?.();
+        }}
         title={title}
       >
         <MessageSquare className="w-4 h-4" />

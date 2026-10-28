@@ -228,6 +228,75 @@ describe('locateThread', () => {
   });
 });
 
+describe('locateThread on a thread with several ranges', () => {
+  const multi = buildThread({
+    position: { side: 'new', line: { start: 30, end: 31 }, extraRanges: [10, 20] },
+    codeSnapshot: {
+      content: 'log(a + b);\nreturn;',
+      extraContents: ['log(x + y);', 'log(p + q);'],
+      commit: '7654321',
+    },
+  });
+  const shifted = (by: number, overrides: Partial<Record<number, string>> = {}) =>
+    buildFileLineIndex(
+      buildFile(
+        [
+          [10, 'log(x + y);'],
+          [20, 'log(p + q);'],
+          [30, 'log(a + b);'],
+          [31, 'return;'],
+        ].map(([line, content]) =>
+          newLine(Number(line) + by, overrides[Number(line)] ?? String(content)),
+        ),
+      ),
+    );
+
+  it('keeps every range where it was stored', () => {
+    expect(locateThread(multi, shifted(0), TARGET)).toEqual({
+      line: [30, 31],
+      extraLines: [10, 20],
+      isOutdated: false,
+    });
+  });
+
+  it('moves every range to where its code now sits', () => {
+    expect(locateThread(multi, shifted(5), TARGET)).toEqual({
+      line: [35, 36],
+      extraLines: [15, 25],
+      isOutdated: false,
+    });
+  });
+
+  it('is outdated as a whole when the code of one range is gone', () => {
+    expect(locateThread(multi, shifted(5, { 20: 'log(`${p}${q}`);' }), TARGET)).toEqual({
+      line: [30, 31],
+      extraLines: [10, 20],
+      isOutdated: true,
+      outdatedReason: 'missing',
+    });
+  });
+
+  it('leaves a range saved without its code where it was stored', () => {
+    const withoutCode = buildThread({
+      ...multi,
+      codeSnapshot: { content: 'log(a + b);\nreturn;', commit: '7654321' },
+    });
+
+    expect(locateThread(withoutCode, shifted(5), TARGET)).toEqual({
+      line: [35, 36],
+      extraLines: [10, 20],
+      isOutdated: false,
+    });
+  });
+
+  it('checks every range in place without a target commit', () => {
+    expect(locateThread(multi, shifted(0, { 10: 'changed();' }), null)).toMatchObject({
+      isOutdated: true,
+    });
+    expect(locateThread(multi, shifted(0), null)).toMatchObject({ isOutdated: false });
+  });
+});
+
 describe('placeThread', () => {
   const sha = (digit: string) => digit.repeat(40);
   const PIN = { sha: sha('1'), shortSha: '1111111', parentSha: sha('0'), subject: 'test: pin' };

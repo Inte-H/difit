@@ -153,6 +153,29 @@ describe('chooseFixupTarget', () => {
     ).resolves.toBe(fix);
   });
 
+  it('blames every range of a comment on several ranges at once', async () => {
+    const { repo, base, pin, fix } = pinThenFix();
+    const view = { base, target: fix };
+
+    await expect(chooseFixupTarget(repo, query({ view, startLine: 3 }))).resolves.toBe(pin);
+    await expect(
+      chooseFixupTarget(repo, query({ view, startLine: 3, extraRanges: [{ start: 1, end: 1 }] })),
+    ).resolves.toBe(pin);
+    await expect(
+      chooseFixupTarget(
+        repo,
+        query({
+          view,
+          startLine: 3,
+          extraRanges: [
+            { start: 1, end: 1 },
+            { start: 2, end: 2 },
+          ],
+        }),
+      ),
+    ).resolves.toBe(fix);
+  });
+
   it('passes over commits it is not given, down to the given commit underneath', async () => {
     const { repo, base, pin, fix } = pinThenFix();
     const unlisted = commit(repo, 'fixup! test: pin current discount', {

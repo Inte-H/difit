@@ -5,6 +5,7 @@ import {
   type DiffFile,
   type DiffViewMode,
   type DiffSide,
+  type ExtraCommentLines,
   type CommentThread,
   type ExpandedRange,
   type LineNumber,
@@ -47,6 +48,7 @@ interface DiffViewerProps {
     body: string,
     codeContent?: string,
     side?: DiffSide,
+    extra?: ExtraCommentLines,
   ) => Promise<void>;
   // Left out where the file takes no comment on the whole file.
   onAddFileComment?: (file: string, body: string, side: DiffSide) => Promise<void>;
@@ -96,16 +98,16 @@ const normalizeCommentRanges = (threads: CommentThread[]): Record<DiffSide, Line
   threads.forEach((thread) => {
     if (thread.line === undefined) return;
     const side = thread.side ?? 'new';
-    const [start, end] = Array.isArray(thread.line)
-      ? [thread.line[0], thread.line[1]]
-      : [thread.line, thread.line];
+    for (const line of [...(thread.extraLines ?? []), thread.line]) {
+      const [start, end] = Array.isArray(line) ? [line[0], line[1]] : [line, line];
 
-    if (start <= 0 || end <= 0) return;
+      if (start <= 0 || end <= 0) continue;
 
-    ranges[side].push({
-      start: Math.min(start, end),
-      end: Math.max(start, end),
-    });
+      ranges[side].push({
+        start: Math.min(start, end),
+        end: Math.max(start, end),
+      });
+    }
   });
 
   return ranges;
@@ -239,9 +241,15 @@ export const DiffViewer = memo(function DiffViewer({
   const handleAddComment = useMemo(
     () =>
       onAddComment &&
-      (async (line: LineNumber, body: string, codeContent?: string, side?: DiffSide) => {
+      (async (
+        line: LineNumber,
+        body: string,
+        codeContent?: string,
+        side?: DiffSide,
+        extra?: ExtraCommentLines,
+      ) => {
         try {
-          await onAddComment(file.path, line, body, codeContent, side);
+          await onAddComment(file.path, line, body, codeContent, side, extra);
         } catch (error) {
           console.error('Failed to add comment:', error);
         }

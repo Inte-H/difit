@@ -25,12 +25,16 @@ export function fixupFileLabels(file: FixupFile): string[] {
   return [...(status ? [status] : []), ...(file.isGenerated ? ['생성된 파일'] : [])];
 }
 
-export type AnsweredThread = Pick<CommentThread, 'id' | 'file' | 'line' | 'isOutdated'>;
+export type AnsweredThread = Pick<
+  CommentThread,
+  'id' | 'file' | 'line' | 'extraLines' | 'isOutdated'
+>;
 
 export const sameAnsweredThread = (a: AnsweredThread, b: AnsweredThread) =>
   a.id === b.id &&
   a.file === b.file &&
   String(a.line) === String(b.line) &&
+  String(a.extraLines) === String(b.extraLines) &&
   a.isOutdated === b.isOutdated;
 
 export interface FixupFileRef {
@@ -280,7 +284,7 @@ export function spreadFixups<Thread extends OutsideThread>(
     if (!outsideIds.has(thread.id)) return thread.isOutdated ? null : thread;
     const placement = spread.outsidePlacements.get(thread.id)?.placement;
     return placement && !placement.isOutdated
-      ? { ...thread, line: placement.line, isOutdated: false }
+      ? { ...thread, line: placement.line, extraLines: placement.extraLines, isOutdated: false }
       : null;
   };
   const answeredBy = (sha: string) =>

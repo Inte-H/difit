@@ -87,6 +87,29 @@ const newCode = 42;
     });
   });
 
+  describe('formatCommentThreadPrompt', () => {
+    it('lists every range of a comment on several, in ascending order', () => {
+      const at = '2024-01-01T00:00:00Z';
+      const thread: CommentThread = {
+        id: 'multi',
+        file: 'order/OrderService.java',
+        line: [77, 80],
+        extraLines: [12, 40],
+        side: 'new',
+        createdAt: at,
+        updatedAt: at,
+        messages: [{ id: 'm', body: 'Use a placeholder', createdAt: at, updatedAt: at }],
+      };
+
+      expect(formatCommentThreadPrompt(thread)).toBe(
+        'order/OrderService.java:L12,L40,L77-L80\nUse a placeholder',
+      );
+      expect(formatCommentThreadPrompt({ ...thread, side: 'old', extraLines: [[3, 4]] })).toBe(
+        'order/OrderService.java:L3-L4,L77-L80 (old)\nUse a placeholder',
+      );
+    });
+  });
+
   describe('formatAllCommentThreadsPrompt', () => {
     const timestamp = '2024-01-01T00:00:00Z';
     const threads: CommentThread[] = [

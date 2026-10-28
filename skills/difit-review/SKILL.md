@@ -57,6 +57,7 @@ The detailed procedure is as follows.
   - Use `position.side: "new"` for lines that exist on the target side of the diff.
   - Use `position.side: "old"` for lines that exist only on the deleted side.
   - Use range comments for issues that span multiple lines.
+  - When one remark applies to several separate places in a file, add `extraRanges` to `position`: `line` is the bottom-most range and `extraRanges` lists the others top to bottom, e.g. `{"side":"new","line":{"start":77,"end":80},"extraRanges":[12,40]}`. The lines in `extraRanges` belong to the same comment too.
   - Never copy secrets, tokens, passwords, API keys, private keys, or other credential-like material from the diff into `--comment` bodies or any command-line arguments.
 - **Additional argument for files not yet added to git**
   - For uncommitted changes, if you decide files not yet added to git should also appear in the diff, add `--include-untracked`.

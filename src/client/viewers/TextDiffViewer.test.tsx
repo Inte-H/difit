@@ -591,3 +591,154 @@ describe('TextDiffViewer lines hidden around a fixup box', () => {
     ]);
   });
 });
+
+describe.each(['unified', 'split'] as const)(
+  'one comment on lines of several parts (%s)',
+  (mode) => {
+    const rowOf = (code: string) =>
+      Array.from(document.querySelectorAll('[data-diff-line-row="true"]')).find((row) =>
+        row.textContent?.includes(code),
+      )!;
+    // Both layouts put the old number before the new one.
+    const numberCell = (code: string, side: 'old' | 'new' = 'new') =>
+      rowOf(code).querySelectorAll('[data-line-number-cell]')[side === 'old' ? 0 : 1]!;
+    const ctrlClick = (code: string, side?: 'old' | 'new') =>
+      fireEvent.click(numberCell(code, side), { ctrlKey: true });
+    const rowsWith = (selector: string, className: string) =>
+      Array.from(document.querySelectorAll('[data-diff-line-row="true"]'))
+        .filter((row) => row.classList.contains(className) || row.querySelector(selector))
+        .map((row) => {
+          const text = row.textContent ?? '';
+          return [/f\d+\(\);/, /\/\/ new \d+/, /\/\/ old \d+/]
+            .map((code) => text.match(code)?.[0])
+            .find(Boolean);
+        });
+    const picked = () => rowsWith('[class*="after:bg-diff-selected-bg"]', 'comment-selected');
+    const flashed = () => rowsWith('[class*="after:bg-blue-400/20"]', 'comment-flash');
+    const open = { diffMode: mode, foldCommentChanges: false };
+
+    it('adds lines with Ctrl+click, grows the last with Shift and hands over every range', async () => {
+      const onAddComment = vi.fn<NonNullable<DiffViewerBodyProps['onAddComment']>>(async () => {});
+      renderViewer({ ...open, onAddComment });
+
+      ctrlClick('f10();');
+      ctrlClick('// new 40');
+      fireEvent.click(numberCell('f40();'), { shiftKey: true });
+
+      expect(picked()).toEqual(['f10();', '// new 40', 'f40();']);
+      expect(screen.getByTestId('picked-ranges')).toHaveTextContent('L11, L40-L41');
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Same mistake' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+      await vi.waitFor(() =>
+        expect(onAddComment).toHaveBeenCalledWith(
+          [40, 41],
+          'Same mistake',
+          '// new 40\nf40();',
+          'new',
+          {
+            lines: [11],
+            contents: ['f10();'],
+          },
+        ),
+      );
+    });
+
+    it('takes a line out again with Ctrl+click', () => {
+      renderViewer(open);
+
+      ctrlClick('f10();');
+      ctrlClick('// new 40');
+      ctrlClick('f10();');
+
+      expect(picked()).toEqual(['// new 40']);
+    });
+
+    it('picks the line clicked before along with the first Ctrl+click', () => {
+      const { rerender } = renderViewer(open);
+
+      fireEvent.click(numberCell('f10();'));
+      rerender(
+        viewer({ ...open, cursor: { fileIndex: 0, chunkIndex: 0, lineIndex: 2, side: 'right' } }),
+      );
+      ctrlClick('// new 40');
+
+      expect(picked()).toEqual(['f10();', '// new 40']);
+    });
+
+    it('refuses a deleted line next to kept lines and says why', () => {
+      renderViewer(open);
+
+      ctrlClick('f10();');
+      ctrlClick('// old 40', 'old');
+
+      expect(screen.getByRole('status')).toHaveTextContent(
+        '지운 줄과 남은 줄은 지적 하나에 함께 고를 수 없습니다',
+      );
+      expect(picked()).toEqual(['f10();']);
+    });
+
+    it('adds lines with plain clicks while 줄 더하기 is on', () => {
+      renderViewer(open);
+
+      ctrlClick('f10();');
+      fireEvent.click(screen.getByRole('button', { name: '줄 더하기' }));
+      fireEvent.click(numberCell('f40();'));
+
+      expect(screen.getByRole('button', { name: '줄 더하기' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      expect(picked()).toEqual(['f10();', 'f40();']);
+    });
+
+    describe('a saved comment on several ranges', () => {
+      const thread: CommentThread = {
+        id: 'multi',
+        file: 'src/a.ts',
+        line: [40, 41],
+        extraLines: [11],
+        side: 'new',
+        createdAt: '2026-10-27T00:00:00.000Z',
+        updatedAt: '2026-10-27T00:00:00.000Z',
+        messages: [
+          {
+            id: 'multi',
+            body: 'Same mistake',
+            createdAt: '2026-10-27T00:00:00.000Z',
+            updatedAt: '2026-10-27T00:00:00.000Z',
+          },
+        ],
+      };
+
+      it('shows its card once, under the last range, and points to it from the others', () => {
+        renderViewer({ ...open, threads: [thread] });
+
+        expect(screen.getAllByText('Same mistake')).toHaveLength(1);
+        const marker = screen.getByText('이 줄도 L40-L41 아래 지적에 함께 걸려 있습니다');
+        expect(
+          rowOf('f10();').compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(
+          rowOf('// new 40').compareDocumentPosition(marker) & Node.DOCUMENT_POSITION_PRECEDING,
+        ).toBeTruthy();
+      });
+
+      it('lights up all of its lines from the marker', () => {
+        renderViewer({ ...open, threads: [thread] });
+
+        expect(flashed()).toEqual([]);
+        fireEvent.click(screen.getByRole('button', { name: '지적으로 가기' }));
+
+        expect(flashed()).toEqual(['f10();', '// new 40', 'f40();']);
+      });
+
+      it('lights up all of its lines from the card', () => {
+        renderViewer({ ...open, threads: [thread] });
+
+        fireEvent.click(screen.getByText('Same mistake'));
+
+        expect(flashed()).toEqual(['f10();', '// new 40', 'f40();']);
+      });
+    });
+  },
+);

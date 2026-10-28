@@ -12,6 +12,7 @@ import {
   type ReplyCommentImport,
   type ThreadCommentImport,
 } from '../types/diff.js';
+import { endOfLine, rangesOfPosition, startOfLine } from './commentPosition.js';
 import { createId } from './createId.js';
 import { createDiffSelection, isCommitHash } from './diffSelection.js';
 
@@ -41,13 +42,13 @@ function normalizeTimestamp(
   return value;
 }
 
-function normalizeLineRange(value: unknown): DiffLineRange {
+function normalizeLineRange(value: unknown, fieldName = 'position.line'): DiffLineRange {
   if (typeof value === 'number' && Number.isInteger(value) && value > 0) {
     return value;
   }
 
   if (!isRecord(value)) {
-    throw new Error('Invalid comment import field: position.line');
+    throw new Error(`Invalid comment import field: ${fieldName}`);
   }
 
   const start = value.start;
@@ -61,10 +62,28 @@ function normalizeLineRange(value: unknown): DiffLineRange {
     end <= 0 ||
     start > end
   ) {
-    throw new Error('Invalid comment import field: position.line');
+    throw new Error(`Invalid comment import field: ${fieldName}`);
   }
 
   return { start, end };
+}
+
+// Ascending, apart from each other, and all above `line`, as the screen stores them.
+function normalizeExtraRanges(value: unknown, line: DiffLineRange): DiffLineRange[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error('Invalid comment import field: position.extraRanges');
+  }
+  const ranges = value.map((range) => normalizeLineRange(range, 'position.extraRanges'));
+  const ordered = [...ranges, line].every(
+    (range, index, all) => index === 0 || endOfLine(all[index - 1] ?? range) < startOfLine(range),
+  );
+  if (!ordered) {
+    throw new Error('Invalid comment import field: position.extraRanges');
+  }
+  return ranges.length > 0 ? ranges : undefined;
 }
 
 function normalizePosition(value: unknown): DiffCommentPosition {
@@ -77,9 +96,11 @@ function normalizePosition(value: unknown): DiffCommentPosition {
   }
 
   if (value.scope === undefined) {
-    return { side: value.side, line: normalizeLineRange(value.line) };
+    const line = normalizeLineRange(value.line);
+    const extraRanges = normalizeExtraRanges(value.extraRanges, line);
+    return { side: value.side, line, ...(extraRanges ? { extraRanges } : {}) };
   }
-  if (value.scope !== 'file' || value.line !== undefined) {
+  if (value.scope !== 'file' || value.line !== undefined || value.extraRanges !== undefined) {
     throw new Error('Invalid comment import field: position.scope');
   }
   return { side: value.side, scope: 'file' };
@@ -99,9 +120,18 @@ function normalizeCodeSnapshot(value: unknown): DiffCommentCodeSnapshot | undefi
   if (value.commit !== undefined && typeof value.commit !== 'string') {
     throw new Error('Invalid comment import field: codeSnapshot.commit');
   }
+  const { extraContents } = value;
+  if (
+    extraContents !== undefined &&
+    (!Array.isArray(extraContents) ||
+      !extraContents.every((content): content is string => typeof content === 'string'))
+  ) {
+    throw new Error('Invalid comment import field: codeSnapshot.extraContents');
+  }
 
   return {
     content: value.content,
+    ...(extraContents === undefined ? {} : { extraContents }),
     language: value.language,
     commit: value.commit,
   };
@@ -329,16 +359,15 @@ export function parseCommentImportValue(value: string): CommentImport[] {
   );
 }
 
+const rangeKey = (range: DiffLineRange) =>
+  typeof range === 'number' ? String(range) : `${range.start}-${range.end}`;
+
 function getPositionKey(position: DiffCommentPosition): string {
   if (!('line' in position)) {
     return `${position.side}:file`;
   }
 
-  if (typeof position.line === 'number') {
-    return `${position.side}:${position.line}`;
-  }
-
-  return `${position.side}:${position.line.start}-${position.line.end}`;
+  return `${position.side}:${rangesOfPosition(position).map(rangeKey).join(',')}`;
 }
 
 function positionsMatch(left: DiffCommentPosition, right: DiffCommentPosition): boolean {
@@ -469,6 +498,7 @@ function clonePosition(position: DiffCommentPosition): DiffCommentPosition {
   return {
     side: position.side,
     line: cloneLineRange(position.line),
+    ...(position.extraRanges ? { extraRanges: position.extraRanges.map(cloneLineRange) } : {}),
   };
 }
 
@@ -481,6 +511,7 @@ function cloneCodeSnapshot(
 
   return {
     content: snapshot.content,
+    ...(snapshot.extraContents ? { extraContents: [...snapshot.extraContents] } : {}),
     language: snapshot.language,
     commit: snapshot.commit,
   };
@@ -638,13 +669,7 @@ export function serializeCommentImports(commentImports: CommentImport[]): string
       author: commentImport.author,
       createdAt: commentImport.createdAt,
       updatedAt: commentImport.updatedAt,
-      codeSnapshot: commentImport.codeSnapshot
-        ? {
-            content: commentImport.codeSnapshot.content,
-            language: commentImport.codeSnapshot.language,
-            commit: commentImport.codeSnapshot.commit,
-          }
-        : undefined,
+      codeSnapshot: cloneCodeSnapshot(commentImport.codeSnapshot),
       view: commentImport.view
         ? {
             baseCommitish: commentImport.view.baseCommitish,

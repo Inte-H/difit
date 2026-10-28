@@ -10,9 +10,15 @@ import type {
 import { reviewStateLabel } from './reviewDecisions.js';
 import { hasSuggestionBlock, parseSuggestionBlocks } from './suggestionUtils.js';
 
-function getLineInfo(line: number | number[] | undefined): string {
+const spanInfo = (line: number | number[]) =>
+  typeof line === 'number' ? `L${line}` : `L${line[0]}-L${line[1]}`;
+
+function getLineInfo(
+  line: number | number[] | undefined,
+  extraLines: ReadonlyArray<number | number[]> = [],
+): string {
   if (line === undefined) return '';
-  return typeof line === 'number' ? `:L${line}` : `:L${line[0]}-L${line[1]}`;
+  return `:${[...extraLines, line].map(spanInfo).join(',')}`;
 }
 
 export interface CommentPromptDiffContext {
@@ -28,10 +34,11 @@ function formatCommentLocation(
   line: number | number[] | undefined,
   side?: DiffSide,
   reviewState?: ThreadReviewState,
+  extraLines?: ReadonlyArray<number | number[]>,
 ): string {
   const filePath = file || '<unknown file>';
   const stateSuffix = reviewState ? ` [${reviewStateLabel(reviewState)}]` : '';
-  return `${filePath}${getLineInfo(line)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
+  return `${filePath}${getLineInfo(line, extraLines)}${side === 'old' ? ' (old)' : ''}${stateSuffix}`;
 }
 
 function isNonRangeCommitish(commitish: string): boolean {
@@ -169,7 +176,7 @@ export function formatCommentThreadPrompt(
   reviewState?: ThreadReviewState,
 ): string {
   const sections: string[] = [
-    formatCommentLocation(thread.file, thread.line, thread.side, reviewState),
+    formatCommentLocation(thread.file, thread.line, thread.side, reviewState, thread.extraLines),
   ];
   if (thread.fixupCommit) {
     const { shortSha, subject } = thread.fixupCommit;

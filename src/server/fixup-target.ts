@@ -13,6 +13,8 @@ export interface FixupTargetQuery {
   // the whole file.
   startLine?: number;
   endLine?: number;
+  // More ranges of the same comment, counted like the one above.
+  extraRanges?: ReadonlyArray<{ start: number; end: number }>;
   side: DiffSide;
   // Oldest first, full SHAs; every commit in the view's range when left out.
   commits?: readonly string[];
@@ -32,7 +34,7 @@ async function gitText(repoPath: string, args: string[]): Promise<string> {
 // file, on either side, the last of `commits` that changed the file, or the view's last commit.
 export async function chooseFixupTarget(
   repoPath: string,
-  { view, filePath, startLine, endLine, side, commits }: FixupTargetQuery,
+  { view, filePath, startLine, endLine, extraRanges = [], side, commits }: FixupTargetQuery,
 ): Promise<string> {
   const [base, target] = await Promise.all(
     [view.base, view.target].map((commitish) =>
@@ -60,8 +62,10 @@ export async function chooseFixupTarget(
       '--porcelain',
       '--no-ignore-revs-file',
       ...ignoring,
-      '-L',
-      `${startLine},${endLine}`,
+      ...[...extraRanges, { start: startLine, end: endLine }].flatMap(({ start, end }) => [
+        '-L',
+        `${start},${end}`,
+      ]),
       `${base}..${target}`,
       '--',
       filePath,

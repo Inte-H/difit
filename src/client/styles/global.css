@@ -203,6 +203,18 @@ tr.comment-selected td:first-child::after {
   border-left: 5px solid var(--color-diff-selected-border);
 }
 
+tr.comment-flash td {
+  position: relative;
+}
+
+tr.comment-flash td::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(88, 166, 255, 0.18);
+  pointer-events: none;
+}
+
 tr.drag-selected td {
   position: relative;
 }

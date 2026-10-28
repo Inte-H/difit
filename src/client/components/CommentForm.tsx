@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { type ReactNode, useState } from 'react';
 
 import { CommentBodyRenderer, hasSuggestionInBody } from './CommentBodyRenderer';
 import type { AppearanceSettings } from './SettingsModal';
@@ -15,6 +15,7 @@ interface CommentFormProps {
   title?: string;
   submitLabel?: string;
   placeholder?: string;
+  header?: ReactNode;
 }
 
 type CommentFormMode = 'edit' | 'preview';
@@ -31,6 +32,7 @@ export function CommentForm({
   title = 'Add a comment',
   submitLabel = 'Submit',
   placeholder = 'Leave a comment...',
+  header,
 }: CommentFormProps) {
   const [body, setBody] = useState(initialValue);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -106,6 +108,8 @@ export function CommentForm({
           </div>
         )}
       </div>
+
+      {header}
 
       {quote !== undefined && (
         <blockquote

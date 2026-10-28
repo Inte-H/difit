@@ -19,6 +19,7 @@ import { OpenInEditorButton } from './OpenInEditorButton';
 interface LineActionsProps {
   canHover: boolean;
   onCommentMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onCommentClick?: () => void;
   onComment?: () => void;
   onEditLine?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onOpenInEditor?: () => void;
@@ -29,12 +30,15 @@ const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 export function LineNumberActions({
   canHover,
   onCommentMouseDown,
+  onCommentClick,
   onComment,
   onEditLine,
   onOpenInEditor,
 }: LineActionsProps) {
   if (canHover)
-    return onCommentMouseDown ? <CommentButton onMouseDown={onCommentMouseDown} /> : null;
+    return onCommentMouseDown ? (
+      <CommentButton onMouseDown={onCommentMouseDown} onClick={onCommentClick} />
+    ) : null;
   if (!onComment && !onEditLine && !onOpenInEditor) return null;
   return (
     <LineActionMenu onComment={onComment} onEditLine={onEditLine} onOpenInEditor={onOpenInEditor} />

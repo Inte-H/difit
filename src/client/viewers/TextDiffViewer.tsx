@@ -6,20 +6,23 @@ import { DiffChunk } from '../components/DiffChunk';
 import { DEFAULT_EXPAND_COUNT, ExpandButton } from '../components/ExpandButton';
 import type { FoldedLines } from '../components/FoldedLines';
 import { useFixupOverlay } from '../contexts/FixupOverlayContext';
+import { cursorLineOf, LinePickProvider } from '../contexts/LinePickContext';
 import type { CursorPosition } from '../hooks/keyboardNavigation';
 import { rangesAroundNewLines } from '../hooks/useExpandedLines';
 
 import type { DiffViewerBodyProps } from './types';
 
 function holdsThread(lines: DiffLine[], threads: CommentThread[]) {
-  return threads.some((thread) => {
-    const end = Array.isArray(thread.line) ? thread.line[1] : thread.line;
-    return lines.some(
-      (line) =>
-        (thread.side !== 'new' && line.oldLineNumber === end) ||
-        (thread.side !== 'old' && line.newLineNumber === end),
-    );
-  });
+  return threads.some((thread) =>
+    [...(thread.extraLines ?? []), thread.line].some((threadLine) => {
+      const end = Array.isArray(threadLine) ? threadLine[1] : threadLine;
+      return lines.some(
+        (line) =>
+          (thread.side !== 'new' && line.oldLineNumber === end) ||
+          (thread.side !== 'old' && line.newLineNumber === end),
+      );
+    }),
+  );
 }
 
 const holdsAnchor = (lines: DiffLine[], anchors: ReadonlySet<number>) =>
@@ -128,6 +131,15 @@ export function TextDiffViewer({
     );
   };
 
+  const fileLines = useMemo(() => mergedChunks.flatMap((chunk) => chunk.lines), [mergedChunks]);
+  const cursorLine = useMemo(
+    () =>
+      cursor
+        ? cursorLineOf(mergedChunks[cursor.chunkIndex]?.lines[cursor.lineIndex], cursor.side)
+        : null,
+    [cursor, mergedChunks],
+  );
+
   const fileBoxes = useFixupOverlay().boxesByFile.get(file.path);
   const boxAnchors = useMemo(() => new Set(fileBoxes?.keys()), [fileBoxes]);
 
@@ -207,7 +219,7 @@ export function TextDiffViewer({
   );
 
   return (
-    <>
+    <LinePickProvider lines={fileLines} cursorLine={cursorLine}>
       {mergedChunks.map((mergedChunk, mergedIndex) => {
         const isFirstMerged = mergedIndex === 0;
         const isLastMerged = mergedIndex === mergedChunks.length - 1;
@@ -250,6 +262,6 @@ export function TextDiffViewer({
           </React.Fragment>
         );
       })}
-    </>
+    </LinePickProvider>
   );
 }
