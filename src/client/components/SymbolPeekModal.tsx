@@ -103,7 +103,9 @@ export function SymbolPeekModal({
       : answered?.result.index;
 
   useEffect(() => {
-    if (indexUpdate?.state.status !== 'ready' || indexUpdate.seq <= searchedAtSeq.current) return;
+    const status = indexUpdate?.state.status;
+    if (status !== 'ready' && status !== 'failed') return;
+    if (!indexUpdate || indexUpdate.seq <= searchedAtSeq.current) return;
     const controller = new AbortController();
     const seq = latestUpdateSeq.current;
     searchedAtSeq.current = seq;

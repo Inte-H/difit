@@ -445,6 +445,12 @@ describe('SymbolPeekModal with a commit index', () => {
     byCommit: new Map([[on, { state, seq }]]),
   });
 
+  const timedOut: SymbolIndexState = {
+    status: 'failed',
+    reason: 'timeout',
+    detail: 'scip-java timed out',
+    hasLog: false,
+  };
   const selectedItem = () => document.querySelector('nav [aria-current="true"]')?.textContent;
 
   it('sends where the name was clicked', async () => {
@@ -532,7 +538,7 @@ describe('SymbolPeekModal with a commit index', () => {
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
   });
 
-  it('follows the index from waiting to building to failed without asking again', async () => {
+  it('follows the index from waiting to building, and asks again once it failed', async () => {
     const { rerender } = render(modal());
     await answer({ ...byName, index: { commit, status: 'queued', after: 'b'.repeat(40) } }, 1);
     expect(await screen.findByRole('status')).toHaveTextContent(
@@ -541,21 +547,28 @@ describe('SymbolPeekModal with a commit index', () => {
 
     rerender(modal(updates(building, 1)));
     expect(screen.getByRole('status')).toHaveTextContent('색인을 만드는 중');
+    expect(symbolRequests()).toHaveLength(1);
 
-    rerender(
-      modal(
-        updates(
-          { status: 'failed', reason: 'timeout', detail: 'scip-java timed out', hasLog: false },
-          2,
-        ),
-      ),
-    );
+    rerender(modal(updates(timedOut, 2)));
     expect(screen.getByRole('status')).toHaveTextContent(
       '색인을 만들 수 없음 · 빌드가 1시간 안에 끝나지 않아 멈췄습니다',
     );
     expect(screen.getByText('scip-java timed out')).toBeInTheDocument();
-    expect(symbolRequests()).toHaveLength(1);
+    await answer({ ...byName, index: { commit, ...timedOut } }, 2);
     expect(screen.getByText('src/other.ts:5')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('색인을 만들 수 없음');
+    expect(symbolRequests()).toHaveLength(2);
+  });
+
+  it('asks again when the index of an ancestor it waited for cannot be built', async () => {
+    const ancestor = 'c'.repeat(40);
+    const { rerender } = render(modal());
+    await answer({ ...byName, index: { commit: ancestor, ...building } }, 1);
+
+    rerender(modal(updates(timedOut, 1, ancestor)));
+    await answer(byIndex, 2);
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
   });
 
   it('says why the answer came from name search', async () => {

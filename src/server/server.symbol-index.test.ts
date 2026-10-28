@@ -727,7 +727,7 @@ describe('symbol peek of a commit review', () => {
       await waitFor(async () => (tool.pids().length > 0 ? true : undefined));
       expect((await fetch(api(`/api/diff?base=${next}&target=${fixup}`))).ok).toBe(true);
       const left = await peek({ ...FIND_BY_ID, ref: next });
-      expect(left.body.index).toMatchObject({ commit: next, status: 'queued', after: head });
+      expect(left.body.index).toEqual({ commit: next, status: 'queued', after: head });
 
       const waiting = await peek({ ...RENAMED_CALLER, ref: fixup });
 
