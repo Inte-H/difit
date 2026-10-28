@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -631,6 +631,221 @@ describe('DiffChunk fixup overlay', () => {
     expect(screen.getByText('Rename this')).toBeInTheDocument();
     expect(screen.getByLabelText('Outdated comment')).toHaveTextContent('낡음');
     expect(screen.getByRole('button', { name: '승인' })).toBeInTheDocument();
+  });
+
+  describe('editing on the card', () => {
+    const editable = (overlay: Partial<FixupOverlayState> = {}) => {
+      const submit = vi.fn().mockResolvedValue(null);
+      const blob = new TextEncoder().encode(`${'// filler\n'.repeat(11)}const three = 3;\n`);
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => blob.slice().buffer,
+      } as Response);
+      renderWithOverlay([thread], new Map([['t1', [{ ...fixup, foldTargetSha: 'b7c2e10' }]]]), {
+        directEdit: { commit: 'b7c2e10', submit },
+        ...overlay,
+      });
+      return { submit, card: screen.getByTestId('fixup-overlay-card') };
+    };
+
+    it('edits the fixup version of the lines and saves the edit against that fixup', async () => {
+      const { submit, card } = editable();
+
+      fireEvent.click(within(card).getByRole('button', { name: /hunk 고치기/ }));
+      const editor = await within(card).findByLabelText('고칠 코드');
+
+      expect(editor).toHaveValue('const three = 3;');
+      expect(global.fetch).toHaveBeenCalledWith('/api/blob/src%2Fexample.ts?ref=abc1234abc1234');
+      expect(within(card).getByText('카드의 수정과 함께 승인하고 지적을 닫습니다')).toBeVisible();
+      fireEvent.change(editor, { target: { value: 'const trois = 3;' } });
+      fireEvent.click(within(card).getByRole('button', { name: '저장' }));
+      await waitFor(() =>
+        expect(submit).toHaveBeenCalledWith({
+          filePath: 'src/example.ts',
+          startLine: 12,
+          endLine: 12,
+          original: ['const three = 3;'],
+          replacement: ['const trois = 3;'],
+          threadId: 't1',
+          fixupSha: 'abc1234abc1234',
+          approvedWith: ['abc1234abc1234'],
+        }),
+      );
+    });
+
+    it('approves the fixups shown when the form opened, and after a refusal for a changed card those shown then', async () => {
+      const submit = vi
+        .fn()
+        .mockResolvedValueOnce({ message: 'merge conflict', reason: 'conflict' })
+        .mockResolvedValueOnce({ message: 'card changed', reason: 'card-changed' })
+        .mockResolvedValueOnce({ message: 'conflict again', reason: 'conflict' })
+        .mockResolvedValue(null);
+      const blob = new TextEncoder().encode(`${'// filler\n'.repeat(11)}const three = 3;\n`);
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => blob.slice().buffer,
+      } as Response);
+      const first = { ...fixup, foldTargetSha: 'b7c2e10' };
+      const later: ThreadFixup = { ...first, sha: 'def5678def5678', shortSha: 'def5678' };
+      const tree = (fixups: ThreadFixup[]) => (
+        <WordHighlightProvider>
+          <FixupOverlayProvider
+            value={{
+              ...EMPTY_FIXUP_OVERLAY,
+              targetCommit: 'b7c2e10',
+              enabled: true,
+              fixupsByThread: new Map([['t1', fixups]]),
+              directEdit: { commit: 'b7c2e10', submit },
+            }}
+          >
+            <DiffChunk
+              chunk={testChunk}
+              chunkIndex={0}
+              threads={[thread]}
+              mode="unified"
+              onAddComment={asyncNoop}
+              onResolveThread={noop}
+              onReplyToThread={asyncNoop}
+              onRemoveMessage={noop}
+              onUpdateMessage={noop}
+              filename="src/example.ts"
+            />
+          </FixupOverlayProvider>
+        </WordHighlightProvider>
+      );
+      const { rerender } = render(tree([first]));
+      const card = screen.getByTestId('fixup-overlay-card');
+      fireEvent.click(within(card).getByRole('button', { name: /hunk 고치기/ }));
+      const editor = await within(card).findByLabelText('고칠 코드');
+
+      rerender(tree([first, later]));
+      expect(screen.getAllByTestId('fixup-overlay-card')).toHaveLength(2);
+      fireEvent.change(editor, { target: { value: 'const trois = 3;' } });
+      fireEvent.click(within(card).getByRole('button', { name: '저장' }));
+
+      await waitFor(() =>
+        expect(submit).toHaveBeenCalledWith(
+          expect.objectContaining({ approvedWith: ['abc1234abc1234'] }),
+        ),
+      );
+      expect(await within(card).findByRole('alert')).toHaveTextContent('merge conflict');
+
+      fireEvent.click(within(card).getByRole('button', { name: '저장' }));
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+      expect(submit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ approvedWith: ['abc1234abc1234'] }),
+      );
+      expect(await within(card).findByRole('alert')).toHaveTextContent('card changed');
+
+      fireEvent.click(within(card).getByRole('button', { name: '저장' }));
+      await waitFor(() =>
+        expect(submit).toHaveBeenLastCalledWith(
+          expect.objectContaining({ approvedWith: ['abc1234abc1234', 'def5678def5678'] }),
+        ),
+      );
+      expect(await within(card).findByRole('alert')).toHaveTextContent('conflict again');
+
+      const third: ThreadFixup = { ...first, sha: '9999999999999', shortSha: '9999999' };
+      rerender(tree([first, later, third]));
+      fireEvent.click(within(card).getByRole('button', { name: '저장' }));
+      await waitFor(() => expect(submit).toHaveBeenCalledTimes(4));
+      expect(submit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ approvedWith: ['abc1234abc1234', 'def5678def5678'] }),
+      );
+    });
+
+    it('edits one line of the card from the pencil on that line', async () => {
+      const { card } = editable();
+      const rows = card.querySelectorAll('tr');
+      expect(within(card).queryByRole('button', { name: '줄 직접 고치기' })).toBeNull();
+
+      fireEvent.mouseEnter(rows[0]!);
+      expect(within(card).queryByRole('button', { name: '줄 직접 고치기' })).toBeNull();
+      fireEvent.mouseEnter(rows[1]!);
+      fireEvent.click(within(card).getByRole('button', { name: '줄 직접 고치기' }));
+
+      expect(await within(card).findByLabelText('고칠 코드')).toHaveValue('const three = 3;');
+      expect(within(card).getByText('src/example.ts:L12 직접 고치기')).toBeVisible();
+    });
+
+    it('offers the edit only on the lines the fixup changed, one hunk range per run of them', async () => {
+      const blob = new TextEncoder().encode(`${'// filler\n'.repeat(10)}B\nB2\nc\nd\nE\nf\n`);
+      vi.mocked(global.fetch).mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => blob.slice().buffer,
+      } as Response);
+      const twoRuns: ThreadFixup = {
+        ...fixup,
+        foldTargetSha: 'b7c2e10',
+        files: [
+          {
+            path: 'src/example.ts',
+            status: 'modified',
+            chunks: [
+              {
+                header: '@@ -10,5 +10,7 @@',
+                oldStart: 10,
+                oldLines: 5,
+                newStart: 10,
+                newLines: 7,
+                lines: [
+                  { type: 'normal', content: 'a', oldLineNumber: 10, newLineNumber: 10 },
+                  { type: 'delete', content: 'b', oldLineNumber: 11 },
+                  { type: 'add', content: 'B', newLineNumber: 11 },
+                  { type: 'add', content: 'B2', newLineNumber: 12 },
+                  { type: 'normal', content: 'c', oldLineNumber: 12, newLineNumber: 13 },
+                  { type: 'normal', content: 'd', oldLineNumber: 13, newLineNumber: 14 },
+                  { type: 'add', content: 'E', newLineNumber: 15 },
+                  { type: 'normal', content: 'f', oldLineNumber: 14, newLineNumber: 16 },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+      renderWithOverlay([thread], new Map([['t1', [twoRuns]]]), {
+        directEdit: { commit: 'b7c2e10', submit: vi.fn() },
+      });
+      const card = screen.getByTestId('fixup-overlay-card');
+      const rows = [...card.querySelectorAll('tr')];
+      const pencils = rows.map((row) => {
+        fireEvent.mouseEnter(row);
+        const shown = within(row).queryByRole('button', { name: '줄 직접 고치기' }) !== null;
+        fireEvent.mouseLeave(row);
+        return shown;
+      });
+      expect(pencils).toEqual([false, false, true, true, false, false, true, false]);
+
+      const hunks = within(card).getAllByRole('button', { name: /hunk 고치기/ });
+      expect(hunks).toHaveLength(2);
+      fireEvent.click(hunks[0]!);
+      expect(await within(card).findByLabelText('고칠 코드')).toHaveValue('B\nB2');
+      expect(within(card).getByText('src/example.ts:L11-L12 직접 고치기')).toBeVisible();
+      fireEvent.click(hunks[1]!);
+      expect(await within(card).findByText('src/example.ts:L15 직접 고치기')).toBeVisible();
+    });
+
+    it('offers no edit on a resolved thread, a review that takes no edits or a fixup folding outside the review', () => {
+      const resolved = {
+        threadId: 't1',
+        kind: 'resolved' as const,
+        fixupSha: '',
+        at: '2026-01-02T00:00:00Z',
+      };
+      const { card } = editable({ decisions: [resolved] });
+      expect(within(card).queryByRole('button', { name: /hunk 고치기/ })).toBeNull();
+      cleanup();
+
+      const { card: plain } = editable({ directEdit: null });
+      expect(within(plain).queryByRole('button', { name: /hunk 고치기/ })).toBeNull();
+      cleanup();
+
+      renderWithOverlay([thread], undefined, {
+        directEdit: { commit: 'b7c2e10', submit: vi.fn() },
+      });
+      const unfoldable = screen.getByTestId('fixup-overlay-card');
+      expect(within(unfoldable).queryByRole('button', { name: /hunk 고치기/ })).toBeNull();
+    });
   });
 });
 

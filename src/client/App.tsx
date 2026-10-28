@@ -1634,12 +1634,15 @@ function App() {
       > &
         Partial<Extract<DirectEditResponse, { success: true }>>;
       if (!response.ok || !payload.success) {
+        if (payload.reason === 'card-changed') setDirectEditCount((count) => count + 1);
         return {
           message: directEditFailureMessage(
             payload.reason,
             payload.error ?? `${response.status} ${response.statusText}`,
+            payload.sha !== undefined,
           ),
           ...(payload.output ? { output: payload.output } : {}),
+          ...(payload.reason ? { reason: payload.reason } : {}),
         };
       }
       if (typeof payload.version === 'number') {
@@ -1719,7 +1722,8 @@ function App() {
     };
     return {
       commit: view.target,
-      submit: (request) => submitDirectEdit({ ...request, view }),
+      submit: (request) =>
+        submitDirectEdit(request.fixupSha === undefined ? { ...request, view } : request),
     };
   }, [
     diffData?.directEditAvailable,

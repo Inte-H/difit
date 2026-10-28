@@ -10,6 +10,8 @@ interface DirectEditFormProps {
   threadId?: string;
   controls: DirectEditControls;
   onClose: () => void;
+  // Set when the lines come from a fixup on the thread's card rather than the reviewed commit.
+  fixupShortSha?: string;
 }
 
 type SubmitAction = 'save' | 'delete';
@@ -21,6 +23,7 @@ export function DirectEditForm({
   threadId,
   controls,
   onClose,
+  fixupShortSha,
 }: DirectEditFormProps) {
   const [original, setOriginal] = useState<string[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -90,6 +93,7 @@ export function DirectEditForm({
     }
   };
 
+  const source = fixupShortSha ? `fixup ${fixupShortSha}` : '리뷰 대상 커밋';
   const lineLabel = range.start === range.end ? `L${range.start}` : `L${range.start}-L${range.end}`;
 
   return (
@@ -104,7 +108,11 @@ export function DirectEditForm({
           {filePath}:{lineLabel} 직접 고치기
         </span>
         <span className="text-xs text-github-text-secondary">
-          {threadId ? '이 줄의 지적에 대한 답으로 저장합니다' : '새 스레드로 저장합니다'}
+          {fixupShortSha
+            ? '카드의 수정과 함께 승인하고 지적을 닫습니다'
+            : threadId
+              ? '이 줄의 지적에 대한 답으로 저장합니다'
+              : '새 스레드로 저장합니다'}
         </span>
       </div>
 
@@ -125,10 +133,10 @@ export function DirectEditForm({
           role="alert"
           className="mb-2 rounded border border-github-danger bg-github-danger/10 px-3 py-2 text-sm text-github-text-primary"
         >
-          리뷰 대상 커밋에서 이 줄들을 읽지 못했습니다.
+          {source}에서 이 줄들을 읽지 못했습니다.
         </p>
       ) : (
-        <p className="mb-2 text-sm text-github-text-secondary">리뷰 대상 커밋의 코드를 읽는 중…</p>
+        <p className="mb-2 text-sm text-github-text-secondary">{source}의 코드를 읽는 중…</p>
       )}
 
       {failure && (

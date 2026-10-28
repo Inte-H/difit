@@ -29,11 +29,17 @@ export const EditLineButton: React.FC<EditLineButtonProps> = React.memo(({ onCli
 
 EditLineButton.displayName = 'EditLineButton';
 
-export function EditHunkButton({ onClick }: { onClick: () => void }) {
+export function EditHunkButton({
+  onClick,
+  alwaysShown = false,
+}: {
+  onClick: () => void;
+  alwaysShown?: boolean;
+}) {
   return (
     <button
       type="button"
-      className="invisible absolute right-2 top-1 z-[5] flex items-center gap-1 rounded border border-github-accent bg-github-bg-secondary px-2 py-0.5 text-xs text-github-text-primary group-focus-within/hunk:visible group-hover/hunk:visible"
+      className={`${alwaysShown ? '' : 'invisible group-focus-within/hunk:visible group-hover/hunk:visible'} absolute right-2 top-1 z-[5] flex items-center gap-1 rounded border border-github-accent bg-github-bg-secondary px-2 py-0.5 text-xs text-github-text-primary`}
       onClick={(e) => {
         e.stopPropagation();
         onClick();

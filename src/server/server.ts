@@ -34,18 +34,20 @@ import {
   deriveThreadReviewState,
   isAgentResponding,
   isAnswerableByEdit,
+  isEditableOnCard,
   isOpenedByEdit,
   isThreadDeleted,
   isThreadResolved,
   mergeReviewDecisions,
   normalizeReviewDecisions,
+  pendingFixupsFor,
   selectThreadsAwaitingAgent,
 } from '../utils/reviewDecisions.js';
 
 import { validateCommitish } from '../cli/utils.js';
 import { sendToClaudeSession, sessionMessageFor } from './claude-session.js';
 import { CLIENT_GONE_GRACE_MS, createClientPresence } from './client-presence.js';
-import { commitDirectEdit, commitDirectReword } from './direct-edit.js';
+import { commitDirectEdit, commitDirectReword, type EditedView } from './direct-edit.js';
 import { chooseFixupTarget } from './fixup-target.js';
 import { FileWatcherService } from './file-watcher.js';
 import { GitDiffParser } from './git-diff.js';
@@ -1375,10 +1377,17 @@ export async function startServer(options: ServerOptions): Promise<{
 
   function parseDirectEditRequest(body: unknown): DirectEditRequest | null {
     if (!body || typeof body !== 'object') return null;
-    const { filePath, startLine, endLine, original, replacement, threadId, view } = body as Record<
-      string,
-      unknown
-    >;
+    const {
+      filePath,
+      startLine,
+      endLine,
+      original,
+      replacement,
+      threadId,
+      view,
+      fixupSha,
+      approvedWith,
+    } = body as Record<string, unknown>;
     const isLineNumber = (value: unknown): value is number =>
       typeof value === 'number' && Number.isInteger(value) && value > 0;
     const isLines = (value: unknown): value is string[] =>
@@ -1394,6 +1403,26 @@ export async function startServer(options: ServerOptions): Promise<{
       (threadId !== undefined && typeof threadId !== 'string')
     ) {
       return null;
+    }
+    if (fixupSha !== undefined) {
+      if (
+        typeof fixupSha !== 'string' ||
+        threadId === undefined ||
+        view !== undefined ||
+        !isLines(approvedWith)
+      ) {
+        return null;
+      }
+      return {
+        filePath,
+        startLine,
+        endLine,
+        original,
+        replacement,
+        threadId,
+        fixupSha,
+        approvedWith,
+      };
     }
     if (view === undefined) {
       return { filePath, startLine, endLine, original, replacement, threadId };
@@ -1442,13 +1471,65 @@ export async function startServer(options: ServerOptions): Promise<{
       return { status: 404, body: { error: `Thread not found: ${request.threadId}` } };
     }
     if (answered && isOpenedByEdit(answered)) return refuse('thread-opened-by-edit');
+    let editedView: EditedView = {
+      base: view.baseCommitish,
+      target: view.targetCommitish,
+      ...(commits.length > 0 ? { commits } : {}),
+    };
+    let approvedWith: ThreadFixup[] = [];
+    let cardFixups: ThreadFixup[] = [];
+    const onCard = request.fixupSha !== undefined;
+    // The card's fixup and those approved with it, while the thread still takes an edit on the card
+    // and its fixups are the ones the reviewer saw.
+    const standingCard = (
+      thread: DiffCommentThread,
+      fixups: ThreadFixup[],
+      decisions: ReviewDecision[],
+    ) => {
+      const state = deriveThreadReviewState(thread.id, fixups, decisions, thread);
+      const pending = pendingFixupsFor(thread.id, fixups, decisions);
+      const seen = new Set(request.approvedWith);
+      const unchanged =
+        seen.size === pending.length && pending.every((fixup) => seen.has(fixup.sha));
+      if (isThreadResolved(thread.id, decisions) || !isEditableOnCard(state) || !unchanged) {
+        return undefined;
+      }
+      const card = pending.find((fixup) => fixup.sha === request.fixupSha);
+      return card && { card, pending };
+    };
     if (answered) {
-      const fixups = (await parser.listThreadFixups(selection)).filter((fixup) =>
-        fixup.threadIds.includes(answered.id),
-      );
-      const state = deriveThreadReviewState(answered.id, fixups, session.decisions, answered);
-      if (isThreadResolved(answered.id, session.decisions) || !isAnswerableByEdit(state)) {
-        return refuse('thread-has-fixup');
+      const fixups = (
+        await (onCard ? parser.listFixupsForScreen(selection) : parser.listThreadFixups(selection))
+      ).filter((fixup) => fixup.threadIds.includes(answered.id));
+      if (!onCard) {
+        const state = deriveThreadReviewState(answered.id, fixups, session.decisions, answered);
+        if (isThreadResolved(answered.id, session.decisions) || !isAnswerableByEdit(state)) {
+          return refuse('thread-has-fixup');
+        }
+      } else {
+        const standing = standingCard(answered, fixups, session.decisions);
+        if (!standing) return refuse('card-changed');
+        const { card, pending } = standing;
+        if (!card.foldTargetSha) return refuse('no-fold-target');
+        const changed = new Set(
+          card.files
+            .filter((file) => file.path === request.filePath)
+            .flatMap((file) => file.chunks.flatMap((chunk) => chunk.lines))
+            .filter((line) => line.type === 'add')
+            .map((line) => line.newLineNumber),
+        );
+        for (let line = request.startLine; line <= request.endLine; line++) {
+          if (!changed.has(line)) return refuse('outside-fixup');
+        }
+        // Read at the card's fixup and folded where it folds; blame would send lines the fixup
+        // added to the last commit of the review.
+        editedView = {
+          base: selection.baseCommitish,
+          target: card.sha,
+          commits: [card.foldTargetSha],
+        };
+        approvedWith = pending;
+        cardFixups = fixups;
       }
     }
 
@@ -1464,16 +1545,16 @@ export async function startServer(options: ServerOptions): Promise<{
         replacement: request.replacement,
         threadId,
       },
-      {
-        base: view.baseCommitish,
-        target: view.targetCommitish,
-        ...(commits.length > 0 ? { commits } : {}),
-      },
+      editedView,
     );
     if (!result.ok) return refuse(result.reason, result.output);
     const binding = review && bindingForView(review, view, result.fixupTarget);
 
     const patchId = (await parser.readThreadFixup(result.sha))?.patchId;
+    // A judgment posted while the commit ran stands.
+    const current = answered && session.threads.find((thread) => thread.id === answered.id);
+    const cardChanged =
+      onCard && (!current || !standingCard(current, cardFixups, session.decisions));
     const now = new Date().toISOString();
     const message = {
       id: answered ? createId() : threadId,
@@ -1514,16 +1595,21 @@ export async function startServer(options: ServerOptions): Promise<{
     updateCommentSession(
       selection,
       nextThreads,
-      mergeReviewDecisions(session.decisions, [
-        {
+      mergeReviewDecisions(
+        session.decisions,
+        (cardChanged ? [] : [...approvedWith, { sha: result.sha, patchId }]).map((fixup) => ({
           threadId,
-          kind: 'approved',
-          fixupSha: result.sha,
-          ...(patchId === undefined ? {} : { patchId }),
+          kind: 'approved' as const,
+          fixupSha: fixup.sha,
+          ...(fixup.patchId === undefined ? {} : { patchId: fixup.patchId }),
           at: now,
-        },
-      ]),
+        })),
+      ),
     );
+    if (cardChanged) {
+      const refused = refuse('card-changed');
+      return { ...refused, body: { ...refused.body, sha: result.sha } };
+    }
     return {
       status: 200,
       body: {

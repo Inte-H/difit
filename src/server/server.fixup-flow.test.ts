@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -435,4 +435,283 @@ it('rewords a commit of the review into an amend! the commit list then shows', a
   const commits = ((await (await fetch(api(`/api/diff${query}`))).json()) as DiffResponse).review!
     .commits;
   expect(commits.map(({ sha: commitSha }) => commitSha)).toEqual([typo, tip]);
+});
+
+it('stacks an edit made on the card on the agent fixup and folds both into the commit it folds into', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-'));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }));
+  git(repo, ['init', '-q']);
+  git(repo, ['checkout', '-q', '-b', 'main']);
+  const base = commit(repo, 'base', { 'total.js': 'a1\na2\na3\na4\na5\na6\n' });
+  const first = commit(repo, 'feat: rename the first lines', {
+    'total.js': 'A1\nA2\na3\na4\na5\na6\n',
+  });
+  const second = commit(repo, 'feat: rename the last line', {
+    'total.js': 'A1\nA2\na3\na4\na5\nB6\n',
+  });
+
+  const { port, server } = await startServer({
+    selection: createDiffSelection(base, second),
+    repoPath: repo,
+    preferredPort: 9290,
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server?.close(() => resolve())));
+  const api = (path: string) => `http://localhost:${port}${path}`;
+  const text = async (path: string) => (await fetch(api(path))).text();
+  const review = ((await (await fetch(api('/api/diff'))).json()) as DiffResponse).review!;
+  const reviewQuery = `?base=${review.selection.baseCommitish}&target=${review.selection.targetCommitish}`;
+  await fetch(api(`/api/comments${reviewQuery}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      comments: [{ id: 't1', file: 'total.js', line: 2, body: 'Explain A2' }],
+    }),
+  });
+  const decide = (decisions: Array<Record<string, string>>) =>
+    fetch(api('/api/decisions'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(decisions.map((decision) => ({ threadId: 't1', ...decision }))),
+    });
+
+  writeFileSync(join(repo, 'total.js'), 'A1\nA2\nadded-by-agent\na3\na4\na5\nB6\n');
+  git(repo, ['commit', '-q', '-a', `--fixup=${first}`, '--trailer', 'Review-Thread: t1']);
+  const agentFixup = git(repo, ['rev-parse', 'HEAD']);
+  expect(await text('/api/comments-output')).toContain('total.js:L2 [승인 대기]');
+
+  const edit = (body: Record<string, unknown>) =>
+    fetch(api(`/api/direct-edit${reviewQuery}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filePath: 'total.js',
+        startLine: 3,
+        endLine: 3,
+        original: ['added-by-agent'],
+        replacement: ['added-by-agent, then fixed by the reviewer'],
+        threadId: 't1',
+        ...body,
+      }),
+    });
+  expect(await (await edit({})).json()).toMatchObject({ reason: 'thread-has-fixup' });
+
+  const response = await edit({ fixupSha: agentFixup, approvedWith: [agentFixup] });
+  const { sha } = (await response.json()) as { sha: string };
+
+  expect(response.status).toBe(200);
+  expect(git(repo, ['rev-parse', 'HEAD'])).toBe(sha);
+  expect(git(repo, ['log', '-1', '--format=%B'])).toBe(
+    `fixup! ${first}\n\nfeat: rename the first lines\n\nReview-Thread: t1`,
+  );
+  expect(git(repo, ['diff', agentFixup, sha])).toContain(
+    '-added-by-agent\n+added-by-agent, then fixed by the reviewer',
+  );
+  expect(await text('/api/comments-output')).toContain('total.js:L2 [승인됨]');
+  const { decisions } = (await (await fetch(api('/api/comments-json'))).json()) as {
+    decisions: Array<{ kind: string; fixupSha: string; at: string }>;
+  };
+  expect(decisions.map(({ kind, fixupSha }) => ({ kind, fixupSha }))).toEqual([
+    { kind: 'approved', fixupSha: agentFixup },
+    { kind: 'approved', fixupSha: sha },
+  ]);
+  expect(new Set(decisions.map(({ at }) => at)).size).toBe(1);
+
+  const folded = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-folded-'));
+  cleanups.push(() => rmSync(folded, { recursive: true, force: true }));
+  git(folded, ['clone', '-q', repo, '.']);
+  git(folded, ['rebase', '-q', '-i', '--autosquash', base], { GIT_SEQUENCE_EDITOR: ':' });
+  expect(git(folded, ['diff', '--exit-code', sha, 'HEAD'])).toBe('');
+  expect(git(folded, ['log', '--format=%s', `${base}..HEAD`]).split('\n')).toEqual([
+    'feat: rename the last line',
+    'feat: rename the first lines',
+  ]);
+  expect(git(folded, ['show', 'HEAD^:total.js'])).toBe(
+    'A1\nA2\nadded-by-agent, then fixed by the reviewer\na3\na4\na5\na6',
+  );
+
+  await decide([{ kind: 'rejected', fixupSha: sha, at: new Date().toISOString() }]);
+  expect(await text('/api/comments-output')).toContain('total.js:L2 [승인 대기]');
+  const { fixups } = (await (await fetch(api(`/api/fixups${reviewQuery}`))).json()) as {
+    fixups: Array<{ sha: string; foldTargetSha?: string }>;
+  };
+  expect(fixups).toEqual([
+    expect.objectContaining({ sha: agentFixup, foldTargetSha: first }),
+    expect.objectContaining({ sha, foldTargetSha: first }),
+  ]);
+});
+
+it('takes an edit on the card only on the lines the fixup changed', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-'));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }));
+  git(repo, ['init', '-q']);
+  git(repo, ['checkout', '-q', '-b', 'main']);
+  const lines = Array.from({ length: 25 }, (_, index) => `l${index + 1}`);
+  const withLines = (changes: Record<number, string>) =>
+    `${lines.map((line, index) => changes[index + 1] ?? line).join('\n')}\n`;
+  const base = commit(repo, 'base', { 'total.js': withLines({}) });
+  commit(repo, 'feat: change line 18', { 'total.js': withLines({ 18: 'W18' }) });
+  const changed20 = commit(repo, 'feat: change line 20', {
+    'total.js': withLines({ 18: 'W18', 20: 'X20' }),
+  });
+  const tip = commit(repo, 'feat: change line 22', {
+    'total.js': withLines({ 18: 'W18', 20: 'X20', 22: 'Y22' }),
+  });
+
+  const { port, server } = await startServer({
+    selection: createDiffSelection(base, tip),
+    repoPath: repo,
+    preferredPort: 9300,
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server?.close(() => resolve())));
+  const api = (path: string) => `http://localhost:${port}${path}`;
+  const review = ((await (await fetch(api('/api/diff'))).json()) as DiffResponse).review!;
+  const reviewQuery = `?base=${review.selection.baseCommitish}&target=${review.selection.targetCommitish}`;
+  await fetch(api(`/api/comments${reviewQuery}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comments: [{ id: 't1', file: 'total.js', line: 20, body: 'Rename' }] }),
+  });
+  writeFileSync(join(repo, 'total.js'), withLines({ 18: 'W18', 20: 'A20', 22: 'Y22' }));
+  git(repo, ['commit', '-q', '-a', `--fixup=${changed20}`, '--trailer', 'Review-Thread: t1']);
+  const agentFixup = git(repo, ['rev-parse', 'HEAD']);
+  const edit = (startLine: number, original: string[], replacement: string[]) =>
+    fetch(api(`/api/direct-edit${reviewQuery}`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        filePath: 'total.js',
+        startLine,
+        endLine: startLine + original.length - 1,
+        original,
+        replacement,
+        threadId: 't1',
+        fixupSha: agentFixup,
+        approvedWith: [agentFixup],
+      }),
+    });
+
+  for (const [startLine, original] of [
+    [22, ['Y22']],
+    [18, ['W18']],
+    [19, ['l19', 'A20']],
+  ] as const) {
+    const refused = await edit(
+      startLine,
+      [...original],
+      original.map((line) => `${line}!`),
+    );
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ reason: 'outside-fixup' });
+  }
+  expect(git(repo, ['rev-parse', 'HEAD'])).toBe(agentFixup);
+
+  const saved = await edit(20, ['A20'], ['A20!']);
+  expect(saved.status).toBe(200);
+  expect(git(repo, ['log', '-1', '--format=%s'])).toBe(`fixup! ${changed20}`);
+});
+
+it('approves nothing when a fixup on the card is rejected while the edit is being committed', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-'));
+  const hold = mkdtempSync(join(tmpdir(), 'difit-fixup-flow-hold-'));
+  cleanups.push(() => rmSync(repo, { recursive: true, force: true }));
+  cleanups.push(() => rmSync(hold, { recursive: true, force: true }));
+  git(repo, ['init', '-q']);
+  git(repo, ['checkout', '-q', '-b', 'main']);
+  const base = commit(repo, 'base', { 'total.js': 'a1\na2\na3\na4\na5\na6\na7\n' });
+  const first = commit(repo, 'feat: rename the lines', {
+    'total.js': 'A1\nA2\na3\na4\na5\na6\na7\n',
+  });
+
+  const { port, server } = await startServer({
+    selection: createDiffSelection(base, first),
+    repoPath: repo,
+    preferredPort: 9310,
+  });
+  cleanups.push(() => new Promise<void>((resolve) => server?.close(() => resolve())));
+  const api = (path: string) => `http://localhost:${port}${path}`;
+  const review = ((await (await fetch(api('/api/diff'))).json()) as DiffResponse).review!;
+  const reviewQuery = `?base=${review.selection.baseCommitish}&target=${review.selection.targetCommitish}`;
+  await fetch(api(`/api/comments${reviewQuery}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ comments: [{ id: 't1', file: 'total.js', line: 2, body: 'Explain' }] }),
+  });
+  writeFileSync(join(repo, 'total.js'), 'A1\nA2\nadded-by-agent\na3\na4\na5\na6\na7\n');
+  git(repo, ['commit', '-q', '-a', `--fixup=${first}`, '--trailer', 'Review-Thread: t1']);
+  const shown = git(repo, ['rev-parse', 'HEAD']);
+  writeFileSync(join(repo, 'total.js'), 'A1\nA2\nadded-by-agent\na3\na4\na5\na6\nlast-by-agent\n');
+  git(repo, ['commit', '-q', '-a', `--fixup=${first}`, '--trailer', 'Review-Thread: t1']);
+  const rejected = git(repo, ['rev-parse', 'HEAD']);
+
+  const script = join(hold, 'hold.sh');
+  writeFileSync(
+    script,
+    `touch '${hold}/started'\nfor _ in $(seq 500); do [ -e '${hold}/go' ] && break; sleep 0.02; done\nexec cat\n`,
+  );
+  git(repo, ['config', 'filter.hold.smudge', `sh '${script}'`]);
+  writeFileSync(join(repo, '.git', 'info', 'attributes'), 'total.js filter=hold\n');
+
+  const saving = fetch(api(`/api/direct-edit${reviewQuery}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filePath: 'total.js',
+      startLine: 3,
+      endLine: 3,
+      original: ['added-by-agent'],
+      replacement: ['fixed by the reviewer'],
+      threadId: 't1',
+      fixupSha: shown,
+      approvedWith: [shown, rejected],
+    }),
+  });
+  for (let waited = 0; !existsSync(join(hold, 'started')); waited++) {
+    expect(waited).toBeLessThan(500);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  await fetch(api('/api/decisions'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify([
+      { threadId: 't1', kind: 'rejected', fixupSha: rejected, at: new Date().toISOString() },
+    ]),
+  });
+  writeFileSync(join(hold, 'go'), '');
+  const response = await saving;
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({
+    reason: 'card-changed',
+    sha: git(repo, ['rev-parse', 'HEAD']),
+  });
+  const { decisions } = (await (await fetch(api('/api/comments-json'))).json()) as {
+    decisions: Array<{ kind: string; fixupSha: string }>;
+  };
+  expect(decisions.map(({ kind, fixupSha }) => ({ kind, fixupSha }))).toEqual([
+    { kind: 'rejected', fixupSha: rejected },
+  ]);
+  expect(await (await fetch(api('/api/comments-output'))).text()).toContain(
+    'total.js:L2 [승인 대기]',
+  );
+
+  const committed = git(repo, ['rev-parse', 'HEAD']);
+  const again = await fetch(api(`/api/direct-edit${reviewQuery}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filePath: 'total.js',
+      startLine: 3,
+      endLine: 3,
+      original: ['added-by-agent'],
+      replacement: ['fixed by the reviewer'],
+      threadId: 't1',
+      fixupSha: shown,
+      approvedWith: [shown, committed],
+    }),
+  });
+  expect(again.status).toBe(409);
+  expect(await again.json()).toMatchObject({ reason: 'no-change' });
+  expect(git(repo, ['rev-parse', 'HEAD'])).toBe(committed);
+  expect((await (await fetch(api('/api/comments-json'))).json()) as unknown).toMatchObject({
+    decisions: [{ kind: 'rejected', fixupSha: rejected }],
+  });
 });

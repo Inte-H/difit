@@ -592,6 +592,26 @@ describe('reviewerEditFixups', () => {
 
     expect(shas(reviewerEditFixups(thread, fixups, decisions))).toEqual(['ffff']);
   });
+
+  it('offers only the edit stacked on the agent fixup, which then waits for approval again', () => {
+    const thread = {
+      id: 't1',
+      messages: [{ author: REVIEWER_AUTHOR, createdAt: at(0) }, reviewerEdit(9)],
+    };
+    const fixups = [
+      fixup('aaaa', ['t1'], '2026-01-01T00:05:00Z'),
+      fixup('eeee', ['t1'], '2026-01-01T00:09:00Z'),
+    ];
+    const approved = [decision('approved', 'aaaa', at(9)), decision('approved', 'eeee', at(9))];
+
+    expect(deriveThreadReviewState('t1', fixups, approved, thread)).toBe('approved');
+    expect(shas(reviewerEditFixups(thread, fixups, approved))).toEqual(['eeee']);
+
+    const reverted = [...approved, decision('rejected', 'eeee', at(10))];
+    expect(deriveThreadReviewState('t1', fixups, reverted, thread)).toBe('awaiting-approval');
+    expect(shas(pendingFixupsFor('t1', fixups, reverted))).toEqual(['aaaa']);
+    expect(reviewerEditFixups(thread, fixups, reverted)).toEqual([]);
+  });
 });
 
 describe('pendingFixupsFor', () => {

@@ -2433,6 +2433,199 @@ describe('Server Integration Tests', () => {
       expect(await response.json()).toMatchObject({ reason: 'thread-opened-by-edit' });
     });
 
+    describe('on the card of a fixup', () => {
+      const AGENT_SHA = 'b'.repeat(40);
+      const FOLD_TARGET = 'c'.repeat(40);
+      const agentFixup = {
+        ...answeredBy(AGENT_SHA, 'c1'),
+        foldTargetSha: FOLD_TARGET,
+        files: [
+          {
+            path: 'test.js',
+            status: 'modified',
+            chunks: [
+              {
+                header: '@@ -3,0 +3,2 @@',
+                oldStart: 3,
+                oldLines: 0,
+                newStart: 3,
+                newLines: 2,
+                lines: [
+                  { type: 'add', content: '// one', newLineNumber: 3 },
+                  { type: 'add', content: '// two', newLineNumber: 4 },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      async function startWithAgentFixup(fixup: object = agentFixup) {
+        const port = await startPinned();
+        await fetch(`http://localhost:${port}/api/comments${PINNED}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            comments: [{ id: 'c1', file: 'test.js', line: 3, body: 'Drop' }],
+          }),
+        });
+        const parser = parserInstances.at(-1)!;
+        parser.listThreadFixups.mockResolvedValue([fixup]);
+        commitDirectEdit.mockImplementation(async () => {
+          parser.listThreadFixups.mockResolvedValue([fixup, answeredBy(FIXUP_SHA, 'c1')]);
+          return { ok: true, sha: FIXUP_SHA, fixupTarget: FOLD_TARGET };
+        });
+        return port;
+      }
+
+      it('reads the lines at the fixup, folds where it folds and approves both at once', async () => {
+        const port = await startWithAgentFixup();
+
+        const response = await postEdit(
+          port,
+          editBody({ threadId: 'c1', fixupSha: AGENT_SHA, approvedWith: [AGENT_SHA] }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(commitDirectEdit).toHaveBeenCalledWith(
+          expect.any(String),
+          { base: 'def4567', target: 'abc1234' },
+          expect.objectContaining({ threadId: 'c1' }),
+          { base: 'def4567', target: AGENT_SHA, commits: [FOLD_TARGET] },
+        );
+        const { decisions } = (await (
+          await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+        ).json()) as any;
+        expect(decisions).toEqual([
+          expect.objectContaining({ kind: 'approved', fixupSha: AGENT_SHA }),
+          expect.objectContaining({ kind: 'approved', fixupSha: FIXUP_SHA }),
+        ]);
+        expect(decisions[0].at).toBe(decisions[1].at);
+        const output = await (
+          await fetch(`http://localhost:${port}/api/comments-output${PINNED}`)
+        ).text();
+        expect(output).toContain('test.js:L3 [승인됨]');
+      });
+
+      it('approves nothing when a fixup on the card is rejected or the thread is deleted after the commit', async () => {
+        for (const meanwhile of [
+          (port: number) =>
+            fetch(`http://localhost:${port}/api/decisions${PINNED}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify([
+                { threadId: 'c1', kind: 'rejected', fixupSha: AGENT_SHA, at: '2026-01-01' },
+              ]),
+            }),
+          (port: number) =>
+            fetch(`http://localhost:${port}/api/comments/c1${PINNED}`, { method: 'DELETE' }),
+          (port: number) =>
+            fetch(`http://localhost:${port}/api/decisions${PINNED}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify([
+                { threadId: 'c1', kind: 'deleted', fixupSha: '', at: '2026-01-01' },
+              ]),
+            }),
+        ]) {
+          const port = await startWithAgentFixup();
+          const parser = parserInstances.at(-1)!;
+          const read = parser.readThreadFixup.getMockImplementation()!;
+          parser.readThreadFixup.mockImplementationOnce(async (sha: string) => {
+            await meanwhile(port);
+            return read(sha);
+          });
+
+          const response = await postEdit(
+            port,
+            editBody({ threadId: 'c1', fixupSha: AGENT_SHA, approvedWith: [AGENT_SHA] }),
+          );
+
+          expect(response.status).toBe(409);
+          expect(await response.json()).toMatchObject({ reason: 'card-changed', sha: FIXUP_SHA });
+          const { decisions } = (await (
+            await fetch(`http://localhost:${port}/api/comments-json${PINNED}`)
+          ).json()) as any;
+          expect(decisions.filter(({ kind }: { kind: string }) => kind === 'approved')).toEqual([]);
+        }
+      });
+
+      it('refuses a fixup that is no longer on the card', async () => {
+        const port = await startWithAgentFixup();
+        await fetch(`http://localhost:${port}/api/decisions${PINNED}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify([
+            { threadId: 'c1', kind: 'rejected', fixupSha: AGENT_SHA, at: '2026-01-01' },
+          ]),
+        });
+
+        const response = await postEdit(
+          port,
+          editBody({ threadId: 'c1', fixupSha: AGENT_SHA, approvedWith: [AGENT_SHA] }),
+        );
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ reason: 'card-changed' });
+        expect(commitDirectEdit).not.toHaveBeenCalled();
+      });
+
+      it('refuses an edit that would approve a fixup the reviewer has not seen', async () => {
+        const port = await startWithAgentFixup();
+        const unseen = { ...answeredBy('d'.repeat(40), 'c1'), foldTargetSha: FOLD_TARGET };
+        parserInstances.at(-1)!.listThreadFixups.mockResolvedValue([agentFixup, unseen]);
+
+        const response = await postEdit(
+          port,
+          editBody({ threadId: 'c1', fixupSha: AGENT_SHA, approvedWith: [AGENT_SHA] }),
+        );
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ reason: 'card-changed' });
+        expect(commitDirectEdit).not.toHaveBeenCalled();
+      });
+
+      it('refuses a fixup that folds into no commit of the review', async () => {
+        const port = await startWithAgentFixup(answeredBy(AGENT_SHA, 'c1'));
+
+        const response = await postEdit(
+          port,
+          editBody({ threadId: 'c1', fixupSha: AGENT_SHA, approvedWith: [AGENT_SHA] }),
+        );
+
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({ reason: 'no-fold-target' });
+        expect(commitDirectEdit).not.toHaveBeenCalled();
+      });
+
+      it('takes the fixup only with the thread it answers and without a view', async () => {
+        const port = await startWithAgentFixup();
+
+        const withoutThread = await postEdit(
+          port,
+          editBody({ fixupSha: AGENT_SHA, approvedWith: [AGENT_SHA] }),
+        );
+        const withoutApproved = await postEdit(
+          port,
+          editBody({ threadId: 'c1', fixupSha: AGENT_SHA }),
+        );
+        const withView = await postEdit(
+          port,
+          editBody({
+            threadId: 'c1',
+            fixupSha: AGENT_SHA,
+            approvedWith: [AGENT_SHA],
+            view: { base: 'def4567', target: 'abc1234' },
+          }),
+        );
+
+        expect(withoutThread.status).toBe(400);
+        expect(withoutApproved.status).toBe(400);
+        expect(withView.status).toBe(400);
+        expect(commitDirectEdit).not.toHaveBeenCalled();
+      });
+    });
+
     it('passes a refusal from git through and records nothing', async () => {
       const port = await startPinned();
       commitDirectEdit.mockResolvedValue({

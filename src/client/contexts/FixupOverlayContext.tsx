@@ -3,6 +3,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 import type {
   CommentThread,
   DiffSelection,
+  DirectEditRejection,
   DirectEditRequest,
   FixupRef,
   ReviewDecision,
@@ -14,6 +15,7 @@ import {
   deriveThreadReviewState,
   isAgentResponding,
   isAnswerableByEdit,
+  isEditableOnCard,
   isOpenedByEdit,
   isThreadResolved,
   pendingFixupsFor,
@@ -25,6 +27,7 @@ import type { FixupBox, FixupFilePlace, FixupFileRef } from '../utils/fixupSprea
 export interface DirectEditFailure {
   message: string;
   output?: string;
+  reason?: DirectEditRejection;
 }
 
 export interface DirectEditControls {
@@ -136,6 +139,13 @@ export function canAnswerByEdit(overlay: FixupOverlayState, thread: CommentThrea
   if (isOpenedByEdit(thread) || isThreadResolved(thread.id, overlay.decisions)) return false;
   const state = threadReviewControls(overlay, thread)?.state;
   return state !== undefined && isAnswerableByEdit(state);
+}
+
+export function canEditFixupCard(overlay: FixupOverlayState, thread: CommentThread): boolean {
+  if (!overlay.directEdit || isOpenedByEdit(thread)) return false;
+  if (isThreadResolved(thread.id, overlay.decisions)) return false;
+  const state = threadReviewControls(overlay, thread)?.state;
+  return state !== undefined && isEditableOnCard(state);
 }
 
 export function threadAnsweredByEdit(
