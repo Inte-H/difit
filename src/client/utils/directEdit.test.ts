@@ -91,4 +91,9 @@ describe('directEditFailureMessage', () => {
   it('falls back to the server error when no reason is given', () => {
     expect(directEditFailureMessage(undefined, 'boom')).toBe('boom');
   });
+
+  it('says the edit was committed unapproved when the card changed during the commit', () => {
+    expect(directEditFailureMessage('card-changed', '', true)).toContain('fixup 커밋으로 남았지만');
+    expect(directEditFailureMessage('card-changed', '')).toContain('카드를 다시 확인한 뒤 고쳐');
+  });
 });

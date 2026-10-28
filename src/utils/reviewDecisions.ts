@@ -206,6 +206,11 @@ export function isAnswerableByEdit(state: ThreadReviewState): boolean {
   return state === 'awaiting-fix' || state === 'answered' || state === 'rejected';
 }
 
+// States whose fixups are on the card, where an edit on the card stacks a fixup on them.
+export function isEditableOnCard(state: ThreadReviewState): boolean {
+  return state === 'awaiting-approval' || state === 'approved';
+}
+
 // Unresolved threads the agent still owes an answer: no answer yet, or the last answer was rejected.
 export function selectOpenThreads<T extends { id: string } & ThreadMessages>(
   threads: T[],
@@ -408,9 +413,9 @@ export function selectThreadsAwaitingAgent(
   });
 }
 
-// An edit is accepted only while no fixup on the thread is under judgment, so its fixup is the last
-// one authored by the time of its message. None is offered beside another standing fixup, which
-// may build on the edit.
+// An edit's fixup is the last one authored by the time of its message. Only the newest standing
+// fixup is offered: one written after it may build on it, and the ones under it, which an edit on
+// the card approved, go back to awaiting approval when it is reverted.
 export function reviewerEditFixups(
   thread: { id: string } & ThreadMessages,
   fixups: ThreadFixup[],
@@ -431,8 +436,8 @@ export function reviewerEditFixups(
         return latest ? [latest] : [];
       }),
   );
-  const pending = pendingFixupsFor(thread.id, fixups, decisions);
-  return pending.every((fixup) => written.has(fixup)) ? pending : [];
+  const newest = pendingFixupsFor(thread.id, fixups, decisions).at(-1);
+  return newest && written.has(newest) ? [newest] : [];
 }
 
 export function pendingFixupsFor(

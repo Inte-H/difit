@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, type ReactNode, useState } from 'react';
 
 import type {
   CommentThread,
@@ -15,7 +15,13 @@ import {
 } from '../../utils/changeKind';
 import { locationLabel } from '../../utils/commentPosition';
 import { FileLevelTokensProvider } from '../contexts/FileLevelTokensContext';
-import { useFixupOverlay } from '../contexts/FixupOverlayContext';
+import {
+  canEditFixupCard,
+  type DirectEditControls,
+  useFixupOverlay,
+} from '../contexts/FixupOverlayContext';
+import { useCanHover } from '../hooks/useCanHover';
+import { type ChangedPart, changedParts, type EditRange } from '../utils/directEdit';
 import { fixupFileElementId } from '../utils/domUtils';
 import {
   type FixupBox,
@@ -27,6 +33,8 @@ import {
 } from '../utils/fixupSpread';
 
 import { DiffCodeLine } from './DiffCodeLine';
+import { DirectEditForm } from './DirectEditForm';
+import { EditHunkButton, EditLineButton } from './EditLineButton';
 import type { AppearanceSettings } from './SettingsModal';
 
 interface FixupOverlayCardProps {
@@ -34,9 +42,17 @@ interface FixupOverlayCardProps {
   threadId: string;
   filePath: string;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
+  // The fixups on the thread's cards an edit here approves; empty when the card takes no edits.
+  approvedWith: readonly string[];
 }
 
 const NO_PRECOMPUTED_TOKENS = { getOldTokens: null, getNewTokens: null };
+
+const wholeChunk = (chunk: DiffChunk): ChangedPart => ({
+  from: 0,
+  to: chunk.lines.length,
+  range: null,
+});
 
 const getOverlayLineClass = (line: DiffLine) => {
   switch (line.type) {
@@ -71,43 +87,87 @@ const symbolAttributes = (line: DiffLine, fixupSha: string, file: FixupFile) =>
         'data-symbol-line': line.newLineNumber,
       };
 
+// Only the lines the fixup added take an edit, numbered in the fixup's version of the file, which
+// is where an edit reads them.
+interface ChunksEditing {
+  open: (range: EditRange) => void;
+  range: EditRange | null;
+  form: ReactNode;
+}
+
 function FixupChunksTable({
   chunks,
   fixupSha,
   file,
   syntaxTheme,
+  editing,
 }: {
   chunks: DiffChunk[];
   fixupSha: string;
   file: FixupFile;
   syntaxTheme?: AppearanceSettings['syntaxTheme'];
+  editing?: ChunksEditing;
 }) {
+  const canHover = useCanHover();
+  const [hovered, setHovered] = useState<string | null>(null);
   return (
     <FileLevelTokensProvider value={NO_PRECOMPUTED_TOKENS}>
-      <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
-        <tbody>
-          {chunks.map((chunk, chunkIndex) =>
-            chunk.lines.map((line, lineIndex) => (
-              <tr key={`${chunkIndex}-${lineIndex}`} className={getOverlayLineClass(line)}>
-                <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted select-none align-top">
-                  {line.newLineNumber ?? line.oldLineNumber ?? ''}
-                </td>
-                <td
-                  className="p-0 w-full align-top [&_span:first-child]:!bg-transparent"
-                  {...symbolAttributes(line, fixupSha, file)}
-                >
-                  <DiffCodeLine
-                    line={line}
-                    syntaxTheme={syntaxTheme}
-                    filename={file.path}
-                    showPrefixBorder={false}
-                  />
-                </td>
-              </tr>
-            )),
-          )}
-        </tbody>
-      </table>
+      {chunks.map((chunk, chunkIndex) =>
+        (editing ? changedParts(chunk.lines) : [wholeChunk(chunk)]).map(({ from, to, range }) => (
+          <div key={`${chunkIndex}-${from}`} className="group/hunk relative">
+            {editing && range && (
+              <EditHunkButton onClick={() => editing.open(range)} alwaysShown={!canHover} />
+            )}
+            <table className="w-full table-fixed border-collapse font-mono text-sm leading-5">
+              <tbody>
+                {chunk.lines.slice(from, to).map((line, offset) => {
+                  const lineIndex = from + offset;
+                  const lineNumber = line.type === 'add' ? line.newLineNumber : undefined;
+                  const rowKey = `${chunkIndex}-${lineIndex}`;
+                  return (
+                    <Fragment key={lineIndex}>
+                      <tr
+                        className={getOverlayLineClass(line)}
+                        onMouseEnter={editing && canHover ? () => setHovered(rowKey) : undefined}
+                        onMouseLeave={editing && canHover ? () => setHovered(null) : undefined}
+                      >
+                        <td className="w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 max-md:px-0.5 max-md:text-[11px] text-right text-github-text-muted select-none align-top">
+                          {line.newLineNumber ?? line.oldLineNumber ?? ''}
+                        </td>
+                        <td
+                          className="relative p-0 w-full align-top [&_span:first-child]:!bg-transparent"
+                          {...symbolAttributes(line, fixupSha, file)}
+                        >
+                          <DiffCodeLine
+                            line={line}
+                            syntaxTheme={syntaxTheme}
+                            filename={file.path}
+                            showPrefixBorder={false}
+                          />
+                          {editing && hovered === rowKey && lineNumber !== undefined && (
+                            <div className="absolute right-1.5 top-1/2 -translate-y-1/2 z-10 flex">
+                              <EditLineButton
+                                onClick={() => editing.open({ start: lineNumber, end: lineNumber })}
+                              />
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                      {editing?.range && lineNumber === editing.range.end && (
+                        <tr>
+                          <td colSpan={2} className="p-0">
+                            {editing.form}
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )),
+      )}
     </FileLevelTokensProvider>
   );
 }
@@ -137,8 +197,63 @@ function AmendedMessage({ message, separated }: { message: MessageAmendment; sep
   );
 }
 
-function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverlayCardProps) {
-  const { revealFixupFile, fixupReviewPaths, fixupPlaces } = useFixupOverlay();
+function FixupOverlayCard({
+  fixup,
+  threadId,
+  filePath,
+  syntaxTheme,
+  approvedWith,
+}: FixupOverlayCardProps) {
+  const { revealFixupFile, fixupReviewPaths, fixupPlaces, directEdit } = useFixupOverlay();
+  // approvedWith is null once a save was refused for a changed card: the next save sends what the
+  // card shows then and keeps it for later saves.
+  const [edit, setEdit] = useState<{
+    path: string;
+    range: EditRange;
+    approvedWith: readonly string[] | null;
+  } | null>(null);
+  const editable = approvedWith.length > 0 && fixup.foldTargetSha !== undefined && directEdit;
+  if (!editable && edit) setEdit(null);
+  const editingOf = (file: FixupFile): ChunksEditing | undefined => {
+    if (!editable) return undefined;
+    const opened = edit?.path === file.path ? edit : null;
+    const sameRange = (range: EditRange) =>
+      opened?.range.start === range.start && opened.range.end === range.end;
+    const controls = (saved: readonly string[] | null): DirectEditControls => ({
+      commit: fixup.sha,
+      submit: async (request) => {
+        const sent = saved ?? approvedWith;
+        if (saved === null) setEdit((current) => current && { ...current, approvedWith: sent });
+        const failure = await editable.submit({
+          ...request,
+          fixupSha: fixup.sha,
+          approvedWith: [...sent],
+        });
+        if (failure?.reason === 'card-changed') {
+          setEdit((current) => current && { ...current, approvedWith: null });
+        }
+        return failure;
+      },
+    });
+    return {
+      open: (picked) => {
+        if (!sameRange(picked)) setEdit({ path: file.path, range: picked, approvedWith });
+      },
+      range: opened?.range ?? null,
+      form: opened && (
+        <DirectEditForm
+          key={`${opened.range.start}-${opened.range.end}`}
+          filePath={file.path}
+          range={opened.range}
+          targetCommit={fixup.sha}
+          threadId={threadId}
+          controls={controls(opened.approvedWith)}
+          onClose={() => setEdit(null)}
+          fixupShortSha={fixup.shortSha}
+        />
+      ),
+    };
+  };
   const keyOf = (file: FixupFile) => fixupFileKey({ fixupSha: fixup.sha, path: file.path });
   const isThisFile = (file: FixupFile) =>
     (fixupReviewPaths.get(keyOf(file)) ?? file.oldPath ?? file.path) === filePath;
@@ -180,6 +295,7 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
           fixupSha={fixup.sha}
           file={file}
           syntaxTheme={syntaxTheme}
+          editing={editingOf(file)}
         />
       ))}
       {heldFiles.map((file) => (
@@ -193,6 +309,7 @@ function FixupOverlayCard({ fixup, threadId, filePath, syntaxTheme }: FixupOverl
             fixupSha={fixup.sha}
             file={file}
             syntaxTheme={syntaxTheme}
+            editing={editingOf(file)}
           />
         </div>
       ))}
@@ -330,8 +447,10 @@ export function FixupOverlayBlock({
   filePath,
   syntaxTheme,
 }: Omit<FixupOverlayRowProps, 'colSpan'>) {
-  const fixups = overlaidFixups(useFixupOverlay(), thread);
+  const overlay = useFixupOverlay();
+  const fixups = overlaidFixups(overlay, thread);
   if (fixups.length === 0 || !filePath) return null;
+  const approvedWith = canEditFixupCard(overlay, thread) ? fixups.map(({ sha }) => sha) : [];
   return fixups.map((fixup) => (
     <FixupOverlayCard
       key={fixup.sha}
@@ -339,6 +458,7 @@ export function FixupOverlayBlock({
       threadId={thread.id}
       filePath={filePath}
       syntaxTheme={syntaxTheme}
+      approvedWith={approvedWith}
     />
   ));
 }

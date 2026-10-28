@@ -39,6 +39,36 @@ export function hunkRange(lineNumbers: ReadonlySet<number>): EditRange | null {
   return end - start + 1 === lineNumbers.size ? { start, end } : null;
 }
 
+export interface ChangedPart {
+  // Indexes into the lines, end exclusive.
+  from: number;
+  to: number;
+  // The added lines of the part's one run of changes; null when the run only deletes.
+  range: EditRange | null;
+}
+
+// Splits a hunk before each run of changed lines but the first, so a part holds one run with the
+// unchanged lines before it, and the last part those after it too.
+export function changedParts(lines: readonly DiffLine[]): ChangedPart[] {
+  const isChanged = (line: DiffLine | undefined) => line?.type === 'add' || line?.type === 'delete';
+  const parts: ChangedPart[] = [];
+  let part: ChangedPart = { from: 0, to: 0, range: null };
+  let partHasRun = false;
+  lines.forEach((line, index) => {
+    if (!isChanged(line)) return;
+    if (partHasRun && !isChanged(lines[index - 1])) {
+      parts.push({ ...part, to: index });
+      part = { from: index, to: index, range: null };
+    }
+    partHasRun = true;
+    if (line.type === 'add' && line.newLineNumber !== undefined) {
+      part.range = { start: part.range?.start ?? line.newLineNumber, end: line.newLineNumber };
+    }
+  });
+  parts.push({ ...part, to: lines.length });
+  return parts;
+}
+
 // The BOM stays on the first line and each line loses only the CR of its CRLF ending, so the
 // lines match the committed bytes the server compares them with.
 export async function fetchLinesAt(
@@ -91,12 +121,23 @@ const FAILURE_MESSAGES: Record<DirectEditRejection, string> = {
   'commit-failed': 'fixup 커밋을 만들지 못했습니다. 아래 출력을 확인해 주세요.',
   'thread-has-fixup': '이 지적에는 판정을 기다리는 수정이 이미 있습니다.',
   'thread-opened-by-edit': '직접 고쳐서 연 스레드는 다시 고치지 않습니다. 줄에서 새로 고쳐 주세요.',
+  'card-changed':
+    '그사이 이 지적이 해결되었거나, 카드의 fixup이 거절되었거나, 새 fixup이 올라왔습니다. 카드를 다시 확인한 뒤 고쳐 주세요.',
+  'outside-fixup':
+    '카드에서는 이 fixup이 바꾼 줄만 고칠 수 있습니다. 다른 줄은 diff 본문에서 고쳐 주세요.',
+  'no-fold-target':
+    '이 fixup이 접힐 커밋을 리뷰 범위에서 찾지 못해 그 위에 고칠 수 없습니다. 지적에 답글로 알려 주세요.',
 };
+
+const COMMITTED_UNAPPROVED_MESSAGE =
+  '고친 내용은 fixup 커밋으로 남았지만, 저장하는 사이 이 지적이 해결되거나 지워졌거나 카드의 fixup이 거절되어 아무것도 승인하지 않았습니다. 지적이 남아 있으면 카드를 다시 확인해 판정해 주세요.';
 
 export function directEditFailureMessage(
   reason: DirectEditRejection | undefined,
   error: string,
+  committed = false,
 ): string {
+  if (committed && reason === 'card-changed') return COMMITTED_UNAPPROVED_MESSAGE;
   return reason ? FAILURE_MESSAGES[reason] : error;
 }
 

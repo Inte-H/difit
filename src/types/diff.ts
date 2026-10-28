@@ -395,6 +395,11 @@ export interface DirectEditRequest {
   threadId?: string;
   // The commit or run of commits the lines were edited in; the whole review when left out.
   view?: { base: string; target: string };
+  // The fixup on the thread's card whose version of the file the lines were edited in, in place
+  // of a view.
+  fixupSha?: string;
+  // With fixupSha: the fixups on the thread's cards as the reviewer saw them, approved with the edit.
+  approvedWith?: string[];
 }
 
 export type DirectEditRejection =
@@ -413,7 +418,10 @@ export type DirectEditRejection =
   | 'head-moved'
   | 'commit-failed'
   | 'thread-has-fixup'
-  | 'thread-opened-by-edit';
+  | 'thread-opened-by-edit'
+  | 'no-fold-target'
+  | 'outside-fixup'
+  | 'card-changed';
 
 export type DirectEditResponse =
   | {
@@ -424,7 +432,13 @@ export type DirectEditResponse =
       threads: DiffCommentThread[];
       decisions: ReviewDecision[];
     }
-  | { error: string; reason?: DirectEditRejection; output?: string };
+  | {
+      error: string;
+      reason?: DirectEditRejection;
+      output?: string;
+      // With card-changed: the fixup committed before the card changed, which nothing approved.
+      sha?: string;
+    };
 
 export interface RewordRequest {
   commit: string;
