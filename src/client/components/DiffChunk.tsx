@@ -16,8 +16,10 @@ import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayC
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import { useCanHover } from '../hooks/useCanHover';
 import { useCodeSelection } from '../hooks/useCodeSelection';
+import { cursorLineOf, useLinePick } from '../contexts/LinePickContext';
 import { useDirectEditing } from '../hooks/useDirectEditing';
 import { quoteSelection } from '../utils/codeSelection';
+import { extraRangeEndsAt, pickHolds, rangesOfPick, threadHoldsLine } from '../utils/linePick';
 import {
   computeWordLevelDiff,
   shouldComputeWordDiff,
@@ -27,6 +29,7 @@ import {
 import { CommentForm } from './CommentForm';
 import { CommentThreadCard } from './CommentThreadCard';
 import { DiffLineRow } from './DiffLineRow';
+import { goToThreadCard, PickControls, PickNotice, ThreadMarker } from './LinePickParts';
 import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
 import { FixupBoxRows, FixupOverlayRow } from './FixupOverlayCard';
@@ -110,16 +113,17 @@ export const DiffChunk = memo(function DiffChunk({
   const [endLine, setEndLine] = useState<number | null>(null);
   const [dragSide, setDragSide] = useState<DiffSide | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [openCommentLine, setCommentingLine] = useState<{
-    side: DiffSide;
-    lineNumber: LineNumber;
-    quote?: string;
-  } | null>(null);
-  const commentingLine = onAddComment ? openCommentLine : null;
-  const [selectionAnchor, setSelectionAnchor] = useState<{
-    side: DiffSide;
-    lineNumber: number;
-  } | null>(null);
+  const linePick = useLinePick(
+    chunk.lines,
+    cursor ? cursorLineOf(chunk.lines[cursor.lineIndex], cursor.side) : null,
+  );
+  const pick = onAddComment ? linePick.pick : null;
+  const pickedRanges = useMemo(() => (pick ? rangesOfPick(pick) : []), [pick]);
+  const formRange = pickedRanges.at(-1);
+  const commentingLine =
+    pick && formRange !== undefined
+      ? { side: pick.side, lineNumber: formRange, quote: linePick.quote }
+      : null;
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const dragFromLineNumber = useRef(false);
   const dragStartRow = useRef<DiffLine | null>(null);
@@ -129,6 +133,8 @@ export const DiffChunk = memo(function DiffChunk({
   const containerRef = useRef<HTMLDivElement>(null);
   const codeSelection = useCodeSelection(containerRef, 'unified');
 
+  const { open: openPick, start: startPick } = linePick;
+
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
     if (commentTrigger?.lineIndex !== undefined) {
@@ -137,44 +143,25 @@ export const DiffChunk = memo(function DiffChunk({
         const side: DiffSide = line.type === 'delete' ? 'old' : 'new';
         const lineNumber = lineNumberOn(line, side);
         if (lineNumber) {
-          setCommentingLine({ side, lineNumber });
+          startPick(side, lineNumber);
           onCommentTriggerHandled?.();
         }
       }
     }
-  }, [commentTrigger, chunk.lines, onCommentTriggerHandled]);
+  }, [commentTrigger, chunk.lines, onCommentTriggerHandled, startPick]);
 
   const handleAddComment = useCallback(
-    (side: DiffSide, lineNumber: LineNumber) => {
-      if (commentingLine?.side === side && commentingLine?.lineNumber === lineNumber) {
-        setCommentingLine(null);
-      } else {
-        setCommentingLine({ side, lineNumber });
-      }
-    },
-    [commentingLine],
+    (side: DiffSide, lineNumber: LineNumber) => openPick(side, lineNumber),
+    [openPick],
   );
 
-  const getCommentLineFromAnchor = (selection: LineSelection): LineNumber => {
-    if (!selectionAnchor || selectionAnchor.side !== selection.side) {
-      return selection.lineNumber;
-    }
-
-    const min = Math.min(selectionAnchor.lineNumber, selection.lineNumber);
-    const max = Math.max(selectionAnchor.lineNumber, selection.lineNumber);
-    return min === max ? selection.lineNumber : [min, max];
-  };
-
-  const openShiftClickComment = (selection: LineSelection) => {
-    handleAddComment(selection.side, getCommentLineFromAnchor(selection));
-    setSelectionAnchor(selection);
-  };
+  const openShiftClickComment = (selection: LineSelection) => linePick.extend(selection);
 
   const startCommentDrag = (selection: LineSelection, row: DiffLine, fromLineNumber = false) => {
     if (!onAddComment) return;
     dragFromLineNumber.current = fromLineNumber;
     dragStartRow.current = row;
-    setSelectionAnchor(selection);
+    linePick.setAnchor(selection);
     setStartLine(selection.lineNumber);
     setEndLine(selection.lineNumber);
     setDragSide(selection.side);
@@ -215,17 +202,19 @@ export const DiffChunk = memo(function DiffChunk({
       setDragSide(otherSide);
       setStartLine(otherStart);
       setEndLine(otherEnd);
-      setSelectionAnchor({ side: otherSide, lineNumber: otherStart });
+      linePick.setAnchor({ side: otherSide, lineNumber: otherStart });
     }
   };
 
   const handleRowClick = ({
     isShiftClick,
+    addsLine,
     lineIndex,
     navigationSide,
     selection,
   }: {
     isShiftClick: boolean;
+    addsLine: boolean;
     lineIndex: number;
     navigationSide: 'left' | 'right';
     selection: LineSelection | null;
@@ -240,7 +229,12 @@ export const DiffChunk = memo(function DiffChunk({
       return;
     }
 
-    setSelectionAnchor(selection);
+    if (addsLine && onAddComment) {
+      linePick.toggle(selection);
+      return;
+    }
+
+    linePick.setAnchor(selection);
     onLineClick?.(fileIndex, chunkIndex, lineIndex, navigationSide);
   };
 
@@ -279,44 +273,44 @@ export const DiffChunk = memo(function DiffChunk({
     };
   }, [isDragging, startLine, endLine, dragSide, handleAddComment]);
 
-  const handleCancelComment = useCallback(() => {
-    setCommentingLine(null);
-  }, []);
+  const handleCancelComment = linePick.close;
 
-  // Get the code content for the selected lines (for suggestion feature)
-  const getSelectedCodeContent = useCallback((): string => {
-    if (!commentingLine) return '';
+  const getSelectedCodeContent = (): string =>
+    commentingLine ? linePick.contentOf(commentingLine.side, commentingLine.lineNumber) : '';
 
-    const { side, lineNumber } = commentingLine;
-    const lines = chunk.lines;
+  const handleSubmitComment = async (body: string) => {
+    if (commentingLine === null || !onAddComment) return;
+    const { side, lineNumber, quote } = commentingLine;
+    const extraLines = pickedRanges.slice(0, -1);
+    await onAddComment(
+      lineNumber,
+      quote === undefined ? body : quoteSelection(quote, body),
+      linePick.contentOf(side, lineNumber),
+      side,
+      ...(extraLines.length > 0
+        ? [
+            {
+              lines: extraLines,
+              contents: extraLines.map((line) => linePick.contentOf(side, line)),
+            },
+          ]
+        : []),
+    );
+    linePick.close();
+  };
 
-    if (typeof lineNumber === 'number') {
-      // Single line
-      const line = lines.find((l) => lineNumberOn(l, side) === lineNumber);
-      return line?.content ?? '';
-    } else {
-      // Range of lines
-      const [start, end] = lineNumber;
-      const selectedLines = lines.filter((l) => {
-        const ln = lineNumberOn(l, side);
-        return ln !== undefined && ln >= start && ln <= end;
-      });
-      return selectedLines.map((l) => l.content ?? '').join('\n');
-    }
-  }, [commentingLine, chunk.lines]);
-
-  const handleSubmitComment = useCallback(
-    async (body: string) => {
-      if (commentingLine !== null && onAddComment) {
-        const codeContent = getSelectedCodeContent();
-        const fullBody =
-          commentingLine.quote === undefined ? body : quoteSelection(commentingLine.quote, body);
-        await onAddComment(commentingLine.lineNumber, fullBody, codeContent, commentingLine.side);
-        setCommentingLine(null);
-      }
-    },
-    [commentingLine, onAddComment, getSelectedCodeContent],
-  );
+  const flashedThread = threads.find(({ id }) => id === linePick.flashedThreadId);
+  const holdsFlashed = (line: DiffLine) =>
+    !!flashedThread &&
+    threadHoldsLine(
+      flashedThread,
+      flashedThread.side ?? 'new',
+      lineNumberOn(line, flashedThread.side ?? 'new'),
+    );
+  const showThread = (thread: CommentThread) => {
+    goToThreadCard(thread.id);
+    linePick.flash(thread.id);
+  };
 
   const getThreadsForLine = (line: DiffLine) => {
     return threads
@@ -364,21 +358,11 @@ export const DiffChunk = memo(function DiffChunk({
       }
     }
 
-    // Show selection for existing comment
-    const lineNumber = commentingLine && lineNumberOn(line, commentingLine.side);
-    if (commentingLine && lineNumber) {
-      const start = Array.isArray(commentingLine.lineNumber)
-        ? commentingLine.lineNumber[0]
-        : commentingLine.lineNumber;
-      const end = Array.isArray(commentingLine.lineNumber)
-        ? commentingLine.lineNumber[1]
-        : commentingLine.lineNumber;
-      if (lineNumber >= start && lineNumber <= end) {
-        return 'comment-selected';
-      }
+    if (pick && pickHolds(pick, pick.side, lineNumberOn(line, pick.side))) {
+      return 'comment-selected';
     }
 
-    return '';
+    return holdsFlashed(line) ? 'comment-flash' : '';
   };
 
   // Compute word-level diff for unified mode
@@ -469,7 +453,12 @@ export const DiffChunk = memo(function DiffChunk({
   }
 
   const { editing, editLine, editHunk, editRange } = directEditing;
-  const folds = lockFoldsUnderForms(foldedLines, chunk.lines, commentingLine, editing);
+  const folds = lockFoldsUnderForms(
+    foldedLines,
+    chunk.lines,
+    pick ? pickedRanges.map((lineNumber) => ({ side: pick.side, lineNumber })) : null,
+    editing,
+  );
   const selected = codeSelection.selected;
 
   return (
@@ -482,11 +471,7 @@ export const DiffChunk = memo(function DiffChunk({
           canHover={canHover}
           onPress={codeSelection.hold}
           onComment={() => {
-            setCommentingLine({
-              side: selected.side,
-              lineNumber: selected.lineNumber,
-              quote: selected.text,
-            });
+            linePick.start(selected.side, selected.lineNumber, selected.text);
             codeSelection.clear();
           }}
           onEdit={
@@ -523,6 +508,15 @@ export const DiffChunk = memo(function DiffChunk({
                 ? commentingLine.lineNumber[1]
                 : commentingLine.lineNumber
               : null;
+            const markedThreads = threads.filter(
+              (thread) =>
+                thread.extraLines &&
+                extraRangeEndsAt(
+                  thread,
+                  thread.side ?? 'new',
+                  lineNumberOn(line, thread.side ?? 'new'),
+                ),
+            );
 
             const commentLineNumber =
               line.type === 'delete' ? line.oldLineNumber : line.newLineNumber;
@@ -576,6 +570,7 @@ export const DiffChunk = memo(function DiffChunk({
                   onLineNumberMouseDown={(e) => {
                     if (e.button !== 0 || e.shiftKey || !selection) return;
                     e.preventDefault();
+                    if (e.ctrlKey || e.metaKey || linePick.addMode) return;
                     startCommentDrag(selection, line, true);
                   }}
                   canHover={canHover}
@@ -609,6 +604,10 @@ export const DiffChunk = memo(function DiffChunk({
                     }
                     handleRowClick({
                       isShiftClick: e.shiftKey,
+                      addsLine:
+                        (e.ctrlKey || e.metaKey || linePick.addMode) &&
+                        e.target instanceof Element &&
+                        e.target.closest('[data-line-number-cell]') !== null,
                       lineIndex: index,
                       navigationSide: side,
                       selection,
@@ -622,6 +621,14 @@ export const DiffChunk = memo(function DiffChunk({
                   colSpan={3}
                   syntaxTheme={syntaxTheme}
                 />
+
+                {markedThreads.map((thread) => (
+                  <tr key={`marker-${thread.id}`} data-thread-marker={thread.id}>
+                    <td colSpan={3} className="p-0">
+                      <ThreadMarker thread={thread} onGo={() => showThread(thread)} />
+                    </td>
+                  </tr>
+                ))}
 
                 {lineThreads.map((thread) => {
                   const layout = getCommentLayout(line);
@@ -647,6 +654,9 @@ export const DiffChunk = memo(function DiffChunk({
                           >
                             <div
                               className={`${layout === 'full' ? 'w-full' : 'w-1/2'} m-2 mx-4 min-w-0`}
+                              onClick={
+                                thread.extraLines ? () => linePick.flash(thread.id) : undefined
+                              }
                             >
                               <CommentThreadCard
                                 thread={thread}
@@ -704,9 +714,17 @@ export const DiffChunk = memo(function DiffChunk({
                           <div
                             className={`${getCommentLayout(line) === 'full' ? 'w-full' : 'w-1/2'}`}
                           >
+                            <PickNotice notice={linePick.notice} />
                             <CommentForm
                               onSubmit={handleSubmitComment}
                               onCancel={handleCancelComment}
+                              header={
+                                <PickControls
+                                  store={linePick}
+                                  ranges={pickedRanges}
+                                  canHover={canHover}
+                                />
+                              }
                               quote={commentingLine.quote}
                               selectedCode={getSelectedCodeContent()}
                               syntaxTheme={syntaxTheme}

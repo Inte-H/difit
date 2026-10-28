@@ -14,8 +14,10 @@ import { threadReviewControls, useFixupOverlay } from '../contexts/FixupOverlayC
 import { type CursorPosition } from '../hooks/keyboardNavigation';
 import { useCanHover } from '../hooks/useCanHover';
 import { useCodeSelection } from '../hooks/useCodeSelection';
+import { cursorLineOf, useLinePick } from '../contexts/LinePickContext';
 import { useDirectEditing } from '../hooks/useDirectEditing';
 import { codeCellAttributes, quoteSelection } from '../utils/codeSelection';
+import { extraRangeEndsAt, pickHolds, rangesOfPick, threadHoldsLine } from '../utils/linePick';
 import {
   computeWordLevelDiff,
   shouldComputeWordDiff,
@@ -29,6 +31,7 @@ import { DirectEditForm } from './DirectEditForm';
 import { EditHunkButton } from './EditLineButton';
 import { EnhancedPrismSyntaxHighlighter } from './EnhancedPrismSyntaxHighlighter';
 import { FixupBoxRows, FixupOverlayRow } from './FixupOverlayCard';
+import { goToThreadCard, PickControls, PickNotice, ThreadMarker } from './LinePickParts';
 import {
   type FoldedLines,
   FoldedLinesRow,
@@ -185,18 +188,27 @@ export function SideBySideDiffChunk({
   const [startLine, setStartLine] = useState<LineSelection | null>(null);
   const [endLine, setEndLine] = useState<LineSelection | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const [openCommentLine, setCommentingLine] = useState<{
-    side: DiffSide;
-    lineNumber: LineNumber;
-    quote?: string;
-  } | null>(null);
-  const commentingLine = onAddComment ? openCommentLine : null;
-  const [selectionAnchor, setSelectionAnchor] = useState<LineSelection | null>(null);
+  const linePick = useLinePick(
+    chunk.lines,
+    cursor ? cursorLineOf(chunk.lines[cursor.lineIndex], cursor.side) : null,
+  );
+  const pick = onAddComment ? linePick.pick : null;
+  const pickedRanges = useMemo(() => (pick ? rangesOfPick(pick) : []), [pick]);
+  const formRange = pickedRanges.at(-1);
+  const commentingLine =
+    pick && formRange !== undefined
+      ? { side: pick.side, lineNumber: formRange, quote: linePick.quote }
+      : null;
   const [hoveredLine, setHoveredLine] = useState<LineSelection | null>(null);
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
   const { editing, editLine, editHunk, editRange } = directEditing;
-  const folds = lockFoldsUnderForms(foldedLines, chunk.lines, commentingLine, editing);
+  const folds = lockFoldsUnderForms(
+    foldedLines,
+    chunk.lines,
+    pick ? pickedRanges.map((lineNumber) => ({ side: pick.side, lineNumber })) : null,
+    editing,
+  );
   const foldOf = (sideLine: SideBySideLine | undefined) =>
     sideLine &&
     (foldAt(folds, sideLine.oldLineOriginalIndex ?? -1) ??
@@ -206,6 +218,8 @@ export function SideBySideDiffChunk({
   const containerRef = useRef<HTMLDivElement>(null);
   const codeSelection = useCodeSelection(containerRef, 'split');
 
+  const { open: openPick, start: startPick } = linePick;
+
   // Handle comment trigger from keyboard navigation
   useEffect(() => {
     if (commentTrigger?.lineIndex !== undefined) {
@@ -213,43 +227,24 @@ export function SideBySideDiffChunk({
       if (line && line.type !== 'delete') {
         const lineNumber = line.newLineNumber;
         if (lineNumber) {
-          setCommentingLine({ side: 'new', lineNumber });
+          startPick('new', lineNumber);
           onCommentTriggerHandled?.();
         }
       }
     }
-  }, [commentTrigger, chunk.lines, onCommentTriggerHandled]);
+  }, [commentTrigger, chunk.lines, onCommentTriggerHandled, startPick]);
 
   const handleAddComment = useCallback(
-    (side: DiffSide, lineNumber: LineNumber) => {
-      if (commentingLine?.side === side && commentingLine?.lineNumber === lineNumber) {
-        setCommentingLine(null);
-      } else {
-        setCommentingLine({ side, lineNumber });
-      }
-    },
-    [commentingLine],
+    (side: DiffSide, lineNumber: LineNumber) => openPick(side, lineNumber),
+    [openPick],
   );
 
-  const getCommentLineFromAnchor = (selection: LineSelection): LineNumber => {
-    if (!selectionAnchor || selectionAnchor.side !== selection.side) {
-      return selection.lineNumber;
-    }
-
-    const min = Math.min(selectionAnchor.lineNumber, selection.lineNumber);
-    const max = Math.max(selectionAnchor.lineNumber, selection.lineNumber);
-    return min === max ? selection.lineNumber : [min, max];
-  };
-
-  const openShiftClickComment = (selection: LineSelection) => {
-    handleAddComment(selection.side, getCommentLineFromAnchor(selection));
-    setSelectionAnchor(selection);
-  };
+  const openShiftClickComment = (selection: LineSelection) => linePick.extend(selection);
 
   const startCommentDrag = (selection: LineSelection, fromLineNumber = false) => {
     if (!onAddComment) return;
     dragFromLineNumber.current = fromLineNumber;
-    setSelectionAnchor(selection);
+    linePick.setAnchor(selection);
     setStartLine(selection);
     setEndLine(selection);
     setIsDragging(true);
@@ -274,10 +269,12 @@ export function SideBySideDiffChunk({
 
   const handleRowClick = ({
     isShiftClick,
+    addsLine,
     target,
     sideLine,
   }: {
     isShiftClick: boolean;
+    addsLine: boolean;
     target: HTMLElement;
     sideLine: SideBySideLine;
   }) => {
@@ -291,7 +288,12 @@ export function SideBySideDiffChunk({
       return;
     }
 
-    setSelectionAnchor(clickedLine.selection);
+    if (addsLine && onAddComment && target.closest('[data-line-number-cell]')) {
+      linePick.toggle(clickedLine.selection);
+      return;
+    }
+
+    linePick.setAnchor(clickedLine.selection);
     onLineClick?.(fileIndex, chunkIndex, clickedLine.lineIndex, clickedLine.navigationSide);
   };
 
@@ -333,46 +335,37 @@ export function SideBySideDiffChunk({
     };
   }, [isDragging, startLine, endLine, handleAddComment]);
 
-  const handleCancelComment = useCallback(() => {
-    setCommentingLine(null);
-  }, []);
+  const handleCancelComment = linePick.close;
 
-  // Get the code content for the selected lines (for suggestion feature)
-  const getSelectedCodeContent = useCallback((): string => {
-    if (!commentingLine) return '';
+  const getSelectedCodeContent = (): string =>
+    commentingLine ? linePick.contentOf(commentingLine.side, commentingLine.lineNumber) : '';
 
-    const { side, lineNumber } = commentingLine;
-    const lines = chunk.lines;
+  const handleSubmitComment = async (body: string) => {
+    if (commentingLine === null || !onAddComment) return;
+    const { side, lineNumber, quote } = commentingLine;
+    const extraLines = pickedRanges.slice(0, -1);
+    await onAddComment(
+      lineNumber,
+      quote === undefined ? body : quoteSelection(quote, body),
+      linePick.contentOf(side, lineNumber),
+      side,
+      ...(extraLines.length > 0
+        ? [
+            {
+              lines: extraLines,
+              contents: extraLines.map((line) => linePick.contentOf(side, line)),
+            },
+          ]
+        : []),
+    );
+    linePick.close();
+  };
 
-    if (typeof lineNumber === 'number') {
-      // Single line
-      const line = lines.find((l) =>
-        side === 'old' ? l.oldLineNumber === lineNumber : l.newLineNumber === lineNumber,
-      );
-      return line?.content ?? '';
-    } else {
-      // Range of lines
-      const [start, end] = lineNumber;
-      const selectedLines = lines.filter((l) => {
-        const ln = side === 'old' ? l.oldLineNumber : l.newLineNumber;
-        return ln !== undefined && ln >= start && ln <= end;
-      });
-      return selectedLines.map((l) => l.content ?? '').join('\n');
-    }
-  }, [commentingLine, chunk.lines]);
-
-  const handleSubmitComment = useCallback(
-    async (body: string) => {
-      if (commentingLine !== null && onAddComment) {
-        const codeContent = getSelectedCodeContent();
-        const fullBody =
-          commentingLine.quote === undefined ? body : quoteSelection(commentingLine.quote, body);
-        await onAddComment(commentingLine.lineNumber, fullBody, codeContent, commentingLine.side);
-        setCommentingLine(null);
-      }
-    },
-    [commentingLine, onAddComment, getSelectedCodeContent],
-  );
+  const flashedThread = threads.find(({ id }) => id === linePick.flashedThreadId);
+  const showThread = (thread: CommentThread) => {
+    goToThreadCard(thread.id);
+    linePick.flash(thread.id);
+  };
 
   const getProcomputedTokens = useCallback(
     (getTokens: typeof getOldTokens, lineNumber: number | null | undefined) => {
@@ -437,20 +430,13 @@ export function SideBySideDiffChunk({
       }
     }
 
-    // Show selection for existing comment
-    if (commentingLine && commentingLine.side === side) {
-      const lineNumberRange = Array.isArray(commentingLine.lineNumber)
-        ? commentingLine.lineNumber
-        : [commentingLine.lineNumber, commentingLine.lineNumber];
-      const start = lineNumberRange[0];
-      const end = lineNumberRange[1];
-
-      if (start !== undefined && end !== undefined && lineNumber >= start && lineNumber <= end) {
-        return 'after:bg-diff-selected-bg after:absolute after:inset-0 after:border-l-5 after:border-l-diff-selected-border after:pointer-events-none';
-      }
+    if (pickHolds(pick, side, lineNumber)) {
+      return 'after:bg-diff-selected-bg after:absolute after:inset-0 after:border-l-5 after:border-l-diff-selected-border after:pointer-events-none';
     }
 
-    return '';
+    return flashedThread && threadHoldsLine(flashedThread, side, lineNumber)
+      ? 'after:bg-blue-400/20 after:absolute after:inset-0 after:pointer-events-none'
+      : '';
   };
 
   // Convert unified diff to split format
@@ -569,6 +555,7 @@ export function SideBySideDiffChunk({
   const startLineNumberDrag = (selection: LineSelection | null) => (e: React.MouseEvent) => {
     if (e.button !== 0 || e.shiftKey || !selection) return;
     e.preventDefault();
+    if (e.ctrlKey || e.metaKey || linePick.addMode) return;
     startCommentDrag(selection, true);
   };
 
@@ -582,11 +569,7 @@ export function SideBySideDiffChunk({
           canHover={canHover}
           onPress={codeSelection.hold}
           onComment={() => {
-            setCommentingLine({
-              side: selected.side,
-              lineNumber: selected.lineNumber,
-              quote: selected.text,
-            });
+            linePick.start(selected.side, selected.lineNumber, selected.text);
             codeSelection.clear();
           }}
           onEdit={
@@ -710,6 +693,7 @@ export function SideBySideDiffChunk({
                     }
                     handleRowClick({
                       isShiftClick: e.shiftKey,
+                      addsLine: e.ctrlKey || e.metaKey || linePick.addMode,
                       target,
                       sideLine,
                     });
@@ -787,6 +771,7 @@ export function SideBySideDiffChunk({
                     id={oldLineNavId}
                     className={`w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible ${highlightOldCell ? cellHighlightClass : ''}`}
                     onMouseDown={startLineNumberDrag(oldSelection)}
+                    data-line-number-cell
                   >
                     <span>{sideLine.oldLineNumber || ''}</span>
                     {isOldHovered && (
@@ -847,6 +832,7 @@ export function SideBySideDiffChunk({
                     id={newLineNavId}
                     className={`w-[var(--line-number-width)] min-w-[var(--line-number-width)] max-w-[var(--line-number-width)] px-2 text-right text-github-text-muted bg-github-bg-secondary border-r border-github-border select-none align-top relative overflow-visible ${highlightNewCell ? cellHighlightClass : ''}`}
                     onMouseDown={startLineNumberDrag(newSelection)}
+                    data-line-number-cell
                   >
                     <span>{sideLine.newLineNumber || ''}</span>
                     {isNewHovered && (
@@ -914,6 +900,20 @@ export function SideBySideDiffChunk({
                   syntaxTheme={syntaxTheme}
                 />
 
+                {threads
+                  .filter(
+                    (thread) =>
+                      extraRangeEndsAt(thread, 'old', sideLine.oldLineNumber) ||
+                      extraRangeEndsAt(thread, 'new', sideLine.newLineNumber),
+                  )
+                  .map((thread) => (
+                    <tr key={`marker-${thread.id}`} data-thread-marker={thread.id}>
+                      <td colSpan={4} className="p-0">
+                        <ThreadMarker thread={thread} onGo={() => showThread(thread)} />
+                      </td>
+                    </tr>
+                  ))}
+
                 {allThreads.map((thread) => (
                   <FixupOverlayRow
                     key={`fixup-${thread.id}`}
@@ -953,7 +953,12 @@ export function SideBySideDiffChunk({
                             }`}
                           >
                             <div className={`${layout === 'full' ? 'w-full' : 'w-1/2'} min-w-0`}>
-                              <div className="m-2 mx-3">
+                              <div
+                                className="m-2 mx-3"
+                                onClick={
+                                  thread.extraLines ? () => linePick.flash(thread.id) : undefined
+                                }
+                              >
                                 <CommentThreadCard
                                   thread={thread}
                                   review={review}
@@ -1021,9 +1026,17 @@ export function SideBySideDiffChunk({
                           }`}
                         >
                           <div className={`w-1/2`}>
+                            <PickNotice notice={linePick.notice} />
                             <CommentForm
                               onSubmit={handleSubmitComment}
                               onCancel={handleCancelComment}
+                              header={
+                                <PickControls
+                                  store={linePick}
+                                  ranges={pickedRanges}
+                                  canHover={canHover}
+                                />
+                              }
                               quote={commentingLine.quote}
                               selectedCode={getSelectedCodeContent()}
                               syntaxTheme={syntaxTheme}

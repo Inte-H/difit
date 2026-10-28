@@ -6,6 +6,7 @@ import { DiffChunk } from '../components/DiffChunk';
 import { DEFAULT_EXPAND_COUNT, ExpandButton } from '../components/ExpandButton';
 import type { FoldedLines } from '../components/FoldedLines';
 import { useFixupOverlay } from '../contexts/FixupOverlayContext';
+import { cursorLineOf, LinePickProvider } from '../contexts/LinePickContext';
 import type { CursorPosition } from '../hooks/keyboardNavigation';
 import { rangesAroundNewLines } from '../hooks/useExpandedLines';
 
@@ -130,6 +131,15 @@ export function TextDiffViewer({
     );
   };
 
+  const fileLines = useMemo(() => mergedChunks.flatMap((chunk) => chunk.lines), [mergedChunks]);
+  const cursorLine = useMemo(
+    () =>
+      cursor
+        ? cursorLineOf(mergedChunks[cursor.chunkIndex]?.lines[cursor.lineIndex], cursor.side)
+        : null,
+    [cursor, mergedChunks],
+  );
+
   const fileBoxes = useFixupOverlay().boxesByFile.get(file.path);
   const boxAnchors = useMemo(() => new Set(fileBoxes?.keys()), [fileBoxes]);
 
@@ -209,7 +219,7 @@ export function TextDiffViewer({
   );
 
   return (
-    <>
+    <LinePickProvider lines={fileLines} cursorLine={cursorLine}>
       {mergedChunks.map((mergedChunk, mergedIndex) => {
         const isFirstMerged = mergedIndex === 0;
         const isLastMerged = mergedIndex === mergedChunks.length - 1;
@@ -252,6 +262,6 @@ export function TextDiffViewer({
           </React.Fragment>
         );
       })}
-    </>
+    </LinePickProvider>
   );
 }
