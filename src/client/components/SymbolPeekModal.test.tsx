@@ -562,6 +562,27 @@ describe('SymbolPeekModal with a commit index', () => {
     );
   });
 
+  it('marks only the uses that were found by name in an index answer', async () => {
+    render(modal());
+    await answer(
+      {
+        ...byIndex,
+        references: [
+          { path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' },
+          { path: 'src/other.ts', line: 5, text: 'other.addOne(2);', source: 'name' },
+        ],
+      },
+      1,
+    );
+
+    const list = await screen.findByRole('navigation');
+    const rows = within(list).getAllByRole('listitem');
+    const marked = rows.filter((row) => within(row).queryByText('이름 검색'));
+    expect(marked.map((row) => row.textContent)).toEqual([
+      expect.stringContaining('src/other.ts:5'),
+    ]);
+  });
+
   it('gives a name clicked inside the window its line and column', async () => {
     render(modal());
     await answer(byIndex, 1);

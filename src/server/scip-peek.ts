@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 
 import { type SymbolMatch, type SymbolSearchResponse } from '../types/diff.js';
+import type { LineChanges } from './line-changes.js';
 import { POSITION_ENCODING, type ScipIndex, externalSymbolDisplayName } from './scip-index.js';
 import { MAX_DEFINITIONS, MAX_REFERENCES, clipLine } from './symbol-search.js';
 
@@ -151,16 +152,54 @@ function oneSitePerLine(sites: Site[]): Site[] {
   return [...byLine.values()];
 }
 
+const IDENTIFIER_PART = /[\p{L}\p{N}_$]/u;
+
+function holdsName(text: string, name: string): boolean {
+  for (let at = text.indexOf(name); at !== -1; at = text.indexOf(name, at + 1)) {
+    const before = text[at - 1];
+    const after = text[at + name.length];
+    if (
+      (before === undefined || !IDENTIFIER_PART.test(before)) &&
+      (after === undefined || !IDENTIFIER_PART.test(after))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+interface Placed {
+  path: string;
+  line: number;
+  via?: SymbolMatch['via'];
+  // Set when the site's line changed since the indexed commit: the lines that replaced it,
+  // each listed when it holds one of the names searched for.
+  replaced?: { first: number; last: number };
+}
+
+function placeSites(sites: Site[], changes: LineChanges | undefined): Placed[] {
+  if (!changes) return sites;
+  return sites.flatMap((site): Placed[] => {
+    const now = changes.toNewer(site.path, site.line);
+    if (!now) return [];
+    if ('line' in now) return [site.via ? { ...now, via: site.via } : now];
+    return [{ path: now.path, line: now.first, replaced: { first: now.first, last: now.last } }];
+  });
+}
+
 // Null when the index cannot answer for that spot: it counts columns in a unit other than
 // the click's UTF-16, the file is not in it, nothing is named there, or what is named there
 // is not `name`. Sites in files the commit does not hold, such as annotation processor
-// output, are left out.
+// output, are left out. With `changes` the index belongs to an older commit: the clicked line
+// must be one the commit left as it was, and sites on lines changed since are marked as found
+// by name.
 export async function answerFromScipIndex(
   index: ScipIndex,
   name: string,
   ref: string,
   at: SymbolPosition,
   files: CommitFiles,
+  changes?: LineChanges,
 ): Promise<SymbolSearchResponse | null> {
   if (
     index.positionEncoding !== POSITION_ENCODING.unspecified &&
@@ -168,13 +207,14 @@ export async function answerFromScipIndex(
   ) {
     return null;
   }
-  if (!isJavaPath(at.path) || !index.hasDocument(at.path)) return null;
-  const found = index.lookup(at.path, at.line, at.column);
+  const indexed = changes ? changes.toOlder(at.path, at.line) : at;
+  if (!indexed || !isJavaPath(at.path) || !index.hasDocument(indexed.path)) return null;
+  const found = index.lookup(indexed.path, indexed.line, at.column);
   if (!found) return null;
   const clicked = [...found.definitions, ...found.references].find(
     (site) =>
-      site.path === at.path &&
-      site.line === at.line &&
+      site.path === indexed.path &&
+      site.line === indexed.line &&
       site.startCol <= at.column &&
       // An end equal to the start marks a range that runs onto later lines.
       (at.column < site.endCol || site.endCol === site.startCol),
@@ -185,14 +225,16 @@ export async function answerFromScipIndex(
   }
 
   const uses: Site[] = found.fieldUses ?? found.references;
+  const placedDefinitions = placeSites(oneSitePerLine(found.definitions), changes);
+  const placedReferences = placeSites(oneSitePerLine(uses), changes);
   const committed = await files.existing([
     at.path,
-    ...found.definitions.map((site) => site.path),
-    ...uses.map((site) => site.path),
+    ...placedDefinitions.map((site) => site.path),
+    ...placedReferences.map((site) => site.path),
   ]);
   if (!committed.has(at.path)) return null;
-  const definitions = oneSitePerLine(found.definitions).filter((site) => committed.has(site.path));
-  const references = oneSitePerLine(uses).filter((site) => committed.has(site.path));
+  const definitions = placedDefinitions.filter((site) => committed.has(site.path));
+  const references = placedReferences.filter((site) => committed.has(site.path));
   const shownDefinitions = definitions.slice(0, MAX_DEFINITIONS);
   const shownReferences = references.slice(0, MAX_REFERENCES);
   const lines = await files.readLines([
@@ -203,17 +245,32 @@ export async function answerFromScipIndex(
   const clickedText = lines.get(at.path)?.[at.line - 1] ?? '';
   if (clickedText.slice(clicked.startCol, clicked.startCol + name.length) !== name) return null;
 
-  const toMatch = (site: Site): SymbolMatch => ({
-    path: site.path,
-    line: site.line,
-    text: clipLine(lines.get(site.path)?.[site.line - 1] ?? ''),
-    ...(site.via ? { via: site.via } : {}),
-  });
+  const names = [...new Set([name, ...(found.fieldNames ?? [])])];
+  const toMatches = (sites: Placed[]): SymbolMatch[] => {
+    const listed = new Set<string>();
+    return sites.flatMap((site) => {
+      const fileLines = lines.get(site.path) ?? [];
+      const { first, last } = site.replaced ?? { first: site.line, last: site.line };
+      const matches: SymbolMatch[] = [];
+      for (let line = first; line <= last; line++) {
+        const text = fileLines[line - 1] ?? '';
+        const key = `${site.path}:${line}`;
+        if (listed.has(key) || (site.replaced && !names.some((held) => holdsName(text, held)))) {
+          continue;
+        }
+        listed.add(key);
+        const match: SymbolMatch = { path: site.path, line, text: clipLine(text) };
+        if (site.replaced) matches.push({ ...match, source: 'name' });
+        else matches.push(site.via ? { ...match, via: site.via } : match);
+      }
+      return matches;
+    });
+  };
   return {
     name,
     ref,
-    definitions: shownDefinitions.map(toMatch),
-    references: shownReferences.map(toMatch),
+    definitions: toMatches(shownDefinitions),
+    references: toMatches(shownReferences),
     truncated: definitions.length > MAX_DEFINITIONS || references.length > MAX_REFERENCES,
     source: 'index',
     ...(found.external ? { library: externalSymbolDisplayName(found.symbol) } : {}),

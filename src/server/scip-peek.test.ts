@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { parseLineChanges } from './line-changes';
 import { POSITION_ENCODING, type ScipIndex, convertScipIndex } from './scip-index';
 import { type CommitFiles, answerFromScipIndex, commitFiles } from './scip-peek';
 
@@ -204,6 +205,139 @@ describe('answerFromScipIndex', () => {
     expect(await answerIn(POSITION_ENCODING.utf8)).toBeNull();
     expect((await answerIn(POSITION_ENCODING.utf16))?.source).toBe('index');
   });
+
+  describe('from the index of an older commit', () => {
+    const edited = `${fixtureLines(SERVICE)[16]} // edited`;
+    const newerService = [
+      ...fixtureLines(SERVICE).slice(0, 1),
+      '// one',
+      '// two',
+      ...fixtureLines(SERVICE).slice(1, 16),
+      edited,
+      ...fixtureLines(SERVICE).slice(17),
+    ];
+    const newer: CommitFiles = {
+      existing: async (paths) => new Set(paths),
+      readLines: async (paths) =>
+        new Map(paths.map((path) => [path, path === SERVICE ? newerService : fixtureLines(path)])),
+    };
+    const changes = parseLineChanges(
+      [
+        `diff --git a/${SERVICE} b/${SERVICE}`,
+        `--- a/${SERVICE}`,
+        `+++ b/${SERVICE}`,
+        '@@ -1,0 +2,2 @@',
+        '+// one',
+        '+// two',
+        '@@ -17 +19 @@',
+        `-${fixtureLines(SERVICE)[16]}`,
+        `+${edited}`,
+        '',
+      ].join('\n'),
+    )!;
+    const borrowed = (name: string, path: string, line: number, column: number) =>
+      answerFromScipIndex(index, name, 'fix1234', { path, line, column }, newer, changes);
+
+    it('answers a click on a line left as it was, in the lines of the newer commit', async () => {
+      const result = await borrowed('이름찾기', SERVICE, 16, columnOf(SERVICE, 14, '이름찾기'));
+
+      expect(result).toEqual({
+        name: '이름찾기',
+        ref: 'fix1234',
+        definitions: [{ path: SERVICE, line: 16, text: newerService[15] }],
+        references: [{ path: SERVICE, line: 23, text: newerService[22] }],
+        truncated: false,
+        source: 'index',
+      });
+    });
+
+    it('marks a site on a line changed since as found by name', async () => {
+      const result = await borrowed('findById', PORT, 6, columnOf(PORT, 6, 'findById'));
+
+      expect(result?.definitions).toEqual([match(PORT, 6)]);
+      expect(result?.references).toEqual([
+        { path: SERVICE, line: 19, text: edited, source: 'name' },
+      ]);
+    });
+
+    it('leaves a click on a line changed since to name search', async () => {
+      const column = columnOf(SERVICE, 17, 'findById');
+      expect(await borrowed('findById', SERVICE, 19, column)).toBeNull();
+      expect(await borrowed('findById', SERVICE, 17, column)).toBeNull();
+    });
+
+    it('lists each line holding the name among the lines that replaced a site', async () => {
+      const replacement = [
+        '        Optional<String> found = port.findById(id);',
+        '        String findByIdText = "";',
+        '        return found.orElse(cache.findById(id).orElse(기본값));',
+      ];
+      const split = [
+        ...fixtureLines(SERVICE).slice(0, 16),
+        ...replacement,
+        ...fixtureLines(SERVICE).slice(17),
+      ];
+      const files: CommitFiles = {
+        existing: async (paths) => new Set(paths),
+        readLines: async (paths) =>
+          new Map(paths.map((path) => [path, path === SERVICE ? split : fixtureLines(path)])),
+      };
+      const splitChanges = parseLineChanges(
+        [
+          `diff --git a/${SERVICE} b/${SERVICE}`,
+          `--- a/${SERVICE}`,
+          `+++ b/${SERVICE}`,
+          '@@ -17 +17,3 @@',
+          `-${fixtureLines(SERVICE)[16]}`,
+          ...replacement.map((line) => `+${line}`),
+          '',
+        ].join('\n'),
+      )!;
+
+      const result = await answerFromScipIndex(
+        index,
+        'findById',
+        'fix1234',
+        { path: PORT, line: 6, column: columnOf(PORT, 6, 'findById') },
+        files,
+        splitChanges,
+      );
+
+      expect(result?.references).toEqual([
+        { path: SERVICE, line: 17, text: replacement[0], source: 'name' },
+        { path: SERVICE, line: 19, text: replacement[2], source: 'name' },
+      ]);
+    });
+  });
+
+  it('lists a use on the line of the declaration under both', async () => {
+    const raw = Buffer.from(
+      lengthDelimited(2, [
+        ...text(1, 'A.java'),
+        ...lengthDelimited(2, occurrence([0, 4, 7], 'pkg A#f().', 1)),
+        ...lengthDelimited(2, occurrence([0, 19, 22], 'pkg A#f().')),
+      ]),
+    );
+    const rawPath = join(temp, 'recursive.scip');
+    writeFileSync(rawPath, raw);
+    const recursive = await convertScipIndex(rawPath);
+    const line = 'int foo() { return foo(); }';
+    const files: CommitFiles = {
+      existing: async (paths) => new Set(paths),
+      readLines: async (paths) => new Map(paths.map((path) => [path, [line]])),
+    };
+
+    const result = await answerFromScipIndex(
+      recursive,
+      'foo',
+      'HEAD',
+      { path: 'A.java', line: 1, column: 4 },
+      files,
+    );
+
+    expect(result?.definitions).toEqual([{ path: 'A.java', line: 1, text: line }]);
+    expect(result?.references).toEqual([{ path: 'A.java', line: 1, text: line }]);
+  });
 });
 
 describe('answerFromScipIndex on Lombok classes', () => {
@@ -254,6 +388,65 @@ describe('answerFromScipIndex on Lombok classes', () => {
 
   it('shows a line that uses the field and calls its getter as a direct use', async () => {
     expect((await answer('left', PAIR, 11))?.references).toEqual([use(PAIR, 8)]);
+  });
+
+  describe('from the index of an older commit', () => {
+    const editedLines = (edits: Record<string, number[]>): CommitFiles => ({
+      existing: async (paths) => new Set(paths),
+      readLines: async (paths) =>
+        new Map(
+          paths.map((path) => [
+            path,
+            lines(path).map((text, i) =>
+              edits[path]?.includes(i + 1) ? `${text} // edited` : text,
+            ),
+          ]),
+        ),
+    });
+    const changesOf = (edits: Record<string, number[]>) =>
+      parseLineChanges(
+        Object.entries(edits)
+          .flatMap(([path, edited]) => [
+            `diff --git a/${path} b/${path}`,
+            `--- a/${path}`,
+            `+++ b/${path}`,
+            ...edited.flatMap((line) => [
+              `@@ -${line} +${line} @@`,
+              `-${lines(path)[line - 1]}`,
+              `+${lines(path)[line - 1]} // edited`,
+            ]),
+          ])
+          .concat('')
+          .join('\n'),
+      )!;
+    const borrowed = (name: string, path: string, line: number, edits: Record<string, number[]>) =>
+      answerFromScipIndex(
+        index,
+        name,
+        'fix1234',
+        { path, line, column: (lines(path)[line - 1] ?? '').indexOf(name) },
+        editedLines(edits),
+        changesOf(edits),
+      );
+    const byName = (path: string, line: number) => ({
+      path,
+      line,
+      text: `${lines(path)[line - 1]} // edited`,
+      source: 'name',
+    });
+
+    it('keeps changed lines that call the getter or builder of a clicked field', async () => {
+      const result = await borrowed('code', DAT, 9, { [USE]: [8, 10] });
+
+      expect(result?.definitions).toEqual([use(DAT, 9)]);
+      expect(result?.references).toEqual([byName(USE, 8), byName(USE, 10)]);
+    });
+
+    it('keeps a changed declaration of the field behind a clicked getter', async () => {
+      const result = await borrowed('getCode', USE, 8, { [DAT]: [9] });
+
+      expect(result?.definitions).toEqual([byName(DAT, 9)]);
+    });
   });
 });
 
