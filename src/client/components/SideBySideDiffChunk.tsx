@@ -214,6 +214,7 @@ export function SideBySideDiffChunk({
     (foldAt(folds, sideLine.oldLineOriginalIndex ?? -1) ??
       foldAt(folds, sideLine.newLineOriginalIndex ?? -1));
   const dragFromLineNumber = useRef(false);
+  const toggleOnClick = useRef<LineSelection | null>(null);
   const canHover = useCanHover();
   const containerRef = useRef<HTMLDivElement>(null);
   const codeSelection = useCodeSelection(containerRef, 'split');
@@ -259,6 +260,7 @@ export function SideBySideDiffChunk({
     addsLine: boolean;
     selection: LineSelection | null;
   }) => {
+    toggleOnClick.current = null;
     if (!selection) return;
 
     if (isShiftClick) {
@@ -266,7 +268,10 @@ export function SideBySideDiffChunk({
       return;
     }
 
-    if (addsLine) return;
+    if (addsLine) {
+      toggleOnClick.current = selection;
+      return;
+    }
 
     startCommentDrag(selection);
   };
@@ -299,6 +304,12 @@ export function SideBySideDiffChunk({
 
     linePick.setAnchor(clickedLine.selection);
     onLineClick?.(fileIndex, chunkIndex, clickedLine.lineIndex, clickedLine.navigationSide);
+  };
+
+  const toggleAfterPress = () => {
+    const selection = toggleOnClick.current;
+    toggleOnClick.current = null;
+    if (selection) linePick.toggle(selection);
   };
 
   // Global mouse up handler for drag selection: commit the selection wherever
@@ -552,11 +563,7 @@ export function SideBySideDiffChunk({
             }
             handleCommentButtonMouseDown({ isShiftClick: e.shiftKey, addsLine, selection });
           },
-          onCommentClick: (e: React.MouseEvent<HTMLButtonElement>) => {
-            if (selection && (e.ctrlKey || e.metaKey || linePick.addMode)) {
-              linePick.toggle(selection);
-            }
-          },
+          onCommentClick: toggleAfterPress,
           onComment: () => {
             if (selection) handleAddComment(selection.side, selection.lineNumber);
           },

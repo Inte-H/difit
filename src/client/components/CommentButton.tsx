@@ -3,7 +3,7 @@ import React from 'react';
 
 interface CommentButtonProps {
   onMouseDown: (e: React.MouseEvent<HTMLButtonElement>) => void;
-  onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onClick?: () => void;
   title?: string;
 }
 
@@ -30,7 +30,7 @@ export const CommentButton: React.FC<CommentButtonProps> = React.memo(
         onMouseDown={onMouseDown}
         onClick={(e) => {
           e.stopPropagation();
-          onClick?.(e);
+          onClick?.();
         }}
         title={title}
       >

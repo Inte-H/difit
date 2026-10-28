@@ -127,6 +127,7 @@ export const DiffChunk = memo(function DiffChunk({
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const dragFromLineNumber = useRef(false);
   const dragStartRow = useRef<DiffLine | null>(null);
+  const toggleOnClick = useRef<LineSelection | null>(null);
   const overlay = useFixupOverlay();
   const directEditing = useDirectEditing(chunk.lines, threads);
   const canHover = useCanHover();
@@ -179,6 +180,7 @@ export const DiffChunk = memo(function DiffChunk({
     selection: LineSelection | null;
     row: DiffLine;
   }) => {
+    toggleOnClick.current = null;
     if (!selection) return;
 
     if (isShiftClick) {
@@ -186,7 +188,10 @@ export const DiffChunk = memo(function DiffChunk({
       return;
     }
 
-    if (addsLine) return;
+    if (addsLine) {
+      toggleOnClick.current = selection;
+      return;
+    }
 
     startCommentDrag(selection, row);
   };
@@ -240,6 +245,12 @@ export const DiffChunk = memo(function DiffChunk({
 
     linePick.setAnchor(selection);
     onLineClick?.(fileIndex, chunkIndex, lineIndex, navigationSide);
+  };
+
+  const toggleAfterPress = () => {
+    const selection = toggleOnClick.current;
+    toggleOnClick.current = null;
+    if (selection) linePick.toggle(selection);
   };
 
   // Global mouse up handler for drag selection: commit the selection wherever
@@ -571,14 +582,7 @@ export const DiffChunk = memo(function DiffChunk({
                       });
                     })
                   }
-                  onCommentButtonClick={
-                    onAddComment &&
-                    ((e) => {
-                      if (selection && (e.ctrlKey || e.metaKey || linePick.addMode)) {
-                        linePick.toggle(selection);
-                      }
-                    })
-                  }
+                  onCommentButtonClick={onAddComment && toggleAfterPress}
                   onComment={
                     onAddComment &&
                     (() => {

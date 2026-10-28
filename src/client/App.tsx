@@ -2248,21 +2248,24 @@ function App() {
     const isCommentButton = target.closest('[data-comment-button="true"]');
     const isOpenInEditorButton = target.closest('[data-open-in-editor-button="true"]');
     const isShiftRangeClick = e.shiftKey && target.closest('[data-diff-line-row="true"]');
-    const isLinePickClick =
+    const pickingInFile =
       (e.ctrlKey || e.metaKey || target.closest('[data-adds-lines="true"]')) &&
-      target.closest('[data-line-number-cell]');
+      target.closest('[data-line-number-cell]')
+        ? target.closest('[data-file-path]')
+        : null;
 
     // Close empty comment forms (unless clicking on a comment button)
-    if (!isCommentButton && !isOpenInEditorButton && !isShiftRangeClick && !isLinePickClick) {
-      closeEmptyCommentForms(e);
+    if (!isCommentButton && !isOpenInEditorButton && !isShiftRangeClick) {
+      closeEmptyCommentForms(e, pickingInFile);
     }
   };
 
-  const closeEmptyCommentForms = (e: React.MouseEvent) => {
+  // A form in `pickingInFile` stays open: the click picks lines for it.
+  const closeEmptyCommentForms = (e: React.MouseEvent, pickingInFile: Element | null) => {
     const emptyForms = document.querySelectorAll('form[data-empty="true"]');
     emptyForms.forEach((form) => {
       // Don't close if clicking inside the form itself
-      if (!form.contains(e.target as Node)) {
+      if (!form.contains(e.target as Node) && !pickingInFile?.contains(form)) {
         const cancelButton = form.querySelector<HTMLButtonElement>('[data-comment-cancel="true"]');
         cancelButton?.click();
       }

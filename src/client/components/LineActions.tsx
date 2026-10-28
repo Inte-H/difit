@@ -19,7 +19,7 @@ import { OpenInEditorButton } from './OpenInEditorButton';
 interface LineActionsProps {
   canHover: boolean;
   onCommentMouseDown?: (e: React.MouseEvent<HTMLButtonElement>) => void;
-  onCommentClick?: (e: React.MouseEvent<HTMLButtonElement>) => void;
+  onCommentClick?: () => void;
   onComment?: () => void;
   onEditLine?: (e: React.MouseEvent<HTMLButtonElement>) => void;
   onOpenInEditor?: () => void;

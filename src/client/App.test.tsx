@@ -5153,10 +5153,11 @@ describe.each(['unified', 'split'] as const)('App Component - picking lines (%s)
     mockFetch(twoHunks);
   });
 
-  const newNumberCell = (lineNumber: number) =>
+  const newNumberCell = (lineNumber: number, file = 'test.ts') =>
     waitFor(() => {
+      const section = document.querySelector(`[data-file-path="${file}"]`)!;
       // Both layouts put the old number before the new one.
-      const cell = Array.from(document.querySelectorAll('[data-line-number-cell]')).find(
+      const cell = Array.from(section.querySelectorAll('[data-line-number-cell]')).find(
         (candidate, index) => index % 2 === 1 && candidate.textContent === String(lineNumber),
       );
       expect(cell).toBeDefined();
@@ -5174,10 +5175,11 @@ describe.each(['unified', 'split'] as const)('App Component - picking lines (%s)
   // a click in the middle of the number lands on that button.
   const clickNumber = async (
     lineNumber: number,
-    modifiers: { ctrlKey?: boolean; metaKey?: boolean },
+    modifiers: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
     where: 'middle' | 'edge',
+    file?: string,
   ) => {
-    const cell = await newNumberCell(lineNumber);
+    const cell = await newNumberCell(lineNumber, file);
     fireEvent.mouseEnter(cell.closest('tr')!.lastElementChild!);
     const target =
       where === 'middle'
@@ -5219,19 +5221,44 @@ describe.each(['unified', 'split'] as const)('App Component - picking lines (%s)
     },
   );
 
-  it('keeps lines added by plain clicks while 줄 더하기 is on', async () => {
-    renderApp();
-
-    await clickNumber(2, { ctrlKey: true }, 'edge');
+  const turnOnAddMode = () => {
     // happy-dom misses that the toggle sits inside the form, so it is pressed on a form with text.
     const box = screen.getByPlaceholderText('Leave a comment...');
     fireEvent.change(box, { target: { value: 'x' } });
     fireEvent.click(screen.getByRole('button', { name: '줄 더하기' }));
     fireEvent.change(box, { target: { value: '' } });
+  };
+
+  it('keeps lines added by plain clicks while 줄 더하기 is on', async () => {
+    renderApp();
+
+    await clickNumber(2, { ctrlKey: true }, 'edge');
+    turnOnAddMode();
     await clickNumber(21, {}, 'middle');
     await clickNumber(22, {}, 'edge');
 
     expect(picked()).toEqual(['line 2', 'line 21', 'line 22']);
     expect(cancels).not.toHaveBeenCalled();
+  });
+
+  it('grows the range with Shift+click on the comment button while 줄 더하기 is on', async () => {
+    renderApp();
+
+    await clickNumber(2, { ctrlKey: true }, 'edge');
+    turnOnAddMode();
+    await clickNumber(3, { shiftKey: true }, 'middle');
+
+    expect(picked()).toEqual(['line 2', 'line 3']);
+  });
+
+  it('still closes an empty form in another file when lines are picked', async () => {
+    mockFetch({ ...twoHunks, files: [...twoHunks.files, { ...twoHunks.files[0]!, path: 'b.ts' }] });
+    renderApp();
+
+    await clickNumber(2, { ctrlKey: true }, 'edge');
+    await clickNumber(21, { ctrlKey: true }, 'edge', 'b.ts');
+
+    expect(document.querySelectorAll('form[data-empty]')).toHaveLength(1);
+    expect(document.querySelector('[data-file-path="b.ts"] form')).not.toBeNull();
   });
 });
