@@ -3,8 +3,7 @@ interface FilePathTextProps {
   className?: string;
 }
 
-// The rtl box cuts the path from the front, so the file name at the end stays visible; the ltr bdi
-// keeps `/` and brackets in order.
+// The ltr bdi keeps `/` and brackets in order inside the rtl box.
 export function FilePathText({ path, className = '' }: FilePathTextProps) {
   return (
     <span

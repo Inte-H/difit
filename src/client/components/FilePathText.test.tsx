@@ -11,7 +11,7 @@ describe('FilePathText', () => {
     const { container } = render(<FilePathText path={path} />);
     const box = screen.getByTitle(path);
 
-    expect(container).toHaveTextContent(new RegExp(`^${path}$`));
+    expect(container.textContent).toBe(path);
     expect(box).toHaveClass('min-w-0', 'text-ellipsis', 'whitespace-nowrap', '[direction:rtl]');
     expect(box.querySelector('bdi')).toHaveAttribute('dir', 'ltr');
   });
@@ -20,6 +20,6 @@ describe('FilePathText', () => {
     const renamed = 'src/old/A.ts → src/new/B.ts';
     const { container } = render(<FilePathText path={renamed} />);
 
-    expect(container).toHaveTextContent(new RegExp(`^${renamed}$`));
+    expect(container.textContent).toBe(renamed);
   });
 });
