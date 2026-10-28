@@ -456,18 +456,26 @@ export const FileList = memo(function FileList({
     if (container) scrollRowIntoList(container, row, shouldUseStickyDirectoryHeaders);
   };
 
-  // Read during render, before the DOM changes: when the focused row leaves the list, the row that
-  // takes its place, or the last row, gets focus instead of the page.
+  // Read during render: once the commit removes the focused row, focus has already left it.
   const committedRowsRef = useRef(shownRows);
   const focusedRowIndex =
     activeRowKey !== null && rowRefs.current.get(activeRowKey)?.contains(document.activeElement)
       ? committedRowsRef.current.findIndex((row) => row.key === activeRowKey)
       : -1;
   useLayoutEffect(() => {
+    const oldRows = committedRowsRef.current;
     committedRowsRef.current = shownRows;
-    if (focusedRowIndex === -1 || activeRowKey === null || rowRefs.current.has(activeRowKey))
+    if (focusedRowIndex === -1 || activeRowKey === null || rowRefs.current.has(activeRowKey)) {
       return;
-    focusRow(shownRows[Math.min(focusedRowIndex, shownRows.length - 1)]);
+    }
+    const shownKeys = new Set(shownRows.map((row) => row.key));
+    const survivor =
+      oldRows.slice(focusedRowIndex + 1).find((row) => shownKeys.has(row.key)) ??
+      oldRows
+        .slice(0, focusedRowIndex)
+        .reverse()
+        .find((row) => shownKeys.has(row.key));
+    focusRow(survivor && shownRows.find((row) => row.key === survivor.key));
   });
 
   const shownRowOfFile = (fileIndex: number | null) => {

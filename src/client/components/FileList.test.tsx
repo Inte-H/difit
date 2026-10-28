@@ -508,6 +508,54 @@ describe('FileList unviewed filter', () => {
     expect(screen.queryByText('모든 파일을 확인했습니다')).not.toBeInTheDocument();
   });
 
+  it('focuses the row that takes the place of a file marked viewed from outside the list', () => {
+    const { rerender } = renderList(new Set());
+    fireEvent.click(toggle());
+    getTreeRow('src/a.ts').focus();
+
+    rerender(new Set(['src/a.ts']));
+
+    expect(document.activeElement).toBe(getTreeRow('src/b.ts'));
+  });
+
+  it('focuses the row that takes the place of a folder whose files are all marked viewed', () => {
+    const { rerender } = renderList(new Set(['README.md']));
+    fireEvent.click(toggle());
+    within(getTreeRow('docs')).getByRole('checkbox').focus();
+
+    rerender(new Set(['README.md', 'docs/guide.md']));
+
+    expect(document.activeElement).toBe(getTreeRow('src'));
+  });
+
+  it('skips the rows that leave together with the focused one', () => {
+    const { rerender } = renderList(new Set(['README.md']));
+    fireEvent.click(toggle());
+    getTreeRow('docs/guide.md').focus();
+
+    rerender(new Set(['README.md', 'docs/guide.md']));
+
+    expect(document.activeElement).toBe(getTreeRow('src'));
+  });
+
+  it('focuses the row above when the last row is marked viewed', () => {
+    const { rerender } = renderList(new Set(['README.md']));
+    fireEvent.click(toggle());
+    getTreeRow('src/b.ts').focus();
+
+    rerender(new Set(['README.md', 'src/b.ts']));
+
+    expect(document.activeElement).toBe(getTreeRow('src/a.ts'));
+  });
+
+  it('says when the file filter leaves no file, also with the unviewed filter off', () => {
+    renderList(new Set());
+
+    fireEvent.change(screen.getByPlaceholderText('Filter files...'), { target: { value: 'zzz' } });
+
+    expect(screen.getByText('조건에 맞는 파일이 없습니다')).toBeInTheDocument();
+  });
+
   it('drops a file once it is marked viewed and says when none are left', () => {
     const { rerender } = renderList(new Set(['README.md', 'docs/guide.md', 'src/a.ts']));
     fireEvent.click(toggle());
@@ -518,51 +566,6 @@ describe('FileList unviewed filter', () => {
     expect(screen.queryByTitle('src/b.ts')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: '미확인 파일 (0 / 4)' })).toBeInTheDocument();
     expect(screen.getByText('모든 파일을 확인했습니다')).toBeInTheDocument();
-  });
-});
-
-describe('FileList unviewed filter keeps focus in the list', () => {
-  const files = [createFile('docs/guide.md'), createFile('src/a.ts'), createFile('src/b.ts')];
-  const renderList = (reviewedFiles: Set<string>) => {
-    const props = {
-      files,
-      onScrollToFile: vi.fn(),
-      comments: [],
-      resolvedThreadIds: new Set<string>(),
-      onToggleReviewed: vi.fn(),
-      onToggleFolderReviewed: vi.fn(),
-      selectedFileIndex: null,
-    };
-    const view = render(<FileList {...props} reviewedFiles={reviewedFiles} />);
-    fireEvent.click(screen.getByRole('button', { name: '확인 안 한 파일만 보기' }));
-    return (next: Set<string>) => view.rerender(<FileList {...props} reviewedFiles={next} />);
-  };
-
-  it('focuses the row that takes the place of a file marked viewed from outside the list', () => {
-    const rerender = renderList(new Set());
-    getTreeRow('src/a.ts').focus();
-
-    rerender(new Set(['src/a.ts']));
-
-    expect(document.activeElement).toBe(getTreeRow('src/b.ts'));
-  });
-
-  it('focuses the row that takes the place of a folder whose files are all marked viewed', () => {
-    const rerender = renderList(new Set());
-    within(getTreeRow('docs')).getByRole('checkbox').focus();
-
-    rerender(new Set(['docs/guide.md']));
-
-    expect(document.activeElement).toBe(getTreeRow('src'));
-  });
-
-  it('focuses the row above when the last row is marked viewed', () => {
-    const rerender = renderList(new Set());
-    getTreeRow('src/b.ts').focus();
-
-    rerender(new Set(['src/b.ts']));
-
-    expect(document.activeElement).toBe(getTreeRow('src/a.ts'));
   });
 });
 
