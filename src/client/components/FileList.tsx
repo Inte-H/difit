@@ -10,11 +10,13 @@ import {
   Search,
   ChevronsDownUp,
   ChevronsUpDown,
+  EyeOff,
 } from 'lucide-react';
 import {
   memo,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -285,6 +287,7 @@ export const FileList = memo(function FileList({
     () => new Set(getAllDirectoryPaths(fileTree)),
   );
   const [filterText, setFilterText] = useState('');
+  const [onlyUnviewed, setOnlyUnviewed] = useState(false);
 
   const commentCountMap = useMemo(() => {
     const counts = new Map<string, number>();
@@ -313,17 +316,20 @@ export const FileList = memo(function FileList({
       ),
     [files],
   );
+  const unviewedCount = useMemo(
+    () => files.filter((file) => !reviewedFiles.has(file.path)).length,
+    [files, reviewedFiles],
+  );
   const reviewedDirectoryPaths = useMemo(
     () => getReviewedDirectoryPaths(fileTree, reviewedFiles),
     [fileTree, reviewedFiles],
   );
 
-  // Filter the file tree based on search text
   const filteredFileTree = useMemo(() => {
     const normalizedFilter = filterText.trim().toLowerCase();
 
     const filterTreeNode = (node: TreeNode): TreeNode | null => {
-      if (!normalizedFilter) return node;
+      if (!normalizedFilter && !onlyUnviewed) return node;
 
       if (node.isDirectory && node.children) {
         const filteredChildren = node.children
@@ -335,6 +341,7 @@ export const FileList = memo(function FileList({
         }
         return null;
       } else if (node.file) {
+        if (onlyUnviewed && reviewedFiles.has(node.file.path)) return null;
         // Check if file name matches filter
         if (node.file.path.toLowerCase().includes(normalizedFilter)) {
           return node;
@@ -351,7 +358,7 @@ export const FileList = memo(function FileList({
         children: [],
       }
     );
-  }, [fileTree, filterText]);
+  }, [fileTree, filterText, onlyUnviewed, reviewedFiles]);
 
   const filteredFixupOnly = useMemo(() => {
     const normalizedFilter = filterText.trim().toLowerCase();
@@ -362,6 +369,17 @@ export const FileList = memo(function FileList({
       }))
       .filter((group) => group.files.length > 0);
   }, [fixupOnly, filterText]);
+
+  const emptyListMessage = (() => {
+    if ((filteredFileTree.children?.length ?? 0) > 0) return null;
+    if (onlyUnviewed && unviewedCount === 0) {
+      return filteredFixupOnly.length > 0
+        ? 'fixup에서만 수정한 파일만 남았습니다'
+        : '모든 파일을 확인했습니다';
+    }
+    if (filteredFixupOnly.length > 0 || (!onlyUnviewed && !filterText.trim())) return null;
+    return '조건에 맞는 파일이 없습니다';
+  })();
 
   const revealFixupFile = ({ fixupSha, path }: FixupFileRef) => {
     onRevealFixupFile?.(fixupSha, path);
@@ -437,6 +455,29 @@ export const FileList = memo(function FileList({
     row.focus({ preventScroll: true });
     if (container) scrollRowIntoList(container, row, shouldUseStickyDirectoryHeaders);
   };
+
+  // Read during render: once the commit removes the focused row, focus has already left it.
+  const committedRowsRef = useRef(shownRows);
+  const focusedRowIndex =
+    activeRowKey !== null && rowRefs.current.get(activeRowKey)?.contains(document.activeElement)
+      ? committedRowsRef.current.findIndex((row) => row.key === activeRowKey)
+      : -1;
+  useLayoutEffect(() => {
+    const oldRows = committedRowsRef.current;
+    committedRowsRef.current = shownRows;
+    if (focusedRowIndex === -1 || activeRowKey === null || rowRefs.current.has(activeRowKey)) {
+      return;
+    }
+    // Focus goes to the row now below the nearest old row above that is still shown, so rows that
+    // left together are skipped; with no such row below, to that row itself.
+    const shownIndexOf = new Map(shownRows.map((row, index) => [row.key, index]));
+    let aboveIndex = -1;
+    for (let index = focusedRowIndex - 1; index >= 0 && aboveIndex === -1; index -= 1) {
+      const key = oldRows[index]?.key;
+      if (key !== undefined) aboveIndex = shownIndexOf.get(key) ?? -1;
+    }
+    focusRow(shownRows[aboveIndex + 1] ?? shownRows[aboveIndex]);
+  });
 
   const shownRowOfFile = (fileIndex: number | null) => {
     const path = fileIndex === null ? undefined : files[fileIndex]?.path;
@@ -721,7 +762,9 @@ export const FileList = memo(function FileList({
       <div className="px-4 py-3 border-b border-github-border bg-github-bg-tertiary">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-github-text-primary m-0">
-            Files changed ({files.length})
+            {onlyUnviewed
+              ? `미확인 파일 (${unviewedCount} / ${files.length})`
+              : `Files changed (${files.length})`}
           </h3>
           <div className="ml-auto flex items-center gap-2">
             <span
@@ -732,6 +775,20 @@ export const FileList = memo(function FileList({
               <span className="text-github-accent">+{diffTotals.additions}</span>
               <span className="text-github-danger">-{diffTotals.deletions}</span>
             </span>
+            <button
+              type="button"
+              onClick={() => setOnlyUnviewed((on) => !on)}
+              aria-pressed={onlyUnviewed}
+              className={`p-1 rounded transition-colors ${
+                onlyUnviewed ? 'bg-github-bg-primary' : 'hover:bg-github-bg-primary'
+              }`}
+              title={onlyUnviewed ? '전체 파일 보기' : '확인 안 한 파일만 보기'}
+            >
+              <EyeOff
+                size={16}
+                className={onlyUnviewed ? 'text-github-accent' : 'text-github-text-secondary'}
+              />
+            </button>
             <button
               onClick={toggleAllDirectories}
               className="p-1 hover:bg-github-bg-primary rounded transition-colors"
@@ -767,6 +824,9 @@ export const FileList = memo(function FileList({
         tabIndex={-1}
       >
         {filteredFileTree.children?.map((child) => renderTreeNode(child))}
+        {emptyListMessage !== null && (
+          <p className="m-0 px-4 py-3 text-sm text-github-text-muted">{emptyListMessage}</p>
+        )}
         {filteredFixupOnly.map(({ fixup, files: fixupFiles }) => (
           <section
             key={fixup.sha}
