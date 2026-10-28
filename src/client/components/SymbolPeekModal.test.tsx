@@ -3,7 +3,7 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { SymbolSearchResponse } from '../../types/diff';
-import type { SymbolIndexStatus } from '../../types/watch';
+import type { SymbolIndexState } from '../../types/watch';
 import { WordHighlightProvider } from '../contexts/WordHighlightContext';
 import type { SymbolIndexUpdates } from '../hooks/useSymbolPeek';
 import { symbolRequestFromTarget } from '../utils/symbolPeek';
@@ -379,7 +379,7 @@ describe('SymbolPeekModal with a commit index', () => {
       { path: 'src/use.ts', line: 1, text: 'const two = addOne(1);' },
       { path: 'src/other.ts', line: 5, text: 'other.addOne(2);' },
     ],
-    indexing: commit,
+    index: { commit, status: 'building', startedAt: Date.now() },
   };
   const byIndex: SymbolSearchResponse = {
     ...found,
@@ -438,11 +438,19 @@ describe('SymbolPeekModal with a commit index', () => {
     );
   }
 
-  const updates = (status: SymbolIndexStatus, seq: number, on = commit): SymbolIndexUpdates => ({
+  const building: SymbolIndexState = { status: 'building', startedAt: Date.now() };
+  const ready: SymbolIndexState = { status: 'ready' };
+  const updates = (state: SymbolIndexState, seq: number, on = commit): SymbolIndexUpdates => ({
     seq,
-    byCommit: new Map([[on, { status, seq }]]),
+    byCommit: new Map([[on, { state, seq }]]),
   });
 
+  const timedOut: SymbolIndexState = {
+    status: 'failed',
+    reason: 'timeout',
+    detail: 'scip-java timed out',
+    hasLog: false,
+  };
   const selectedItem = () => document.querySelector('nav [aria-current="true"]')?.textContent;
 
   it('sends where the name was clicked', async () => {
@@ -467,17 +475,17 @@ describe('SymbolPeekModal with a commit index', () => {
   });
 
   it('swaps in the index answer when the index is ready and keeps the selected line', async () => {
-    const { rerender } = render(modal(updates('building', 1)));
+    const { rerender } = render(modal(updates(building, 1)));
     await answer(byName, 1);
     await shownRows();
     fireEvent.click(screen.getByText('src/use.ts:1'));
     expect(await screen.findByText('src/use.ts')).toBeInTheDocument();
 
-    rerender(modal(updates('building', 2)));
-    rerender(modal(updates('building', 2, 'b'.repeat(40))));
+    rerender(modal(updates(building, 2)));
+    rerender(modal(updates(building, 2, 'b'.repeat(40))));
     expect(symbolRequests()).toHaveLength(1);
 
-    rerender(modal(updates('ready', 3)));
+    rerender(modal(updates(ready, 3)));
     await answer(byIndex, 2);
 
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
@@ -497,7 +505,7 @@ describe('SymbolPeekModal with a commit index', () => {
     fireEvent.click(screen.getByText('src/other.ts:5'));
     expect(await screen.findByText('src/other.ts')).toBeInTheDocument();
 
-    rerender(modal(updates('ready', 1)));
+    rerender(modal(updates(ready, 1)));
     await answer(byIndex, 2);
 
     await waitFor(() => expect(selectedItem()).toContain('src/math.ts:2'));
@@ -511,7 +519,7 @@ describe('SymbolPeekModal with a commit index', () => {
     fireEvent.click(screen.getByText('src/other.ts:5'));
     expect(await screen.findByText('src/other.ts')).toBeInTheDocument();
 
-    rerender(modal(updates('ready', 1)));
+    rerender(modal(updates(ready, 1)));
     await answer(null, 2);
 
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
@@ -523,15 +531,57 @@ describe('SymbolPeekModal with a commit index', () => {
   it('asks again when the index was finished before the first answer arrived', async () => {
     const { rerender } = render(modal());
     await waitFor(() => expect(answers).toHaveLength(1));
-    rerender(modal(updates('ready', 1)));
+    rerender(modal(updates(ready, 1)));
     answers[0]!(byName);
 
     await answer(byIndex, 2);
     await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
   });
 
+  it('follows the index from waiting to building, and asks again once it failed', async () => {
+    const { rerender } = render(modal());
+    await answer({ ...byName, index: { commit, status: 'queued', after: 'b'.repeat(40) } }, 1);
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      '색인 기다리는 중 · 앞 커밋 bbbbbbb의 색인이 끝나면 시작합니다',
+    );
+
+    rerender(modal(updates(building, 1)));
+    expect(screen.getByRole('status')).toHaveTextContent('색인을 만드는 중');
+    expect(symbolRequests()).toHaveLength(1);
+
+    rerender(modal(updates(timedOut, 2)));
+    expect(screen.getByRole('status')).toHaveTextContent(
+      '색인을 만들 수 없음 · 빌드가 1시간 안에 끝나지 않아 멈췄습니다',
+    );
+    expect(screen.getByText('scip-java timed out')).toBeInTheDocument();
+    await answer({ ...byName, index: { commit, ...timedOut } }, 2);
+    expect(screen.getByText('src/other.ts:5')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('색인을 만들 수 없음');
+    expect(symbolRequests()).toHaveLength(2);
+  });
+
+  it('asks again when the index of an ancestor it waited for cannot be built', async () => {
+    const ancestor = 'c'.repeat(40);
+    const { rerender } = render(modal());
+    await answer({ ...byName, index: { commit: ancestor, ...building } }, 1);
+
+    rerender(modal(updates(timedOut, 1, ancestor)));
+    await answer(byIndex, 2);
+
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+  });
+
+  it('says why the answer came from name search', async () => {
+    render(modal());
+    await answer({ ...found, unindexed: 'not-java' }, 1);
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Java 파일이 아니라 색인을 쓰지 않습니다 · 이름으로 찾은 결과입니다',
+    );
+  });
+
   it('does not ask again over an index change heard before it searched', async () => {
-    render(modal(updates('ready', 1)));
+    render(modal(updates(ready, 1)));
     await answer(byName, 1);
     await shownRows();
 

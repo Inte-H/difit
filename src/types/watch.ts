@@ -38,13 +38,37 @@ interface CommentsChangedWatchEvent {
   timestamp: string;
 }
 
-export type SymbolIndexStatus = 'none' | 'building' | 'ready' | 'failed';
+// `no-java`: the commit has no Java source. `no-build-file`: it has no build.gradle,
+// settings.gradle or pom.xml (or a .kts variant) at the root.
+export type SymbolIndexUnavailableReason = 'no-java' | 'no-build-file' | 'no-scip-java';
+
+// `no-gradle`: scip-java could not run `gradle` because the commit has no gradlew and none is on
+// PATH. `exit-code`: scip-java ended with another failure. `no-output`: it ended without writing
+// an index.
+export type SymbolIndexFailure = 'no-gradle' | 'timeout' | 'exit-code' | 'no-output' | 'error';
+
+export type SymbolIndexState =
+  | { status: 'none' }
+  // `after` is the full sha of the commit whose build runs right before this one.
+  | { status: 'queued'; after: string }
+  // Milliseconds since the epoch.
+  | { status: 'building'; startedAt: number }
+  | { status: 'ready' }
+  | { status: 'unavailable'; reason: SymbolIndexUnavailableReason }
+  | {
+      status: 'failed';
+      reason: SymbolIndexFailure;
+      exitCode?: number | null;
+      // What went wrong, in English, as the last line of the build log says it.
+      detail: string;
+      hasLog: boolean;
+    };
 
 interface SymbolIndexChangedWatchEvent {
   type: 'symbolIndexChanged';
   // Full commit sha.
   commit: string;
-  status: SymbolIndexStatus;
+  state: SymbolIndexState;
   timestamp: string;
 }
 

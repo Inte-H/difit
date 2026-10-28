@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DiffMode,
   type ClientWatchState,
-  type SymbolIndexStatus,
+  type SymbolIndexState,
   type WatchEvent,
 } from '../../types/watch.js';
 import { resolveLiveSocketUrl } from '../utils/liveSocketUrl';
@@ -19,7 +19,7 @@ interface FileWatchHook {
 export function useFileWatch(
   onReload?: () => Promise<void>,
   onCommentsChanged?: () => Promise<void>,
-  onSymbolIndexChanged?: (commit: string, status: SymbolIndexStatus) => void,
+  onSymbolIndexChanged?: (commit: string, state: SymbolIndexState) => void,
 ): FileWatchHook {
   const socketRef = useRef<WebSocket | null>(null);
   // Read through a ref so a new callback identity never closes and reopens the connection,
@@ -100,7 +100,7 @@ export function useFileWatch(
               break;
 
             case 'symbolIndexChanged':
-              onSymbolIndexChangedRef.current?.(data.commit, data.status);
+              onSymbolIndexChangedRef.current?.(data.commit, data.state);
               break;
           }
         } catch (parseError) {

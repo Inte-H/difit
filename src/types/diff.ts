@@ -1,3 +1,5 @@
+import type { SymbolIndexState } from './watch';
+
 export interface DiffFile {
   path: string;
   oldPath?: string;
@@ -153,9 +155,20 @@ export interface SymbolSearchResponse {
   // The declaration lives only in this library, outside the repository, e.g.
   // `java.util.Optional#orElse()`.
   library?: string;
-  // The full sha of the commit whose index is being built; name search answers until
-  // /api/live announces a `symbolIndexChanged` event for it.
-  indexing?: string;
+  // How the index of the clicked commit, or of the ancestor whose index it waits for, stands
+  // when name search answered a click in a Java file; /api/live announces each later change as
+  // a `symbolIndexChanged` event.
+  index?: SymbolIndexState & { commit: string };
+  // Why a click that name search answered did not use an index, sent only when the commit (or
+  // HEAD, for a review of uncommitted changes) could be indexed.
+  unindexed?: 'not-java' | 'not-commit';
+}
+
+// GET /api/symbol-index/:commit/log
+export interface SymbolIndexLogResponse {
+  path: string;
+  // What is kept of the build log, without terminal color codes.
+  text: string;
 }
 
 export type LineNumber = number | [number, number];

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useHotkeysContext } from 'react-hotkeys-hook';
 
-import type { SymbolIndexStatus } from '../../types/watch';
+import type { SymbolIndexState } from '../../types/watch';
 import {
   type ReviewRefs,
   type SymbolPeekRequest,
@@ -18,7 +18,7 @@ export interface SymbolPeekOffer {
 // tell whether a change came after it last searched.
 export interface SymbolIndexUpdates {
   seq: number;
-  byCommit: ReadonlyMap<string, { status: SymbolIndexStatus; seq: number }>;
+  byCommit: ReadonlyMap<string, { state: SymbolIndexState; seq: number }>;
 }
 
 export const NO_INDEX_UPDATES: SymbolIndexUpdates = { seq: 0, byCommit: new Map() };
@@ -30,11 +30,11 @@ export function useSymbolPeek({ base, target, enabled }: ReviewRefs & { enabled:
   const [indexUpdates, setIndexUpdates] = useState(NO_INDEX_UPDATES);
   const isOpen = stack.length > 0;
 
-  const noteIndexChange = useCallback((commit: string, status: SymbolIndexStatus) => {
+  const noteIndexChange = useCallback((commit: string, state: SymbolIndexState) => {
     setIndexUpdates((current) => {
       const seq = current.seq + 1;
       const byCommit = new Map(current.byCommit);
-      byCommit.set(commit, { status, seq });
+      byCommit.set(commit, { state, seq });
       return { seq, byCommit };
     });
   }, []);
