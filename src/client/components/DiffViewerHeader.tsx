@@ -95,7 +95,7 @@ export const DiffViewerHeader = ({
           {isCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
         </button>
         {getFileIcon(file.status)}
-        <h2 className="min-w-0 text-sm font-mono text-github-text-primary m-0">
+        <h2 className="min-w-0 overflow-hidden text-sm font-mono text-github-text-primary m-0">
           <FilePathText path={file.path} />
         </h2>
         <button
