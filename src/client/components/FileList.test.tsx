@@ -871,6 +871,9 @@ describe('FileList fixups', () => {
       'pnpm-lock.yaml생성된 파일',
       'src/old.ts지운 파일',
     ]);
+    expect(rows[0]).toHaveAccessibleName(/^src\/a\.test\.ts\s*새 파일$/);
+    expect(rows[1]).toHaveAccessibleName(/^pnpm-lock\.yaml\s*생성된 파일$/);
+    expect(rows[2]).toHaveAccessibleName(/^src\/old\.ts\s*지운 파일$/);
     for (const row of rows) expect(row.closest('[data-tree-row="true"]')).toBeNull();
   });
 
@@ -914,11 +917,9 @@ describe('FileList fixups', () => {
     renderList();
 
     await user.type(screen.getByPlaceholderText('Filter files...'), 'test');
-    expect(
-      within(group())
-        .getAllByRole('button')
-        .map((row) => row.textContent),
-    ).toEqual(['src/a.test.ts새 파일']);
+    const rows = within(group()).getAllByRole('button');
+    expect(rows.map((row) => row.textContent)).toEqual(['src/a.test.ts새 파일']);
+    expect(rows[0]).toHaveAccessibleName(/^src\/a\.test\.ts\s*새 파일$/);
 
     await user.clear(screen.getByPlaceholderText('Filter files...'));
     await user.type(screen.getByPlaceholderText('Filter files...'), 'README');

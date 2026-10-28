@@ -45,6 +45,7 @@ import { keyByPosition } from '../utils/keyByPosition';
 
 import { Checkbox } from './Checkbox';
 import { CommentCount } from './CommentCount';
+import { FilePathText } from './FilePathText';
 
 export interface FileListHandle {
   focus: () => void;
@@ -850,12 +851,10 @@ export const FileList = memo(function FileList({
                     isFocused ? 'bg-github-bg-tertiary' : ''
                   }`}
                 >
-                  <span
-                    className="flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-sm text-github-text-primary"
-                    title={fixupFileName(file)}
-                  >
-                    {fixupFileName(file)}
-                  </span>
+                  <FilePathText
+                    path={fixupFileName(file)}
+                    className="flex-1 font-mono text-sm text-github-text-primary"
+                  />
                   {fixupFileLabels(file).map((label) => (
                     <span key={label} className="shrink-0 text-xs text-github-text-secondary">
                       {label}
