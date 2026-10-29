@@ -79,15 +79,15 @@ async function startFakeReleaseServer(options: {
   const server: Server = createServer((request, response) => {
     const url = request.url ?? '';
     requests.push(`${request.method} ${url}`);
-    if (url === '/Inte-H/difit/releases/latest') {
+    if (url === '/duru-app/difit/releases/latest') {
       const { port } = server.address() as AddressInfo;
       response.writeHead(302, {
-        location: `http://127.0.0.1:${port}/Inte-H/difit/releases/tag/v${options.latest}`,
+        location: `http://127.0.0.1:${port}/duru-app/difit/releases/tag/v${options.latest}`,
       });
       response.end();
       return;
     }
-    const asset = /^\/Inte-H\/difit\/releases\/download\/v([^/]+)\/difit-([^/]+)\.tgz$/.exec(url);
+    const asset = /^\/duru-app\/difit\/releases\/download\/v([^/]+)\/difit-([^/]+)\.tgz$/.exec(url);
     const tarball = asset && asset[1] === asset[2] ? options.tarballs?.[asset[1]] : undefined;
     if (tarball) {
       response.writeHead(200, { 'content-type': 'application/octet-stream' });
@@ -100,7 +100,7 @@ async function startFakeReleaseServer(options: {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return {
-    baseUrl: `http://127.0.0.1:${port}/Inte-H/difit`,
+    baseUrl: `http://127.0.0.1:${port}/duru-app/difit`,
     requests,
     close: () => new Promise((resolve) => server.close(() => resolve())),
   };
@@ -316,7 +316,7 @@ describe('self-update', () => {
       try {
         const startedAt = Date.now();
         await expect(
-          fetchLatestReleaseVersion(`http://127.0.0.1:${port}/Inte-H/difit`, realFetch, 200),
+          fetchLatestReleaseVersion(`http://127.0.0.1:${port}/duru-app/difit`, realFetch, 200),
         ).rejects.toThrow();
         expect(Date.now() - startedAt).toBeLessThan(5_000);
       } finally {
@@ -346,7 +346,7 @@ describe('self-update', () => {
         expect(existsSync(getVersionEntry(dir))).toBe(true);
         expect(readdirSync(paths.versionsDir)).toEqual(['5.0.12-inteh.30']);
         expect(server.requests).toContain(
-          'GET /Inte-H/difit/releases/download/v5.0.12-inteh.30/difit-5.0.12-inteh.30.tgz',
+          'GET /duru-app/difit/releases/download/v5.0.12-inteh.30/difit-5.0.12-inteh.30.tgz',
         );
       } finally {
         if (previousCache === undefined) delete process.env.npm_config_cache;
@@ -385,7 +385,7 @@ describe('self-update', () => {
       await expect(
         installReleaseVersion({
           version: '5.0.12-inteh.30',
-          baseUrl: 'http://127.0.0.1:1/Inte-H/difit',
+          baseUrl: 'http://127.0.0.1:1/duru-app/difit',
           versionsDir: paths.versionsDir,
           runInstall: halfInstall,
         }),
@@ -401,7 +401,7 @@ describe('self-update', () => {
 
       await installReleaseVersion({
         version: '5.0.12-inteh.30',
-        baseUrl: 'http://127.0.0.1:1/Inte-H/difit',
+        baseUrl: 'http://127.0.0.1:1/duru-app/difit',
         versionsDir: paths.versionsDir,
         runInstall: fakeInstall(),
       });
@@ -417,7 +417,7 @@ describe('self-update', () => {
 
       await installReleaseVersion({
         version: '5.0.12-inteh.30',
-        baseUrl: 'http://127.0.0.1:1/Inte-H/difit',
+        baseUrl: 'http://127.0.0.1:1/duru-app/difit',
         versionsDir: paths.versionsDir,
         runInstall: fakeInstall(),
       });
@@ -429,7 +429,7 @@ describe('self-update', () => {
       await expect(
         installReleaseVersion({
           version: '5.0.12-inteh.30',
-          baseUrl: 'http://127.0.0.1:1/Inte-H/difit',
+          baseUrl: 'http://127.0.0.1:1/duru-app/difit',
           versionsDir: paths.versionsDir,
           runInstall: fakeInstall('5.0.12-inteh.29'),
         }),

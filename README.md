@@ -190,10 +190,10 @@ This section is unnecessary
 main에 병합할 때마다 GitHub 릴리스가 새로 올라온다. 최신 빌드는 아래 한 줄로 깐다.
 
 ```bash
-npm i -g https://github.com/Inte-H/difit/releases/latest/download/difit.tgz
+npm i -g https://github.com/duru-app/difit/releases/latest/download/difit.tgz
 ```
 
-특정 빌드를 깔려면 `https://github.com/Inte-H/difit/releases/download/v<버전>/difit-<버전>.tgz`를 쓴다. 버전은 `5.0.12-inteh.3`처럼 원래 difit 버전 뒤에 포크 표시가 붙는다.
+특정 빌드를 깔려면 `https://github.com/duru-app/difit/releases/download/v<버전>/difit-<버전>.tgz`를 쓴다. 버전은 `5.0.12-inteh.3`처럼 원래 difit 버전 뒤에 포크 표시가 붙는다.
 
 ### 자동 업데이트
 
