@@ -196,6 +196,25 @@ describe('reselect', () => {
     expect(reselect({ path: 'Gone.java', line: 1, text: 'run();' }, withLibrary)).toEqual(library);
     expect(reselect(library, result(['A.java']))).toMatchObject({ path: 'A.java' });
   });
+
+  it('keeps an implementation selected, and takes it first when there is no declaration', () => {
+    const implementation = { path: 'Impl.java', line: 3, text: 'class Impl {' };
+    const answer = { ...result(['A.java']), implementations: [implementation] };
+    expect(reselect(implementation, answer)).toEqual(implementation);
+    expect(reselect(null, answer)).toEqual(implementation);
+  });
+
+  it('takes the declaration only a library holds ahead of the implementations', () => {
+    const symbol = 'semanticdb maven jdk 8 java/lang/Runnable#run().';
+    const implementation = { path: 'Impl.java', line: 3, text: 'public void run() {' };
+    const answer = {
+      ...result(['A.java']),
+      librarySymbol: symbol,
+      implementations: [implementation],
+    };
+    expect(reselect(null, answer)).toEqual({ librarySymbol: symbol });
+    expect(reselect(implementation, answer)).toEqual(implementation);
+  });
 });
 
 describe('fetchLibrarySource', () => {

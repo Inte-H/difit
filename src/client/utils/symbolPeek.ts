@@ -1,4 +1,9 @@
-import type { LibrarySourceResponse, SymbolMatch, SymbolSearchResponse } from '../../types/diff';
+import type {
+  LibrarySourceResponse,
+  SymbolCallersResponse,
+  SymbolMatch,
+  SymbolSearchResponse,
+} from '../../types/diff';
 import { isSymbolName } from '../../utils/symbolName';
 
 export interface SymbolPeekRequest {
@@ -92,6 +97,17 @@ export async function fetchSymbol(
   return (await response.json()) as SymbolSearchResponse;
 }
 
+export async function fetchSymbolCallers(
+  ref: string,
+  method: string,
+  signal?: AbortSignal,
+): Promise<SymbolCallersResponse> {
+  const params = new URLSearchParams({ ref, symbol: method });
+  const response = await fetch(`/api/symbol-callers?${params.toString()}`, { signal });
+  if (!response.ok) throw new Error(`Caller search failed: ${response.status}`);
+  return (await response.json()) as SymbolCallersResponse;
+}
+
 export function isSameMatch(a: SymbolMatch | null, b: SymbolMatch | null): boolean {
   return a !== null && b !== null && a.path === b.path && a.line === b.line;
 }
@@ -115,7 +131,7 @@ export function reselect(
   current: PeekSelection | null,
   result: SymbolSearchResponse,
 ): PeekSelection | null {
-  const matches = [...result.definitions, ...result.references];
+  const matches = [...result.definitions, ...(result.implementations ?? []), ...result.references];
   if (!isLibraryDeclaration(current)) {
     const same = matches.find((match) => isSameMatch(match, current));
     if (same) return same;

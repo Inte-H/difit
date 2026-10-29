@@ -1,12 +1,13 @@
-import { ArrowLeft, X } from 'lucide-react';
+import { ArrowLeft, ChevronRight, X } from 'lucide-react';
 import type { Token } from 'prism-react-renderer';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useHotkeys } from 'react-hotkeys-hook';
 
 import type {
   LibrarySourceMissing,
   LibrarySourceOrigin,
   LibrarySourceResponse,
+  SymbolCallersResponse,
   SymbolMatch,
   SymbolSearchResponse,
 } from '../../types/diff';
@@ -17,6 +18,7 @@ import { getPrismLanguageFromFilename } from '../utils/languageDetection';
 import {
   fetchLibrarySource,
   fetchSymbol,
+  fetchSymbolCallers,
   isLibraryDeclaration,
   isSameMatch,
   type PeekSelection,
@@ -113,17 +115,23 @@ export function SymbolPeekModal({
 
   // A change heard after the search started is newer than the answer's own word on the index.
   const answered = search.status === 'done' ? search : undefined;
-  const indexCommit = answered?.result.index?.commit;
+  const shownIndex = answered?.result.index;
+  const indexCommit = shownIndex?.commit ?? answered?.result.indexCommit;
   const indexUpdate = indexCommit ? indexUpdates.byCommit.get(indexCommit) : undefined;
   const index =
-    indexCommit && indexUpdate && answered && indexUpdate.seq > answered.seq
-      ? { commit: indexCommit, ...indexUpdate.state }
-      : answered?.result.index;
+    shownIndex && indexUpdate && answered && indexUpdate.seq > answered.seq
+      ? { commit: shownIndex.commit, ...indexUpdate.state }
+      : shownIndex;
 
   useEffect(() => {
-    const status = indexUpdate?.state.status;
-    if (status !== 'ready' && status !== 'failed') return;
-    if (!indexUpdate || indexUpdate.seq <= searchedAtSeq.current) return;
+    if (!answered || !indexUpdate || indexUpdate.seq <= searchedAtSeq.current) return;
+    const { state } = indexUpdate;
+    const fromIndex = answered.result.indexCommit !== undefined;
+    const changed = fromIndex
+      ? state.status === 'ready' &&
+        (state.withoutRelations === true) !== (answered.result.indexWithoutRelations === true)
+      : state.status === 'ready' || state.status === 'failed';
+    if (!changed) return;
     const controller = new AbortController();
     const seq = latestUpdateSeq.current;
     searchedAtSeq.current = seq;
@@ -136,7 +144,7 @@ export function SymbolPeekModal({
       () => {},
     );
     return () => controller.abort();
-  }, [indexUpdate, request]);
+  }, [answered, indexUpdate, request]);
 
   return (
     <div
@@ -188,6 +196,7 @@ export function SymbolPeekModal({
             {search.status === 'done' && (
               <MatchList
                 result={search.result}
+                gitRef={request.ref}
                 selected={selected}
                 onSelect={(selection) => {
                   autoPicked.current = false;
@@ -228,23 +237,37 @@ function Notice({ children }: { children: React.ReactNode }) {
 const VIA_LABELS: Record<NonNullable<SymbolMatch['via']>, string> = {
   getter: '게터',
   builder: '빌더',
+  interface: '인터페이스로',
 };
 
 interface MatchListProps {
   result: SymbolSearchResponse;
+  gitRef: string;
   selected: PeekSelection | null;
   onSelect: (selection: PeekSelection) => void;
 }
 
-function MatchList({ result, selected, onSelect }: MatchListProps) {
+function MatchList({ result, gitRef, selected, onSelect }: MatchListProps) {
+  const tree = useCallerTree(gitRef, result);
   const { librarySymbol } = result;
   const library = librarySymbol && result.library;
   const selectedMatch = isLibraryDeclaration(selected) ? null : selected;
-  if (result.definitions.length === 0 && result.references.length === 0 && !library) {
+  const implementations = result.implementations ?? [];
+  if (
+    result.definitions.length === 0 &&
+    implementations.length === 0 &&
+    result.references.length === 0 &&
+    !library
+  ) {
     return <Notice>찾지 못했습니다.</Notice>;
   }
 
-  const section = (title: string, matches: SymbolMatch[], libraryName?: string) =>
+  const section = (
+    title: string,
+    matches: SymbolMatch[],
+    libraryName?: string,
+    list?: React.ReactNode,
+  ) =>
     (matches.length > 0 || libraryName) && (
       <section>
         <h3 className="sticky top-0 bg-github-bg-secondary px-4 py-1.5 text-xs font-semibold text-github-text-secondary">
@@ -262,47 +285,239 @@ function MatchList({ result, selected, onSelect }: MatchListProps) {
             <code className="break-all font-mono text-github-text-primary">{libraryName}</code>
           </button>
         )}
-        <ul>
-          {matches.map((match) => {
-            const isSelected = isSameMatch(match, selectedMatch);
-            return (
+        {list ?? (
+          <ul>
+            {matches.map((match) => (
               <li key={`${match.path}:${match.line}`}>
-                <button
-                  onClick={() => onSelect(match)}
-                  aria-current={isSelected}
-                  className={`block w-full px-4 py-1.5 text-left transition-colors hover:bg-github-bg-tertiary ${isSelected ? 'bg-github-bg-tertiary' : ''}`}
-                >
-                  <span className="flex items-center gap-1.5 text-xs text-github-text-secondary">
-                    <span className="min-w-0 truncate">
-                      {match.path}:{match.line}
-                    </span>
-                    {match.via && (
-                      <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
-                        {VIA_LABELS[match.via]}
-                      </span>
-                    )}
-                    {match.source === 'name' && (
-                      <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
-                        이름 검색
-                      </span>
-                    )}
-                  </span>
-                  <code className="block truncate font-mono text-xs text-github-text-primary">
-                    {match.text.trim()}
-                  </code>
-                </button>
+                <MatchButton match={match} selected={selectedMatch} onSelect={onSelect} />
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        )}
       </section>
     );
 
   return (
     <>
       {section('선언', result.definitions, library)}
-      {section('쓰인 곳', result.references)}
+      {section('구현', implementations)}
+      {section(
+        '쓰인 곳',
+        result.references,
+        undefined,
+        <UsageList
+          matches={result.references}
+          ancestors={[]}
+          parentKey=""
+          tree={tree}
+          selected={selectedMatch}
+          onSelect={onSelect}
+        />,
+      )}
       {result.truncated && <Notice>결과가 많아 일부만 보여 줍니다.</Notice>}
+    </>
+  );
+}
+
+interface MatchButtonProps {
+  match: SymbolMatch;
+  selected: SymbolMatch | null;
+  onSelect: (match: SymbolMatch) => void;
+  // The method the line sits in is one whose callers are already shown above it.
+  recursive?: boolean;
+  besideToggle?: boolean;
+}
+
+function MatchButton({
+  match,
+  selected,
+  onSelect,
+  recursive = false,
+  besideToggle = false,
+}: MatchButtonProps) {
+  const isSelected = isSameMatch(match, selected);
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(match)}
+      aria-current={isSelected}
+      className={`block w-full min-w-0 flex-1 py-1.5 text-left transition-colors hover:bg-github-bg-tertiary ${besideToggle ? 'pr-4' : 'px-4'} ${isSelected ? 'bg-github-bg-tertiary' : ''}`}
+    >
+      <span className="flex items-center gap-1.5 text-xs text-github-text-secondary">
+        <span className="min-w-0 truncate">
+          {match.path}:{match.line}
+        </span>
+        {match.via && (
+          <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
+            {VIA_LABELS[match.via]}
+          </span>
+        )}
+        {recursive && (
+          <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
+            재귀
+          </span>
+        )}
+        {match.source === 'name' && (
+          <span className="shrink-0 rounded-full border border-github-border bg-github-bg-tertiary px-[7px] text-[11px] leading-4">
+            이름 검색
+          </span>
+        )}
+      </span>
+      <code className="block truncate font-mono text-xs text-github-text-primary">
+        {match.text.trim()}
+      </code>
+    </button>
+  );
+}
+
+type CallersState =
+  | { status: 'loading' }
+  | { status: 'failed' }
+  | { status: 'done'; response: SymbolCallersResponse };
+
+interface CallerTree {
+  // Keys of the usage rows whose callers are shown.
+  expanded: ReadonlySet<string>;
+  // By the SCIP symbol of the method whose callers they are.
+  callers: ReadonlyMap<string, CallersState>;
+  toggle: (key: string, method: string) => void;
+}
+
+function useCallerTree(gitRef: string, result: SymbolSearchResponse): CallerTree {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  const [callers, setCallers] = useState<ReadonlyMap<string, CallersState>>(() => new Map());
+  const requests = useRef(new Map<string, AbortController>());
+
+  useEffect(() => {
+    const pending = requests.current;
+    setExpanded(new Set());
+    setCallers(new Map());
+    return () => {
+      for (const controller of pending.values()) controller.abort();
+      pending.clear();
+    };
+  }, [gitRef, result]);
+
+  const toggle = useCallback(
+    (key: string, method: string) => {
+      setExpanded((current) => {
+        const next = new Set(current);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      });
+      if (requests.current.has(method)) return;
+      const controller = new AbortController();
+      requests.current.set(method, controller);
+      const settle = (state: CallersState) => {
+        if (!controller.signal.aborted)
+          setCallers((current) => new Map(current).set(method, state));
+      };
+      settle({ status: 'loading' });
+      fetchSymbolCallers(gitRef, method, controller.signal).then(
+        (response) => settle({ status: 'done', response }),
+        () => {
+          settle({ status: 'failed' });
+          requests.current.delete(method);
+        },
+      );
+    },
+    [gitRef],
+  );
+
+  return useMemo(() => ({ expanded, callers, toggle }), [expanded, callers, toggle]);
+}
+
+const CALLER_INDENT_PX = 16;
+const TOGGLE_WIDTH_PX = 44;
+
+interface UsageListProps {
+  matches: SymbolMatch[];
+  // The methods whose callers lead down to this list, outermost first.
+  ancestors: string[];
+  parentKey: string;
+  tree: CallerTree;
+  selected: SymbolMatch | null;
+  onSelect: (match: SymbolMatch) => void;
+}
+
+function UsageList({ matches, ancestors, parentKey, tree, selected, onSelect }: UsageListProps) {
+  const toggleSpace = ancestors.length > 0 || matches.some((match) => match.caller !== undefined);
+  return (
+    <ul>
+      {matches.map((match) => {
+        const key = `${parentKey}/${match.path}:${match.line}`;
+        const { caller } = match;
+        const recursive = caller !== undefined && ancestors.includes(caller);
+        const expanded = caller !== undefined && !recursive && tree.expanded.has(key);
+        return (
+          <li key={key}>
+            <div
+              className="flex items-stretch"
+              style={{ paddingLeft: ancestors.length * CALLER_INDENT_PX }}
+            >
+              {toggleSpace &&
+                (caller !== undefined && !recursive ? (
+                  <button
+                    type="button"
+                    onClick={() => tree.toggle(key, caller)}
+                    aria-label={expanded ? '호출하는 곳 접기' : '호출하는 곳 펼치기'}
+                    aria-expanded={expanded}
+                    className="flex h-11 w-11 shrink-0 items-center justify-center text-github-text-secondary transition-colors hover:text-github-text-primary"
+                  >
+                    <ChevronRight
+                      size={14}
+                      className={`transition-transform ${expanded ? 'rotate-90' : ''}`}
+                    />
+                  </button>
+                ) : (
+                  <span className="w-11 shrink-0" />
+                ))}
+              <MatchButton
+                match={match}
+                selected={selected}
+                onSelect={onSelect}
+                recursive={recursive}
+                besideToggle={toggleSpace}
+              />
+            </div>
+            {expanded && (
+              <CallerLevel
+                state={tree.callers.get(caller)}
+                ancestors={[...ancestors, caller]}
+                parentKey={key}
+                tree={tree}
+                selected={selected}
+                onSelect={onSelect}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+interface CallerLevelProps extends Omit<UsageListProps, 'matches'> {
+  state: CallersState | undefined;
+}
+
+function CallerLevel({ state, ancestors, ...rest }: CallerLevelProps) {
+  const notice = (text: string) => (
+    <p
+      className="py-1.5 pr-4 text-xs text-github-text-secondary"
+      style={{ paddingLeft: ancestors.length * CALLER_INDENT_PX + TOGGLE_WIDTH_PX }}
+    >
+      {text}
+    </p>
+  );
+  if (!state || state.status === 'loading') return notice('찾는 중…');
+  if (state.status === 'failed') return notice('호출하는 곳을 찾지 못했습니다.');
+  const { callers, truncated } = state.response;
+  if (callers.length === 0) return notice('호출하는 곳이 없습니다.');
+  return (
+    <>
+      <UsageList matches={callers} ancestors={ancestors} {...rest} />
+      {truncated && notice('결과가 많아 일부만 보여 줍니다.')}
     </>
   );
 }
