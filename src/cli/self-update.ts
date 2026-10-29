@@ -162,16 +162,28 @@ export async function fetchLatestReleaseVersion(
 ): Promise<string> {
   // The redirect of /releases/latest names the tag without using the
   // rate-limited REST API.
-  const response = await fetchImpl(`${baseUrl}/releases/latest`, {
-    method: 'HEAD',
-    redirect: 'manual',
-    signal: AbortSignal.timeout(timeoutMs),
-  });
-  const location = response.headers.get('location');
-  if (response.status < 300 || response.status >= 400 || !location) {
-    throw new Error(`Unexpected response from ${baseUrl}/releases/latest: ${response.status}`);
+  const signal = AbortSignal.timeout(timeoutMs);
+  const lookup = async (repoUrl: string): Promise<URL> => {
+    const url = `${repoUrl}/releases/latest`;
+    const response = await fetchImpl(url, { method: 'HEAD', redirect: 'manual', signal });
+    const location = response.headers.get('location');
+    if (response.status < 300 || response.status >= 400 || !location) {
+      throw new Error(`Unexpected response from ${url}: ${response.status}`);
+    }
+    return new URL(location, `${repoUrl}/`);
+  };
+  let target = await lookup(baseUrl);
+  const base = new URL(baseUrl);
+  const latestSuffix = '/releases/latest';
+  if (
+    target.pathname.endsWith(latestSuffix) &&
+    target.host === base.host &&
+    (target.protocol === base.protocol || target.protocol === 'https:')
+  ) {
+    target = await lookup(`${target.origin}${target.pathname.slice(0, -latestSuffix.length)}`);
   }
-  const tagPath = new URL(location, `${baseUrl}/`).pathname;
+  const location = target.href;
+  const tagPath = target.pathname;
   const match = /\/releases\/tag\/v([^/]+)$/.exec(tagPath);
   const version = match?.[1] ? decodeURIComponent(match[1]) : '';
   if (!parseForkReleaseVersion(version)) {

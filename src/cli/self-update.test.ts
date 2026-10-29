@@ -79,6 +79,22 @@ async function startFakeReleaseServer(options: {
   const server: Server = createServer((request, response) => {
     const url = request.url ?? '';
     requests.push(`${request.method} ${url}`);
+    if (url === '/Inte-H/difit/releases/latest') {
+      const { port } = server.address() as AddressInfo;
+      response.writeHead(301, {
+        location: `http://127.0.0.1:${port}/duru-app/difit/releases/latest`,
+      });
+      response.end();
+      return;
+    }
+    if (url === '/elsewhere/difit/releases/latest') {
+      const { port } = server.address() as AddressInfo;
+      response.writeHead(301, {
+        location: `http://localhost:${port}/duru-app/difit/releases/latest`,
+      });
+      response.end();
+      return;
+    }
     if (url === '/duru-app/difit/releases/latest') {
       const { port } = server.address() as AddressInfo;
       response.writeHead(302, {
@@ -296,6 +312,67 @@ describe('self-update', () => {
       } finally {
         await server.close();
       }
+    });
+
+    it('follows a repository that moved to another owner', async () => {
+      const server = await startFakeReleaseServer({ latest: '5.0.12-inteh.30' });
+      try {
+        const movedFrom = server.baseUrl.replace('/duru-app/difit', '/Inte-H/difit');
+        await expect(fetchLatestReleaseVersion(movedFrom, realFetch)).resolves.toBe(
+          '5.0.12-inteh.30',
+        );
+        expect(server.requests).toEqual([
+          'HEAD /Inte-H/difit/releases/latest',
+          'HEAD /duru-app/difit/releases/latest',
+        ]);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('does not follow a moved repository onto another host', async () => {
+      const server = await startFakeReleaseServer({ latest: '5.0.12-inteh.30' });
+      try {
+        const movedFrom = server.baseUrl.replace('/duru-app/difit', '/elsewhere/difit');
+        await expect(fetchLatestReleaseVersion(movedFrom, realFetch)).rejects.toThrow(
+          /not a fork release/,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it('follows a moved repository from http up to https on the same host', async () => {
+      const redirects: Record<string, string> = {
+        'http://example.test/Inte-H/difit/releases/latest':
+          'https://example.test/duru-app/difit/releases/latest',
+        'https://example.test/duru-app/difit/releases/latest':
+          'https://example.test/duru-app/difit/releases/tag/v5.0.12-inteh.30',
+      };
+      const fakeFetch = (async (input: string | URL | Request) => {
+        const location = redirects[String(input)];
+        return location
+          ? new Response(null, { status: 302, headers: { location } })
+          : new Response(null, { status: 404 });
+      }) as typeof fetch;
+      await expect(
+        fetchLatestReleaseVersion('http://example.test/Inte-H/difit', fakeFetch),
+      ).resolves.toBe('5.0.12-inteh.30');
+    });
+
+    it('does not follow a moved repository from https down to http', async () => {
+      const requested: string[] = [];
+      const fakeFetch = (async (input: string | URL | Request) => {
+        requested.push(String(input));
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'http://example.test/duru-app/difit/releases/latest' },
+        });
+      }) as typeof fetch;
+      await expect(
+        fetchLatestReleaseVersion('https://example.test/Inte-H/difit', fakeFetch),
+      ).rejects.toThrow(/not a fork release/);
+      expect(requested).toEqual(['https://example.test/Inte-H/difit/releases/latest']);
     });
 
     it('rejects a latest release that is not a fork release', async () => {
