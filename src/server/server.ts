@@ -75,6 +75,7 @@ import {
   type DiffLineRange,
   type DiffResponse,
   type DiffSelection,
+  type DiffSide,
   type DirectEditRejection,
   type DirectEditRequest,
   type DirectEditResponse,
@@ -87,6 +88,7 @@ import {
   type RewordRejection,
   type RewordRequest,
   type RewordResponse,
+  type SidedLine,
   type SymbolIndexLogResponse,
   type SymbolSearchResponse,
   type ThreadAwaitingAgent,
@@ -1090,15 +1092,18 @@ export async function startServer(options: ServerOptions): Promise<{
     }
   });
 
-  // `range=12-12&range=40-41`; null when any of them is not a range of lines.
-  function parseLineRanges(value: unknown): Array<{ start: number; end: number }> | null {
+  // `range=12-12&range=old:40-41`; null when any of them is not a range of lines.
+  function parseLineRanges(
+    value: unknown,
+  ): Array<{ start: number; end: number; side?: DiffSide }> | null {
     if (value === undefined) return [];
     const values = Array.isArray(value) ? value : [value];
     const ranges = values.map((text) => {
-      const match = typeof text === 'string' ? /^(\d+)-(\d+)$/.exec(text) : null;
-      const start = Number(match?.[1]);
-      const end = Number(match?.[2]);
-      return match && start >= 1 && start <= end ? { start, end } : null;
+      const match = typeof text === 'string' ? /^(?:(old|new):)?(\d+)-(\d+)$/.exec(text) : null;
+      const side = match?.[1] as DiffSide | undefined;
+      const start = Number(match?.[2]);
+      const end = Number(match?.[3]);
+      return match && start >= 1 && start <= end ? { start, end, ...(side ? { side } : {}) } : null;
     });
     return ranges.every((range) => range !== null) ? ranges : null;
   }
@@ -1125,6 +1130,17 @@ export async function startServer(options: ServerOptions): Promise<{
     }
 
     return 1;
+  }
+
+  function normalizeExtraLine(extra: unknown, side: DiffSide): SidedLine {
+    if (typeof extra === 'object' && extra !== null && 'line' in extra) {
+      const sided = extra as { side?: unknown; line: unknown };
+      return {
+        side: sided.side === 'old' || sided.side === 'new' ? sided.side : side,
+        line: lineOfRange(normalizeLineValue(sided.line)),
+      };
+    }
+    return { side, line: lineOfRange(normalizeLineValue(extra)) };
   }
 
   function normalizeComment(comment: Comment): DiffCommentThread {
@@ -1228,12 +1244,13 @@ export async function startServer(options: ServerOptions): Promise<{
       position:
         thread.line === undefined
           ? { side: thread.side ?? 'new', scope: 'file' }
-          : positionOfLines(thread.side ?? 'new', [
+          : positionOfLines(
+              thread.side ?? 'new',
               lineOfRange(normalizeLineValue(thread.line)),
-              ...(Array.isArray(thread.extraLines) ? thread.extraLines : []).map((line) =>
-                lineOfRange(normalizeLineValue(line)),
+              (Array.isArray(thread.extraLines) ? (thread.extraLines as unknown[]) : []).map(
+                (extra) => normalizeExtraLine(extra, thread.side ?? 'new'),
               ),
-            ]),
+            ),
       codeSnapshot:
         typeof thread.codeContent === 'string'
           ? {
