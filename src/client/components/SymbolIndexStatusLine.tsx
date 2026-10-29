@@ -16,7 +16,7 @@ import { copyTextToClipboard } from '../utils/clipboard';
 
 export const SCIP_JAVA_INSTALL =
   'coursier bootstrap --standalone -o scip-java com.sourcegraph:scip-java_2.13:0.12.3 --main com.sourcegraph.scip_java.ScipJava';
-const INSTALL_GUIDE = 'https://github.com/Inte-H/difit#scip-java-설치';
+const INSTALL_GUIDE = 'https://github.com/duru-app/difit#scip-java-설치';
 
 interface SymbolIndexStatusLineProps {
   index?: SymbolSearchResponse['index'];

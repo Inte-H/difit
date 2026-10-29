@@ -33,7 +33,7 @@ import {
 
 const DISABLE_AUTOUPDATE_ENV = 'DIFIT_DISABLE_AUTOUPDATE';
 const RELEASE_BASE_URL_ENV = 'DIFIT_UPDATE_BASE_URL';
-const DEFAULT_RELEASE_BASE_URL = 'https://github.com/Inte-H/difit';
+const DEFAULT_RELEASE_BASE_URL = 'https://github.com/duru-app/difit';
 
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const LATEST_LOOKUP_TIMEOUT_MS = 10_000;

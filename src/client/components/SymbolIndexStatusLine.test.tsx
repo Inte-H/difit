@@ -57,7 +57,7 @@ describe('SymbolIndexStatusLine', () => {
     expect(command).toHaveClass('whitespace-pre-wrap', '[overflow-wrap:anywhere]');
     expect(screen.getByRole('link', { name: 'README의 scip-java 설치' })).toHaveAttribute(
       'href',
-      'https://github.com/Inte-H/difit#scip-java-설치',
+      'https://github.com/duru-app/difit#scip-java-설치',
     );
 
     fireEvent.click(screen.getByRole('button', { name: '복사' }));
